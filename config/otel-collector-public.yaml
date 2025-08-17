@@ -40,16 +40,16 @@ processors:
     send_batch_size: 10000
     send_batch_max_size: 20000
     
-  # PII sanitization processor - TOTAL VISIBILITY with PII redaction only
+  # PII sanitization processor - TOTAL VISIBILITY with sensitive data redaction
   transform:
     error_mode: ignore
     metric_statements:
       - context: resource
         statements:
-          # Keep agent IDs visible but redact only PII
+          # Keep agent IDs visible but redact sensitive personal data
           # NO HASHING - full visibility of agent/adapter IDs
           
-          # Remove ONLY true PII fields
+          # Remove personal identifiers
           - delete_key(attributes, "user.name")
           - delete_key(attributes, "user.email") 
           - delete_key(attributes, "user.real_name")
@@ -59,9 +59,20 @@ processors:
           - delete_key(attributes, "credit_card")
           - delete_key(attributes, "ssn")
           
+          # Remove sensitive demographic data
+          - delete_key(attributes, "user.sexual_orientation")
+          - delete_key(attributes, "user.gender_identity")
+          - delete_key(attributes, "user.trans_status")
+          - delete_key(attributes, "user.religion")
+          - delete_key(attributes, "user.political_affiliation")
+          - delete_key(attributes, "user.political_views")
+          - delete_key(attributes, "user.ethnicity")
+          - delete_key(attributes, "user.nationality")
+          - delete_key(attributes, "user.citizenship")
+          
       - context: datapoint
         statements:
-          # Remove ONLY message content and secrets
+          # Remove message content and secrets
           - delete_key(attributes, "message.content")
           - delete_key(attributes, "prompt.text")
           - delete_key(attributes, "response.text")
@@ -69,6 +80,12 @@ processors:
           - delete_key(attributes, "password")
           - delete_key(attributes, "token")
           - delete_key(attributes, "secret")
+          
+          # Remove any sensitive topics from labels
+          - delete_key(attributes, "political_topic")
+          - delete_key(attributes, "religious_topic")
+          - delete_key(attributes, "sexual_topic")
+          - delete_key(attributes, "gender_topic")
           
   # Add CIRIS taxonomy metadata
   attributes:
