@@ -1,0 +1,95 @@
+# Grafana Data Sources Configuration for CIRISLens
+
+apiVersion: 1
+
+deleteDatasources:
+  - name: Prometheus
+    orgId: 1
+  - name: Tempo
+    orgId: 1
+  - name: Loki
+    orgId: 1
+  - name: Mimir
+    orgId: 1
+
+datasources:
+  # Mimir for metrics
+  - name: Mimir
+    type: prometheus
+    access: proxy
+    url: http://mimir:9009/prometheus
+    isDefault: true
+    editable: true
+    jsonData:
+      httpMethod: POST
+      timeInterval: "15s"
+      exemplarTraceIdDestinations:
+        - datasourceUid: tempo
+          name: trace_id
+    uid: mimir
+
+  # Prometheus for real-time metrics
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    editable: true
+    jsonData:
+      httpMethod: POST
+      timeInterval: "15s"
+      exemplarTraceIdDestinations:
+        - datasourceUid: tempo
+          name: trace_id
+    uid: prometheus
+
+  # Tempo for traces
+  - name: Tempo
+    type: tempo
+    access: proxy
+    url: http://tempo:3200
+    editable: true
+    jsonData:
+      httpMethod: GET
+      tracesToLogsV2:
+        datasourceUid: loki
+        spanStartTimeShift: "-1h"
+        spanEndTimeShift: "1h"
+        filterByTraceID: true
+        filterBySpanID: true
+        tags:
+          - key: service.name
+            value: service
+      tracesToMetrics:
+        datasourceUid: mimir
+        spanStartTimeShift: "-1h"
+        spanEndTimeShift: "1h"
+        tags:
+          - key: service.name
+            value: service_name
+      serviceMap:
+        datasourceUid: mimir
+      search:
+        hide: false
+      nodeGraph:
+        enabled: true
+    uid: tempo
+
+  # Loki for logs
+  - name: Loki
+    type: loki
+    access: proxy
+    url: http://loki:3100
+    editable: true
+    jsonData:
+      maxLines: 1000
+      derivedFields:
+        - datasourceUid: tempo
+          matcherRegex: "trace_id=(\\w+)"
+          name: TraceID
+          url: "$${__value.raw}"
+          urlDisplayLabel: "View Trace"
+        - datasourceUid: tempo
+          matcherRegex: "span_id=(\\w+)"
+          name: SpanID
+          url: "$${__value.raw}"
+    uid: loki

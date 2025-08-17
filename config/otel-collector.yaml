@@ -1,0 +1,215 @@
+# OpenTelemetry Collector Configuration for CIRISLens
+# Handles metrics, traces, and logs with CIRIS taxonomy awareness
+
+receivers:
+  # OTLP receiver for agents that support OpenTelemetry
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+        cors:
+          allowed_origins:
+            - "http://localhost:*"
+            - "https://*.ciris.ai"
+
+  # Prometheus receiver for scraping /metrics endpoints
+  prometheus:
+    config:
+      scrape_configs:
+        - job_name: 'ciris-agents'
+          scrape_interval: 15s
+          static_configs:
+            - targets: []  # Will be populated by service discovery
+          relabel_configs:
+            - source_labels: [__address__]
+              target_label: instance
+            - source_labels: [__meta_docker_container_label_ciris_agent_id]
+              target_label: agent_id
+            - source_labels: [__meta_docker_container_label_ciris_template]
+              target_label: template
+
+processors:
+  # Add CIRIS taxonomy metadata to all telemetry
+  attributes:
+    actions:
+      # Enrich with taxonomy categories based on service name
+      - key: taxonomy.category
+        action: insert
+        from_attribute: service.name
+        converted_type: string
+      - key: taxonomy.tier
+        action: insert
+        value: "unknown"
+      
+      # Map services to taxonomy tiers
+      - key: taxonomy.tier
+        action: update
+        value: "core"
+        from_attribute: service.name
+        regex: ^(AgentCore|StateManager|CognitiveCore|MemoryCore|SecurityCore).*
+      
+      - key: taxonomy.tier
+        action: update  
+        value: "message_bus"
+        from_attribute: service.name
+        regex: ^(MessageBus|EventBus|CommandBus).*
+      
+      - key: taxonomy.tier
+        action: update
+        value: "adapter"
+        from_attribute: service.name
+        regex: ^(.*Adapter|.*Connector|.*Bridge)$
+      
+      - key: taxonomy.tier
+        action: update
+        value: "processor"
+        from_attribute: service.name
+        regex: ^(.*Processor|.*Handler|.*Worker)$
+      
+      - key: taxonomy.tier
+        action: update
+        value: "registry"
+        from_attribute: service.name
+        regex: ^(.*Registry|.*Repository|.*Store)$
+
+  # Sanitize PII for public dashboards
+  transform:
+    metric_statements:
+      - context: datapoint
+        statements:
+          # Hash agent IDs for correlation without exposure
+          - set(attributes["agent_id_hash"], SHA256(attributes["agent_id"])) where attributes["agent_id"] != nil
+          - delete_key(attributes, "user_id") where attributes["user_id"] != nil
+          - delete_key(attributes, "email") where attributes["email"] != nil
+          
+    trace_statements:
+      - context: span
+        statements:
+          # Remove sensitive span attributes
+          - delete_key(attributes, "http.request.header.authorization")
+          - delete_key(attributes, "http.request.header.x-api-key")
+          - delete_key(attributes, "db.statement")
+          - delete_key(attributes, "user.message")
+          
+    log_statements:
+      - context: log
+        statements:
+          # Redact sensitive log fields
+          - delete_key(attributes, "password")
+          - delete_key(attributes, "api_key")
+          - delete_key(attributes, "token")
+
+  # Intelligent sampling based on taxonomy and importance
+  tail_sampling:
+    decision_wait: 10s
+    num_traces: 10000
+    policies:
+      # Keep all traces from core services
+      - name: core-services-policy
+        type: string_attribute
+        string_attribute:
+          key: taxonomy.tier
+          values: ["core", "registry"]
+      
+      # Keep all error traces
+      - name: errors-policy
+        type: status_code
+        status_code:
+          status_codes: [ERROR]
+      
+      # Keep all slow traces (>1s)
+      - name: latency-policy
+        type: latency
+        latency:
+          threshold_ms: 1000
+      
+      # Sample 10% of everything else
+      - name: probabilistic-policy
+        type: probabilistic
+        probabilistic:
+          sampling_percentage: 10
+
+  # Batch for efficiency
+  batch:
+    timeout: 1s
+    send_batch_size: 1024
+
+  # Memory limiter to prevent OOM
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 512
+    spike_limit_mib: 128
+
+exporters:
+  # Export traces to Tempo
+  otlp/tempo:
+    endpoint: tempo:9095
+    tls:
+      insecure: true
+
+  # Export metrics to Mimir via Prometheus remote write
+  prometheusremotewrite/mimir:
+    endpoint: http://mimir:9009/api/v1/push
+    tls:
+      insecure: true
+    headers:
+      X-Scope-OrgID: ciris
+    resource_to_telemetry_conversion:
+      enabled: true
+    add_metric_suffixes: false
+
+  # Export logs to Loki
+  loki:
+    endpoint: http://loki:3100/loki/api/v1/push
+    tenant_id: ciris
+    labels:
+      attributes:
+        service.name: "service"
+        taxonomy.tier: "tier"
+        taxonomy.category: "category"
+        agent.cognitive_state: "cognitive_state"
+        severity: "level"
+
+  # Also export metrics in Prometheus format for local scraping
+  prometheus:
+    endpoint: "0.0.0.0:8889"
+    namespace: ciris
+    const_labels:
+      source: "otel_collector"
+
+  # Debug exporter (disable in production)
+  debug:
+    verbosity: detailed
+    sampling_initial: 5
+    sampling_thereafter: 200
+
+service:
+  pipelines:
+    # Traces pipeline
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, attributes, transform, tail_sampling, batch]
+      exporters: [otlp/tempo, debug]
+    
+    # Metrics pipeline
+    metrics:
+      receivers: [otlp, prometheus]
+      processors: [memory_limiter, attributes, transform, batch]
+      exporters: [prometheusremotewrite/mimir, prometheus]
+    
+    # Logs pipeline
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, attributes, transform, batch]
+      exporters: [loki, debug]
+
+  telemetry:
+    logs:
+      level: info
+      initial_fields:
+        service: otel-collector
+    metrics:
+      level: detailed
+      address: 0.0.0.0:8888

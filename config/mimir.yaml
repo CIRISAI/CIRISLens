@@ -1,0 +1,87 @@
+# Mimir Configuration for CIRISLens
+# Long-term metrics storage with CIRIS taxonomy awareness
+
+multitenancy_enabled: false
+
+server:
+  http_listen_port: 9009
+  grpc_listen_port: 9095
+  log_level: info
+
+common:
+  storage:
+    backend: filesystem
+    filesystem:
+      dir: /data/mimir
+
+blocks_storage:
+  backend: filesystem
+  filesystem:
+    dir: /data/mimir/blocks
+  tsdb:
+    dir: /data/mimir/tsdb
+    retention_period: 30d  # 30 days retention
+    ship_interval: 1m
+    block_ranges_period: [2h]
+    
+  bucket_store:
+    sync_dir: /data/mimir/bucket-sync
+
+ingester:
+  ring:
+    instance_addr: 127.0.0.1
+    kvstore:
+      store: inmemory
+    replication_factor: 1
+
+distributor:
+  ring:
+    instance_addr: 127.0.0.1
+    kvstore:
+      store: inmemory
+
+compactor:
+  data_dir: /data/mimir/compactor
+  sharding_enabled: false
+  compactor_blocks_retention_period: 30d
+
+ruler:
+  enable_api: true
+  rule_path: /data/mimir/rules
+
+ruler_storage:
+  backend: filesystem
+  filesystem:
+    dir: /data/mimir/rules
+
+limits:
+  # Support for 500+ metrics per agent
+  max_global_series_per_user: 10000000
+  max_global_series_per_metric: 1000000
+  max_label_names_per_series: 50
+  max_label_value_length: 2048
+  max_metadata_length: 1024
+  
+  # CIRIS taxonomy-specific limits
+  max_series_per_label_value_pair:
+    taxonomy.tier=core: 500000
+    taxonomy.tier=message_bus: 200000
+    taxonomy.tier=adapter: 100000
+    taxonomy.tier=processor: 100000
+    taxonomy.tier=registry: 50000
+    taxonomy.tier=other: 200000
+  
+  # Ingestion limits
+  ingestion_rate: 50000
+  ingestion_burst_size: 100000
+  
+  # Query limits
+  max_query_lookback: 90d
+  max_query_parallelism: 100
+  max_cache_freshness: 1m
+  
+  # Retention by taxonomy tier (override global)
+  retention_period: 30d
+  
+  # Compactor limits
+  compactor_blocks_retention_period: 30d
