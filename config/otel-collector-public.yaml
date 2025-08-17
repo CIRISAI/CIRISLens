@@ -1,0 +1,204 @@
+# OpenTelemetry Collector Configuration for Public CIRISLens
+# Privacy-focused configuration with rate limiting and sanitization
+
+receivers:
+  # OTLP receiver for agent metrics
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+        max_recv_msg_size_mib: 100
+        max_concurrent_streams: 100
+      http:
+        endpoint: 0.0.0.0:4318
+        max_request_body_size: 104857600  # 100MB
+        
+  # Prometheus scraping for legacy agents
+  prometheus:
+    config:
+      scrape_configs:
+        - job_name: 'ciris-agents-legacy'
+          scrape_interval: 30s
+          metrics_path: '/v1/telemetry/unified'
+          params:
+            format: ['prometheus']
+          file_sd_configs:
+            - files:
+              - '/etc/otel/targets/*.json'
+              refresh_interval: 30s
+
+processors:
+  # Memory limiter to prevent OOM
+  memory_limiter:
+    check_interval: 1s
+    limit_percentage: 80
+    spike_limit_percentage: 25
+    
+  # Batch processor for efficiency
+  batch:
+    timeout: 10s
+    send_batch_size: 10000
+    send_batch_max_size: 20000
+    
+  # Privacy sanitization processor
+  transform:
+    error_mode: ignore
+    metric_statements:
+      - context: resource
+        statements:
+          # Hash agent IDs for privacy
+          - set(attributes["agent.id"], SHA256(attributes["agent.id"])) where attributes["agent.id"] != nil
+          - set(attributes["adapter.instance_id"], SHA256(attributes["adapter.instance_id"])) where attributes["adapter.instance_id"] != nil
+          - set(attributes["session.id"], SHA256(attributes["session.id"])) where attributes["session.id"] != nil
+          
+          # Remove PII fields
+          - delete_key(attributes, "user.name")
+          - delete_key(attributes, "user.email")
+          - delete_key(attributes, "user.id")
+          - delete_key(attributes, "ip_address")
+          - delete_key(attributes, "hostname")
+          
+      - context: datapoint
+        statements:
+          # Remove sensitive metric labels
+          - delete_key(attributes, "message.content")
+          - delete_key(attributes, "prompt.text")
+          - delete_key(attributes, "response.text")
+          
+  # Add CIRIS taxonomy metadata
+  attributes:
+    actions:
+      - key: ciris.platform
+        value: "cirislens"
+        action: insert
+      - key: ciris.version
+        value: "0.1-alpha"
+        action: insert
+      - key: collection.method
+        value: "public"
+        action: insert
+        
+  # Resource detection
+  resource:
+    attributes:
+      - key: deployment.environment
+        value: ${DEPLOYMENT_ENV:-production}
+        action: upsert
+        
+  # Filtering - only keep essential metrics for public view
+  filter/public_metrics:
+    error_mode: ignore
+    metrics:
+      metric:
+        - 'name == "ciris_agent_cognitive_state"'
+        - 'name == "ciris_messagebus_messages_total"'
+        - 'name == "ciris_adapter_requests_total"'
+        - 'name == "ciris_adapter_active_connections"'
+        - 'name == "ciris_agent_llm_tokens_total"'
+        - 'name == "ciris_service_requests_total"'
+        - 'name == "ciris_service_errors_total"'
+        - 'name == "ciris_service_latency_seconds"'
+        - 'name == "up"'
+        
+  # Aggregation for public metrics
+  metricstransform:
+    transforms:
+      # Round latencies to reduce cardinality
+      - include: ciris_service_latency_seconds
+        match_type: regexp
+        action: update
+        operations:
+          - action: experimental_scale_value
+            experimental_scale: 100
+          - action: truncate_all_data_points
+          - action: experimental_scale_value
+            experimental_scale: 0.01
+            
+  # Probabilistic sampling for high-volume agents
+  probabilistic_sampler:
+    hash_seed: 22
+    sampling_percentage: 10  # Sample 10% for very high volume
+
+exporters:
+  # Prometheus Remote Write to Mimir
+  prometheusremotewrite/mimir:
+    endpoint: ${MIMIR_ENDPOINT:-http://mimir:9009/api/v1/push}
+    external_labels:
+      source: otel_collector
+      environment: ${DEPLOYMENT_ENV:-production}
+    headers:
+      X-Scope-OrgID: ${TENANT_ID:-public}
+    tls:
+      insecure: true
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 30s
+      max_elapsed_time: 300s
+    sending_queue:
+      enabled: true
+      num_consumers: 10
+      queue_size: 10000
+    write_buffer_size: 524288  # 512KB
+    add_metric_suffixes: false
+    
+  # Debug output (disable in production)
+  debug:
+    verbosity: basic
+    sampling_initial: 10
+    sampling_thereafter: 100
+
+service:
+  telemetry:
+    logs:
+      level: info
+      encoding: json
+    metrics:
+      level: detailed
+      address: 0.0.0.0:8888
+      
+  pipelines:
+    # Public metrics pipeline
+    metrics/public:
+      receivers: [otlp]
+      processors: 
+        - memory_limiter
+        - transform
+        - attributes
+        - filter/public_metrics
+        - metricstransform
+        - batch
+      exporters: [prometheusremotewrite/mimir]
+      
+    # Legacy Prometheus scraping
+    metrics/legacy:
+      receivers: [prometheus]
+      processors:
+        - memory_limiter
+        - transform
+        - attributes
+        - filter/public_metrics
+        - batch
+      exporters: [prometheusremotewrite/mimir]
+      
+    # High-volume sampling pipeline
+    metrics/sampled:
+      receivers: [otlp]
+      processors:
+        - memory_limiter
+        - probabilistic_sampler
+        - transform
+        - attributes
+        - filter/public_metrics
+        - batch
+      exporters: [prometheusremotewrite/mimir]
+      
+  extensions: [health_check, pprof, zpages]
+  
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+  pprof:
+    endpoint: 0.0.0.0:1777
+  zpages:
+    endpoint: 0.0.0.0:55679

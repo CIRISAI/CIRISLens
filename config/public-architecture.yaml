@@ -1,0 +1,103 @@
+# CIRISLens Public Dashboard Architecture Configuration
+# For scaling from 2 to 1000s of agents with privacy and rate limiting
+
+architecture:
+  collection:
+    type: push
+    protocol: otlp
+    endpoints:
+      - grpc://0.0.0.0:4317
+      - http://0.0.0.0:4318
+    limits:
+      max_concurrent_connections: 1000
+      max_message_size_mb: 100
+      
+  storage:
+    metrics:
+      backend: mimir
+      retention: 365d
+      downsampling:
+        - resolution: 1m
+          retention: 7d
+        - resolution: 5m
+          retention: 30d
+        - resolution: 1h
+          retention: 365d
+    object_storage:
+      type: s3
+      endpoint: minio:9000
+      bucket: mimir-blocks
+      
+  aggregation:
+    recording_rules:
+      - name: public_metrics
+        interval: 1m
+        rules:
+          # Service-level aggregations (no agent IDs)
+          - record: ciris:service_requests_rate
+            expr: sum by (service_type, bus) (rate(ciris_service_requests_total[1m]))
+            
+          # Adapter type aggregations  
+          - record: ciris:adapter_connections
+            expr: sum by (adapter_type) (ciris_adapter_active_connections)
+            
+          # Cognitive state distribution
+          - record: ciris:cognitive_states
+            expr: count by (state) (ciris_agent_cognitive_state)
+            
+          # Bus message rates
+          - record: ciris:bus_messages_rate
+            expr: sum by (bus) (rate(ciris_messagebus_messages_total[1m]))
+            
+          # LLM usage aggregated
+          - record: ciris:llm_tokens_total
+            expr: sum by (model) (increase(ciris_agent_llm_tokens_total[5m]))
+            
+  privacy:
+    sanitization:
+      hash_fields:
+        - agent.id
+        - adapter.instance_id
+        - session.id
+      remove_fields:
+        - user.name
+        - user.email
+        - user.id
+        - message.content
+        - ip_address
+        
+  rate_limiting:
+    zones:
+      public_dashboard:
+        rate: 10/s
+        burst: 20
+      per_agent_ingestion:
+        rate: 100/m
+        burst: 100
+      api_scraping:
+        rate: 1/s
+        burst: 5
+        
+  scaling_tiers:
+    tier1:
+      agent_count: 1-10
+      architecture: single_node
+      storage: local
+      
+    tier2:
+      agent_count: 10-100
+      architecture: ha_pair
+      storage: minio
+      
+    tier3:
+      agent_count: 100-1000
+      architecture: distributed
+      storage: s3
+      sharding: by_tenant
+      
+    tier4:
+      agent_count: 1000+
+      architecture: multi_region
+      storage: s3
+      sharding: geographic
+      federation: enabled
