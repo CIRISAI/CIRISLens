@@ -1,0 +1,145 @@
+version: '3.8'
+
+services:
+  # OpenTelemetry Collector - unified telemetry ingestion
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    container_name: cirislens-otel
+    restart: unless-stopped
+    volumes:
+      - ./config/otel-collector.yaml:/etc/otel/config.yaml:ro
+    command: ["--config=/etc/otel/config.yaml"]
+    ports:
+      - "4317:4317"   # OTLP gRPC
+      - "4318:4318"   # OTLP HTTP
+      - "8888:8888"   # Prometheus metrics
+      - "8889:8889"   # Prometheus exporter
+    networks:
+      - cirislens
+
+  # Grafana - unified visualization
+  grafana:
+    image: grafana/grafana:latest
+    container_name: cirislens-grafana
+    restart: unless-stopped
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_FEATURE_TOGGLES_ENABLE=traceToMetrics,traceToLogs,correlations
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
+      - GF_AUTH_ANONYMOUS_ORG_NAME=Public
+      - GF_INSTALL_PLUGINS=grafana-tempo-datasource,grafana-loki-datasource
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./config/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./dashboards:/var/lib/grafana/dashboards:ro
+      - ./plugins:/var/lib/grafana/plugins:ro
+    ports:
+      - "3000:3000"
+    depends_on:
+      - tempo
+      - loki
+      - mimir
+    networks:
+      - cirislens
+
+  # Tempo - distributed tracing backend
+  tempo:
+    image: grafana/tempo:latest
+    container_name: cirislens-tempo
+    restart: unless-stopped
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ./config/tempo.yaml:/etc/tempo.yaml:ro
+      - tempo_data:/tmp/tempo
+    ports:
+      - "3200:3200"   # Tempo query frontend
+      - "9095:9095"   # Tempo gRPC
+    networks:
+      - cirislens
+
+  # Loki - log aggregation backend
+  loki:
+    image: grafana/loki:latest
+    container_name: cirislens-loki
+    restart: unless-stopped
+    command: ["-config.file=/etc/loki/config.yaml"]
+    volumes:
+      - ./config/loki.yaml:/etc/loki/config.yaml:ro
+      - loki_data:/loki
+    ports:
+      - "3100:3100"   # Loki HTTP
+    networks:
+      - cirislens
+
+  # Mimir - long-term metrics storage
+  mimir:
+    image: grafana/mimir:latest
+    container_name: cirislens-mimir
+    restart: unless-stopped
+    command: 
+      - "-config.file=/etc/mimir.yaml"
+      - "-target=all,alertmanager"
+    volumes:
+      - ./config/mimir.yaml:/etc/mimir.yaml:ro
+      - mimir_data:/data
+    ports:
+      - "9009:9009"   # Mimir HTTP
+    networks:
+      - cirislens
+
+  # MinIO - S3-compatible object storage for all backends
+  minio:
+    image: minio/minio:latest
+    container_name: cirislens-minio
+    restart: unless-stopped
+    environment:
+      - MINIO_ROOT_USER=admin
+      - MINIO_ROOT_PASSWORD=adminpassword123
+      - MINIO_PROMETHEUS_AUTH_TYPE=public
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio_data:/data
+    ports:
+      - "9000:9000"   # MinIO API
+      - "9001:9001"   # MinIO Console
+    networks:
+      - cirislens
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Prometheus - for scraping agents that don't support OTLP yet
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: cirislens-prometheus
+    restart: unless-stopped
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+      - '--storage.tsdb.retention.time=1h'  # Short retention, Mimir handles long-term
+      - '--web.enable-remote-write-receiver'
+    volumes:
+      - ./config/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    networks:
+      - cirislens
+
+volumes:
+  grafana_data:
+  tempo_data:
+  loki_data:
+  mimir_data:
+  minio_data:
+  prometheus_data:
+
+networks:
+  cirislens:
+    driver: bridge
