@@ -1,5 +1,7 @@
 # CIRISLens
 
+**Version: 0.1-alpha**
+
 Full-stack observability platform for CIRIS infrastructure - unified metrics, traces, and logs with taxonomy-aware visualization.
 
 ## Overview
