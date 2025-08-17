@@ -40,30 +40,35 @@ processors:
     send_batch_size: 10000
     send_batch_max_size: 20000
     
-  # Privacy sanitization processor
+  # PII sanitization processor - TOTAL VISIBILITY with PII redaction only
   transform:
     error_mode: ignore
     metric_statements:
       - context: resource
         statements:
-          # Hash agent IDs for privacy
-          - set(attributes["agent.id"], SHA256(attributes["agent.id"])) where attributes["agent.id"] != nil
-          - set(attributes["adapter.instance_id"], SHA256(attributes["adapter.instance_id"])) where attributes["adapter.instance_id"] != nil
-          - set(attributes["session.id"], SHA256(attributes["session.id"])) where attributes["session.id"] != nil
+          # Keep agent IDs visible but redact only PII
+          # NO HASHING - full visibility of agent/adapter IDs
           
-          # Remove PII fields
+          # Remove ONLY true PII fields
           - delete_key(attributes, "user.name")
-          - delete_key(attributes, "user.email")
-          - delete_key(attributes, "user.id")
+          - delete_key(attributes, "user.email") 
+          - delete_key(attributes, "user.real_name")
+          - delete_key(attributes, "user.phone")
+          - delete_key(attributes, "user.address")
           - delete_key(attributes, "ip_address")
-          - delete_key(attributes, "hostname")
+          - delete_key(attributes, "credit_card")
+          - delete_key(attributes, "ssn")
           
       - context: datapoint
         statements:
-          # Remove sensitive metric labels
+          # Remove ONLY message content and secrets
           - delete_key(attributes, "message.content")
           - delete_key(attributes, "prompt.text")
           - delete_key(attributes, "response.text")
+          - delete_key(attributes, "api_key")
+          - delete_key(attributes, "password")
+          - delete_key(attributes, "token")
+          - delete_key(attributes, "secret")
           
   # Add CIRIS taxonomy metadata
   attributes:
@@ -85,20 +90,14 @@ processors:
         value: ${DEPLOYMENT_ENV:-production}
         action: upsert
         
-  # Filtering - only keep essential metrics for public view
-  filter/public_metrics:
-    error_mode: ignore
-    metrics:
-      metric:
-        - 'name == "ciris_agent_cognitive_state"'
-        - 'name == "ciris_messagebus_messages_total"'
-        - 'name == "ciris_adapter_requests_total"'
-        - 'name == "ciris_adapter_active_connections"'
-        - 'name == "ciris_agent_llm_tokens_total"'
-        - 'name == "ciris_service_requests_total"'
-        - 'name == "ciris_service_errors_total"'
-        - 'name == "ciris_service_latency_seconds"'
-        - 'name == "up"'
+  # NO FILTERING - TOTAL VISIBILITY
+  # All metrics pass through, only PII is redacted above
+  # Commenting out filter to show EVERYTHING
+  # filter/public_metrics:
+  #   error_mode: ignore
+  #   metrics:
+  #     metric:
+  #       - '*'  # Accept ALL metrics
         
   # Aggregation for public metrics
   metricstransform:
@@ -158,38 +157,35 @@ service:
       address: 0.0.0.0:8888
       
   pipelines:
-    # Public metrics pipeline
+    # Public metrics pipeline - TOTAL VISIBILITY
     metrics/public:
       receivers: [otlp]
       processors: 
         - memory_limiter
-        - transform
-        - attributes
-        - filter/public_metrics
-        - metricstransform
+        - transform         # PII redaction only
+        - attributes        # Add metadata
+        - metricstransform  # Optimize cardinality
         - batch
-      exporters: [prometheusremotewrite/mimir]
+      exporters: [prometheusremotewrite/mimir, debug]
       
-    # Legacy Prometheus scraping
+    # Legacy Prometheus scraping - TOTAL VISIBILITY
     metrics/legacy:
       receivers: [prometheus]
       processors:
         - memory_limiter
-        - transform
-        - attributes
-        - filter/public_metrics
+        - transform         # PII redaction only
+        - attributes        # Add metadata
         - batch
       exporters: [prometheusremotewrite/mimir]
       
-    # High-volume sampling pipeline
+    # High-volume sampling pipeline - still exports ALL metric types
     metrics/sampled:
       receivers: [otlp]
       processors:
         - memory_limiter
         - probabilistic_sampler
-        - transform
-        - attributes
-        - filter/public_metrics
+        - transform         # PII redaction only
+        - attributes        # Add metadata
         - batch
       exporters: [prometheusremotewrite/mimir]
       
