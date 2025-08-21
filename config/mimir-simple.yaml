@@ -37,7 +37,7 @@ compactor:
 
 ruler:
   enable_api: true
-  rule_path: /data/mimir/rules
+  rule_path: /data/mimir/ruler-tmp
 
 ruler_storage:
   backend: filesystem

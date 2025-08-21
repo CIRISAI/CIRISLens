@@ -209,7 +209,7 @@ class OTLPCollector:
                             metric_name,
                             float(value),
                             json.dumps(labels),
-                            datetime.fromtimestamp(point.get("timeUnixNano", 0) / 1e9, tz=timezone.utc)
+                            datetime.fromtimestamp(float(point.get("timeUnixNano", 0)) / 1e9, tz=timezone.utc)
                         )
                         
     async def _process_traces(self, conn, agent_name: str, traces: Dict):
@@ -231,8 +231,8 @@ class OTLPCollector:
                         span.get("traceId"),
                         span.get("spanId"),
                         span.get("name"),
-                        datetime.fromtimestamp(span.get("startTimeUnixNano", 0) / 1e9, tz=timezone.utc),
-                        datetime.fromtimestamp(span.get("endTimeUnixNano", 0) / 1e9, tz=timezone.utc),
+                        datetime.fromtimestamp(float(span.get("startTimeUnixNano", 0)) / 1e9, tz=timezone.utc),
+                        datetime.fromtimestamp(float(span.get("endTimeUnixNano", 0)) / 1e9, tz=timezone.utc),
                         json.dumps(span.get("attributes", [])),
                         json.dumps(span.get("events", []))
                     )
@@ -263,7 +263,7 @@ class OTLPCollector:
                         VALUES ($1, $2, $3, $4, $5, $6, $7)
                     """,
                         agent_name,
-                        datetime.fromtimestamp(log_record.get("timeUnixNano", 0) / 1e9, tz=timezone.utc),
+                        datetime.fromtimestamp(float(log_record.get("timeUnixNano", 0)) / 1e9, tz=timezone.utc),
                         severity,
                         log_record.get("body", {}).get("stringValue", ""),
                         log_record.get("traceId"),

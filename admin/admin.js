@@ -93,6 +93,7 @@ async function initializeApp() {
     
     // Load data
     await loadManagers();
+    await loadAgentTokens();
     await refreshAgents();
 }
 
@@ -340,6 +341,148 @@ function createManagerModal() {
 }
 
 /**
+ * Load agent tokens
+ */
+async function loadAgentTokens() {
+    try {
+        const response = await fetch(`${LENS_API_URL}/agent-tokens`, {
+            credentials: 'include'
+        });
+        
+        if (response.ok) {
+            const data = await response.json();
+            renderTokensList(data.agents || []);
+        }
+    } catch (error) {
+        console.error('Error loading tokens:', error);
+    }
+}
+
+/**
+ * Render tokens list
+ */
+function renderTokensList(agents) {
+    const container = document.getElementById('tokens-list');
+    if (!container) return;
+    
+    container.innerHTML = '';
+    
+    if (agents.length === 0) {
+        container.innerHTML = '<p class="text-gray-500">No agent tokens configured yet.</p>';
+        return;
+    }
+    
+    agents.forEach(agent => {
+        const item = document.createElement('div');
+        item.className = 'flex items-center justify-between p-3 bg-gray-50 rounded-lg';
+        
+        const lastUpdated = agent.last_updated ? new Date(agent.last_updated).toLocaleString() : 'Unknown';
+        
+        item.innerHTML = `
+            <div class="flex-1">
+                <div class="flex items-center space-x-3">
+                    <span class="font-semibold text-lg">${agent.name.toUpperCase()}</span>
+                    <span class="text-sm text-gray-500">${agent.url}</span>
+                </div>
+                <div class="text-xs text-gray-500 mt-1">
+                    <i class="fas fa-lock text-green-500 mr-1"></i>Token configured
+                    ${agent.token_hash ? `• Hash: ${agent.token_hash}` : ''}
+                    ${agent.last_updated ? `• Updated: ${lastUpdated}` : ''}
+                    ${agent.updated_by ? `by ${agent.updated_by}` : ''}
+                </div>
+            </div>
+            <div class="flex space-x-2">
+                <button onclick="fillTokenForm('${agent.name}', '${agent.url}')" 
+                        class="px-3 py-1 bg-blue-500 text-white rounded hover:bg-blue-600">
+                    <i class="fas fa-edit"></i> Update
+                </button>
+                <button onclick="removeAgentToken('${agent.name}')" 
+                        class="px-3 py-1 bg-red-500 text-white rounded hover:bg-red-600">
+                    <i class="fas fa-trash"></i> Remove
+                </button>
+            </div>
+        `;
+        
+        container.appendChild(item);
+    });
+}
+
+/**
+ * Save agent token
+ */
+async function saveAgentToken(event) {
+    event.preventDefault();
+    
+    const agentName = document.getElementById('token-agent-name').value;
+    const agentUrl = document.getElementById('token-agent-url').value;
+    const agentToken = document.getElementById('token-agent-token').value;
+    
+    try {
+        const response = await fetch(`${LENS_API_URL}/agent-tokens`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            credentials: 'include',
+            body: JSON.stringify({
+                agent_name: agentName,
+                url: agentUrl,
+                token: agentToken
+            })
+        });
+        
+        if (response.ok) {
+            showSuccess(`Token for ${agentName} saved successfully`);
+            document.getElementById('token-form').reset();
+            await loadAgentTokens();
+        } else {
+            const error = await response.json();
+            showError(error.detail || 'Failed to save token');
+        }
+    } catch (error) {
+        console.error('Error saving token:', error);
+        showError('Failed to save token');
+    }
+}
+
+/**
+ * Fill token form for update
+ */
+function fillTokenForm(name, url) {
+    document.getElementById('token-agent-name').value = name;
+    document.getElementById('token-agent-url').value = url;
+    document.getElementById('token-agent-token').value = '';
+    document.getElementById('token-agent-token').placeholder = 'Enter new token to update';
+    document.getElementById('token-agent-token').focus();
+}
+
+/**
+ * Remove agent token
+ */
+async function removeAgentToken(agentName) {
+    if (!confirm(`Are you sure you want to remove the token for ${agentName}?`)) {
+        return;
+    }
+    
+    try {
+        const response = await fetch(`${LENS_API_URL}/agent-tokens/${agentName}`, {
+            method: 'DELETE',
+            credentials: 'include'
+        });
+        
+        if (response.ok) {
+            showSuccess(`Token for ${agentName} removed`);
+            await loadAgentTokens();
+        } else {
+            showError('Failed to remove token');
+        }
+    } catch (error) {
+        console.error('Error removing token:', error);
+        showError('Failed to remove token');
+    }
+}
+
+/**
  * Switch between tabs
  */
 function switchTab(tabName) {
@@ -361,6 +504,13 @@ function switchTab(tabName) {
     const activeTab = document.getElementById(`${tabName}-tab`);
     activeTab.classList.remove('border-transparent', 'text-gray-600');
     activeTab.classList.add('border-blue-500', 'text-blue-600');
+    
+    // Reload data for the selected tab
+    if (tabName === 'tokens') {
+        loadAgentTokens();
+    } else if (tabName === 'managers') {
+        loadManagers();
+    }
 }
 
 /**

@@ -8,9 +8,11 @@ CREATE TABLE IF NOT EXISTS otlp_telemetry (
     collected_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     metrics_data JSONB,
     traces_data JSONB,
-    logs_data JSONB,
-    INDEX idx_otlp_agent_time (agent_name, collected_at DESC)
+    logs_data JSONB
 );
+
+-- Create index for OTLP telemetry
+CREATE INDEX IF NOT EXISTS idx_otlp_agent_time ON otlp_telemetry(agent_name, collected_at);
 
 -- Time-series metrics storage
 CREATE TABLE IF NOT EXISTS agent_metrics (
@@ -26,8 +28,8 @@ CREATE TABLE IF NOT EXISTS agent_metrics (
 -- SELECT create_hypertable('agent_metrics', 'timestamp', if_not_exists => TRUE);
 
 -- Indexes for metric queries
-CREATE INDEX IF NOT EXISTS idx_agent_metrics_time ON agent_metrics(timestamp DESC);
-CREATE INDEX IF NOT EXISTS idx_agent_metrics_agent ON agent_metrics(agent_name, metric_name, timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_metrics_time ON agent_metrics(timestamp);
+CREATE INDEX IF NOT EXISTS idx_agent_metrics_agent ON agent_metrics(agent_name, metric_name, timestamp);
 CREATE INDEX IF NOT EXISTS idx_agent_metrics_labels ON agent_metrics USING gin(labels);
 
 -- Traces storage
@@ -46,12 +48,14 @@ CREATE TABLE IF NOT EXISTS agent_traces (
     attributes JSONB DEFAULT '{}'::jsonb,
     events JSONB DEFAULT '[]'::jsonb,
     status VARCHAR(50),
-    UNIQUE(trace_id, span_id),
-    INDEX idx_traces_agent (agent_name, start_time DESC),
-    INDEX idx_traces_operation (operation_name, start_time DESC),
-    INDEX idx_traces_duration (duration_ms),
-    INDEX idx_traces_attributes USING gin(attributes)
+    UNIQUE(trace_id, span_id)
 );
+
+-- Create indexes for traces
+CREATE INDEX IF NOT EXISTS idx_traces_agent ON agent_traces(agent_name, start_time);
+CREATE INDEX IF NOT EXISTS idx_traces_operation ON agent_traces(operation_name, start_time);
+CREATE INDEX IF NOT EXISTS idx_traces_duration ON agent_traces(duration_ms);
+CREATE INDEX IF NOT EXISTS idx_traces_attributes ON agent_traces USING gin(attributes);
 
 -- Logs storage
 CREATE TABLE IF NOT EXISTS agent_logs (
@@ -63,12 +67,14 @@ CREATE TABLE IF NOT EXISTS agent_logs (
     trace_id VARCHAR(64),
     span_id VARCHAR(32),
     attributes JSONB DEFAULT '{}'::jsonb,
-    component VARCHAR(255),
-    INDEX idx_logs_agent_time (agent_name, timestamp DESC),
-    INDEX idx_logs_severity (severity, timestamp DESC),
-    INDEX idx_logs_trace (trace_id, span_id),
-    INDEX idx_logs_attributes USING gin(attributes)
+    component VARCHAR(255)
 );
+
+-- Create indexes for logs
+CREATE INDEX IF NOT EXISTS idx_logs_agent_time ON agent_logs(agent_name, timestamp);
+CREATE INDEX IF NOT EXISTS idx_logs_severity ON agent_logs(severity, timestamp);
+CREATE INDEX IF NOT EXISTS idx_logs_trace ON agent_logs(trace_id, span_id);
+CREATE INDEX IF NOT EXISTS idx_logs_attributes ON agent_logs USING gin(attributes);
 
 -- Collection errors tracking
 CREATE TABLE IF NOT EXISTS collection_errors (
@@ -76,9 +82,11 @@ CREATE TABLE IF NOT EXISTS collection_errors (
     agent_name VARCHAR(255) NOT NULL,
     error_message TEXT,
     occurred_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    resolved_at TIMESTAMP WITH TIME ZONE,
-    INDEX idx_collection_errors_agent (agent_name, occurred_at DESC)
+    resolved_at TIMESTAMP WITH TIME ZONE
 );
+
+-- Create index for collection errors
+CREATE INDEX IF NOT EXISTS idx_collection_errors_agent ON collection_errors(agent_name, occurred_at);
 
 -- Agent configuration (for discovered OTLP endpoints)
 CREATE TABLE IF NOT EXISTS agent_otlp_configs (
