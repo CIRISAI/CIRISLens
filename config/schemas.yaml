@@ -1,0 +1,256 @@
+# CIRISLens Configuration Schemas
+# Defines the structure for telemetry and visibility configurations
+
+schemas:
+  # Manager configuration for discovering agents
+  manager:
+    type: object
+    required:
+      - manager_id
+      - name
+      - url
+    properties:
+      manager_id:
+        type: string
+        description: Unique identifier for the manager instance
+      name:
+        type: string
+        description: Human-readable name for the manager
+      url:
+        type: string
+        format: uri
+        description: Base URL for the manager API
+      status:
+        type: string
+        enum: [online, offline, error]
+        default: offline
+      version:
+        type: string
+        description: Manager version
+      last_seen:
+        type: string
+        format: date-time
+      agent_count:
+        type: integer
+        minimum: 0
+
+  # Agent schema (mirrors CIRISManager)
+  agent:
+    type: object
+    required:
+      - agent_id
+      - name
+      - status
+      - api_port
+    properties:
+      agent_id:
+        type: string
+        description: Unique identifier for the agent
+      name:
+        type: string
+        description: Agent name
+      status:
+        type: string
+        enum: [running, stopped, error]
+      cognitive_state:
+        type: string
+        enum: [WORK, WAKEUP, SHUTDOWN, DREAM, PLAY, SOLITUDE]
+      version:
+        type: string
+        pattern: '^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9]+)?$'
+      codename:
+        type: string
+      api_port:
+        type: integer
+        minimum: 1024
+        maximum: 65535
+      health:
+        type: string
+        enum: [healthy, unhealthy, unknown]
+      container_id:
+        type: string
+      deployment_type:
+        type: string
+        enum: [docker, kubernetes, bare-metal]
+      ip_address:
+        type: string
+        format: ipv4
+      created_at:
+        type: string
+        format: date-time
+      updated_at:
+        type: string
+        format: date-time
+
+  # Telemetry collection configuration
+  telemetry_config:
+    type: object
+    required:
+      - agent_id
+      - enabled
+    properties:
+      agent_id:
+        type: string
+        description: Reference to agent.agent_id
+      enabled:
+        type: boolean
+        default: false
+        description: Master switch for telemetry collection
+      collection_interval:
+        type: integer
+        minimum: 10
+        maximum: 3600
+        default: 60
+        description: Collection interval in seconds
+      metrics_enabled:
+        type: boolean
+        default: true
+        description: Collect Prometheus metrics
+      traces_enabled:
+        type: boolean
+        default: true
+        description: Collect OpenTelemetry traces
+      logs_enabled:
+        type: boolean
+        default: true
+        description: Collect logs via Loki
+      scrape_endpoint:
+        type: string
+        format: uri
+        description: Override endpoint for scraping metrics
+      custom_labels:
+        type: object
+        additionalProperties:
+          type: string
+        description: Additional labels to add to all telemetry
+      last_updated:
+        type: string
+        format: date-time
+      updated_by:
+        type: string
+        format: email
+
+  # Dashboard visibility configuration
+  dashboard_visibility:
+    type: object
+    required:
+      - agent_id
+      - public_visible
+      - redact_pii
+    properties:
+      agent_id:
+        type: string
+        description: Reference to agent.agent_id
+      public_visible:
+        type: boolean
+        default: false
+        description: Show agent on public dashboard
+      show_metrics:
+        type: boolean
+        default: true
+        description: Show metrics on public dashboard
+      show_traces:
+        type: boolean
+        default: false
+        description: Show traces on public dashboard (usually disabled for privacy)
+      show_logs:
+        type: boolean
+        default: false
+        description: Show logs on public dashboard (usually disabled for privacy)
+      show_cognitive_state:
+        type: boolean
+        default: true
+        description: Show cognitive state indicator
+      show_health_status:
+        type: boolean
+        default: true
+        description: Show health status
+      redact_pii:
+        type: boolean
+        default: true
+        description: Redact personally identifiable information (always true for public)
+      hash_agent_id:
+        type: boolean
+        default: true
+        description: Hash agent ID for privacy
+      allowed_metrics:
+        type: array
+        items:
+          type: string
+        description: Whitelist of specific metrics to show
+      blocked_metrics:
+        type: array
+        items:
+          type: string
+        description: Blacklist of metrics to hide
+      last_updated:
+        type: string
+        format: date-time
+      updated_by:
+        type: string
+        format: email
+
+  # OAuth configuration
+  oauth_config:
+    type: object
+    required:
+      - provider
+      - client_id
+      - allowed_domain
+    properties:
+      provider:
+        type: string
+        enum: [google]
+        default: google
+      client_id:
+        type: string
+        description: OAuth client ID
+      client_secret:
+        type: string
+        description: OAuth client secret (encrypted)
+      allowed_domain:
+        type: string
+        default: ciris.ai
+        description: Email domain restriction
+      redirect_uri:
+        type: string
+        format: uri
+        description: OAuth callback URL
+      scopes:
+        type: array
+        items:
+          type: string
+        default: [openid, email, profile]
+
+# Default configurations
+defaults:
+  telemetry:
+    enabled: false
+    collection_interval: 60
+    metrics_enabled: true
+    traces_enabled: true
+    logs_enabled: true
+    
+  visibility:
+    public_visible: false
+    show_metrics: true
+    show_traces: false
+    show_logs: false
+    show_cognitive_state: true
+    show_health_status: true
+    redact_pii: true
+    hash_agent_id: true
+
+# Validation rules
+validation:
+  - name: pii_always_redacted_for_public
+    rule: "if dashboard_visibility.public_visible then dashboard_visibility.redact_pii must be true"
+    severity: error
+    
+  - name: collection_required_for_visibility
+    rule: "if dashboard_visibility.public_visible then telemetry_config.enabled must be true"
+    severity: error
+    
+  - name: valid_collection_interval
+    rule: "telemetry_config.collection_interval >= 10 and telemetry_config.collection_interval <= 3600"
+    severity: error

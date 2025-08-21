@@ -10,45 +10,62 @@ distributor:
     otlp:
       protocols:
         grpc:
-          endpoint: 0.0.0.0:9095
+          endpoint: 0.0.0.0:4317
+        http:
+          endpoint: 0.0.0.0:4318
 
 ingester:
   max_block_duration: 5m
+  max_block_bytes: 1_000_000_000
+  complete_block_timeout: 15m
 
 compactor:
   compaction:
-    block_retention: 336h  # 14 days default
+    block_retention: 336h  # 14 days
     compacted_block_retention: 1h
+    max_block_bytes: 100_000_000
+    max_compaction_objects: 1000000
+    max_time_per_tenant: 5m
+  ring:
+    kvstore:
+      store: inmemory
+
+memberlist:
+  abort_if_cluster_join_fails: false
+  bind_port: 7946
+  join_members: []
 
 storage:
   trace:
     backend: local
     local:
-      path: /tmp/tempo/blocks
+      path: /var/tempo/blocks
     wal:
-      path: /tmp/tempo/wal
+      path: /var/tempo/wal
     pool:
       max_workers: 100
       queue_depth: 10000
 
 querier:
+  max_concurrent_queries: 20
   frontend_worker:
     frontend_address: 127.0.0.1:9095
 
-limits_config:
-  max_traces_per_user: 100000
-  max_bytes_per_trace: 5000000
-  max_search_bytes_per_trace: 50000
-  max_bytes_per_tag_values_query: 5000000
-  ingestion_rate_limit_bytes: 15000000
-  ingestion_burst_size_bytes: 20000000
+query_frontend:
+  max_retries: 2
+
+metrics_generator:
+  registry:
+    external_labels:
+      source: tempo
+  storage:
+    path: /var/tempo/generator/wal
+    remote_write:
+      - url: http://cirislens-mimir:9009/api/v1/push
+        send_exemplars: true
 
 overrides:
-  defaults:
-    metrics_generator:
-      processors: [service-graphs, span-metrics]
-      storage:
-        remote_write:
-          - url: http://mimir:9009/api/v1/push
-            headers:
-              X-Scope-OrgID: ciris
+  ingestion_rate_limit_bytes: 15_000_000
+  ingestion_burst_size_bytes: 20_000_000
+  max_traces_per_user: 100000
+  max_bytes_per_trace: 5_000_000

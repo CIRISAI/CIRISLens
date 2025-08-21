@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # OpenTelemetry Collector - unified telemetry ingestion
   otel-collector:

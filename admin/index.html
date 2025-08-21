@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CIRISLens Admin - Telemetry & Visibility Control</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body class="bg-gray-50">
+    <!-- Loading Screen -->
+    <div id="loading" class="flex items-center justify-center min-h-screen">
+        <div class="text-center">
+            <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto"></div>
+            <p class="mt-4 text-gray-600">Authenticating...</p>
+        </div>
+    </div>
+
+    <!-- Main App (hidden initially) -->
+    <div id="app" class="hidden">
+        <!-- Header -->
+        <header class="bg-white shadow-sm border-b">
+            <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+                <div class="flex justify-between items-center py-4">
+                    <div class="flex items-center space-x-4">
+                        <h1 class="text-2xl font-bold text-gray-900">CIRISLens Admin</h1>
+                        <span class="px-2 py-1 bg-yellow-100 text-yellow-800 text-xs rounded-full">
+                            Internal Use Only
+                        </span>
+                    </div>
+                    <div class="flex items-center space-x-4">
+                        <div class="flex items-center space-x-2">
+                            <img id="user-avatar" src="" alt="" class="h-8 w-8 rounded-full hidden">
+                            <span id="user-email" class="text-sm text-gray-700"></span>
+                        </div>
+                        <button onclick="logout()" class="px-4 py-2 text-sm text-gray-700 hover:text-gray-900">
+                            <i class="fas fa-sign-out-alt mr-2"></i>Logout
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+            <!-- Stats Overview -->
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+                <div class="bg-white p-4 rounded-lg shadow">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <p class="text-sm text-gray-500">Total Agents</p>
+                            <p id="total-agents" class="text-2xl font-bold">0</p>
+                        </div>
+                        <i class="fas fa-robot text-blue-500 text-2xl"></i>
+                    </div>
+                </div>
+                <div class="bg-white p-4 rounded-lg shadow">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <p class="text-sm text-gray-500">Telemetry Active</p>
+                            <p id="telemetry-active" class="text-2xl font-bold">0</p>
+                        </div>
+                        <i class="fas fa-chart-line text-green-500 text-2xl"></i>
+                    </div>
+                </div>
+                <div class="bg-white p-4 rounded-lg shadow">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <p class="text-sm text-gray-500">Public Visible</p>
+                            <p id="public-visible" class="text-2xl font-bold">0</p>
+                        </div>
+                        <i class="fas fa-eye text-purple-500 text-2xl"></i>
+                    </div>
+                </div>
+                <div class="bg-white p-4 rounded-lg shadow">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <p class="text-sm text-gray-500">Managers</p>
+                            <p id="total-managers" class="text-2xl font-bold">1</p>
+                        </div>
+                        <i class="fas fa-server text-orange-500 text-2xl"></i>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tabs -->
+            <div class="bg-white rounded-lg shadow mb-6">
+                <div class="border-b">
+                    <nav class="flex -mb-px">
+                        <button onclick="switchTab('agents')" id="agents-tab" class="tab-button active px-6 py-3 border-b-2 border-blue-500 text-blue-600 font-medium">
+                            <i class="fas fa-robot mr-2"></i>Agents
+                        </button>
+                        <button onclick="switchTab('managers')" id="managers-tab" class="tab-button px-6 py-3 border-b-2 border-transparent text-gray-600 hover:text-gray-800">
+                            <i class="fas fa-server mr-2"></i>Managers
+                        </button>
+                    </nav>
+                </div>
+            </div>
+
+            <!-- Agents Tab Content -->
+            <div id="agents-content" class="tab-content">
+                <!-- Filters and Actions -->
+                <div class="bg-white rounded-lg shadow mb-6 p-4">
+                    <div class="flex flex-wrap gap-4 items-center justify-between">
+                        <div class="flex gap-2">
+                            <button onclick="refreshAgents()" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
+                                <i class="fas fa-sync-alt mr-2"></i>Refresh
+                            </button>
+                            <button onclick="toggleAllTelemetry(true)" class="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700">
+                                <i class="fas fa-play mr-2"></i>Enable All Telemetry
+                            </button>
+                            <button onclick="toggleAllTelemetry(false)" class="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700">
+                                <i class="fas fa-stop mr-2"></i>Disable All Telemetry
+                            </button>
+                        </div>
+                        <div class="flex gap-2">
+                        <select id="filter-manager" onchange="applyFilters()" class="px-3 py-2 border rounded-lg">
+                            <option value="">All Managers</option>
+                        </select>
+                        <select id="filter-status" onchange="applyFilters()" class="px-3 py-2 border rounded-lg">
+                            <option value="">All Status</option>
+                            <option value="running">Running</option>
+                            <option value="stopped">Stopped</option>
+                            <option value="error">Error</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+                <!-- Agents Table -->
+                <div class="bg-white rounded-lg shadow overflow-hidden">
+                    <table class="min-w-full divide-y divide-gray-200">
+                        <thead class="bg-gray-50">
+                            <tr>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                    Agent
+                                </th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                    Status
+                                </th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                    Manager
+                                </th>
+                                <th class="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                    Telemetry
+                                </th>
+                                <th class="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                    Public Visibility
+                                </th>
+                                <th class="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                    Actions
+                                </th>
+                            </tr>
+                        </thead>
+                        <tbody id="agents-table" class="bg-white divide-y divide-gray-200">
+                            <!-- Agents will be populated here -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Managers Tab Content -->
+            <div id="managers-content" class="tab-content hidden">
+                <div class="bg-white rounded-lg shadow p-6">
+                    <div class="flex justify-between items-center mb-6">
+                        <h3 class="text-lg font-semibold">Registered Managers</h3>
+                        <button onclick="showAddManagerModal()" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
+                            <i class="fas fa-plus mr-2"></i>Add Manager
+                        </button>
+                    </div>
+                    <div id="managers-list" class="space-y-4">
+                        <!-- Managers will be populated here -->
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Settings Modal -->
+    <div id="settings-modal" class="hidden fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+        <div class="relative top-20 mx-auto p-5 border w-full max-w-2xl shadow-lg rounded-md bg-white">
+            <div class="flex justify-between items-center mb-4">
+                <h3 class="text-lg font-bold">Agent Settings: <span id="modal-agent-id"></span></h3>
+                <button onclick="closeSettingsModal()" class="text-gray-400 hover:text-gray-600">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            
+            <div class="space-y-6">
+                <!-- Telemetry Settings -->
+                <div>
+                    <h4 class="font-semibold mb-3">Telemetry Collection</h4>
+                    <div class="space-y-2">
+                        <label class="flex items-center">
+                            <input type="checkbox" id="telemetry-enabled" class="mr-2">
+                            <span>Enable Telemetry Collection</span>
+                        </label>
+                        <label class="flex items-center ml-6">
+                            <input type="checkbox" id="metrics-enabled" class="mr-2">
+                            <span>Collect Metrics</span>
+                        </label>
+                        <label class="flex items-center ml-6">
+                            <input type="checkbox" id="traces-enabled" class="mr-2">
+                            <span>Collect Traces</span>
+                        </label>
+                        <label class="flex items-center ml-6">
+                            <input type="checkbox" id="logs-enabled" class="mr-2">
+                            <span>Collect Logs</span>
+                        </label>
+                        <div class="mt-2">
+                            <label class="block text-sm font-medium text-gray-700">
+                                Collection Interval (seconds)
+                            </label>
+                            <input type="number" id="collection-interval" min="10" max="3600" value="60" 
+                                   class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Visibility Settings -->
+                <div>
+                    <h4 class="font-semibold mb-3">Public Dashboard Visibility</h4>
+                    <div class="space-y-2">
+                        <label class="flex items-center">
+                            <input type="checkbox" id="public-visible" class="mr-2">
+                            <span>Show on Public Dashboard</span>
+                        </label>
+                        <label class="flex items-center ml-6">
+                            <input type="checkbox" id="show-metrics" class="mr-2">
+                            <span>Show Metrics</span>
+                        </label>
+                        <label class="flex items-center ml-6">
+                            <input type="checkbox" id="show-traces" class="mr-2">
+                            <span>Show Traces</span>
+                        </label>
+                        <label class="flex items-center ml-6">
+                            <input type="checkbox" id="show-logs" class="mr-2">
+                            <span>Show Logs</span>
+                        </label>
+                        <label class="flex items-center ml-6">
+                            <input type="checkbox" id="show-cognitive-state" class="mr-2">
+                            <span>Show Cognitive State</span>
+                        </label>
+                        <label class="flex items-center ml-6">
+                            <input type="checkbox" id="show-health-status" class="mr-2">
+                            <span>Show Health Status</span>
+                        </label>
+                        <label class="flex items-center ml-6 text-red-600">
+                            <input type="checkbox" id="redact-pii" checked class="mr-2">
+                            <span>Redact PII (Always On)</span>
+                        </label>
+                    </div>
+                </div>
+            </div>
+
+            <div class="mt-6 flex justify-end space-x-3">
+                <button onclick="closeSettingsModal()" 
+                        class="px-4 py-2 bg-gray-300 text-gray-700 rounded-lg hover:bg-gray-400">
+                    Cancel
+                </button>
+                <button onclick="saveSettings()" 
+                        class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
+                    Save Settings
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script src="admin.js"></script>
+</body>
+</html>

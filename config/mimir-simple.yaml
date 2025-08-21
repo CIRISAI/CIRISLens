@@ -1,0 +1,51 @@
+# Simplified Mimir Configuration for CIRISLens
+
+multitenancy_enabled: false
+
+server:
+  http_listen_port: 9009
+  grpc_listen_port: 9095
+
+common:
+  storage:
+    backend: filesystem
+    filesystem:
+      dir: /data/mimir
+
+blocks_storage:
+  backend: filesystem
+  filesystem:
+    dir: /data/mimir/blocks
+  tsdb:
+    dir: /data/mimir/tsdb
+
+ingester:
+  ring:
+    instance_addr: 127.0.0.1
+    kvstore:
+      store: inmemory
+    replication_factor: 1
+
+distributor:
+  ring:
+    instance_addr: 127.0.0.1
+    kvstore:
+      store: inmemory
+
+compactor:
+  data_dir: /data/mimir/compactor
+
+ruler:
+  enable_api: true
+  rule_path: /data/mimir/rules
+
+ruler_storage:
+  backend: filesystem
+  filesystem:
+    dir: /data/mimir/rules
+
+limits:
+  max_global_series_per_user: 10000000
+  max_global_series_per_metric: 1000000
+  ingestion_rate: 50000
+  ingestion_burst_size: 100000
