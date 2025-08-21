@@ -18,6 +18,7 @@ from datetime import datetime, timedelta
 import logging
 import asyncio
 from manager_collector import ManagerCollector
+from otlp_collector import OTLPCollector
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -55,7 +56,8 @@ visibility_configs = {}
 # Database configuration
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://user:password@host:5432/dbname")
 db_pool = None
-collector = None
+manager_collector = None
+otlp_collector = None
 
 # Models
 class OAuthUser(BaseModel):
@@ -136,8 +138,8 @@ def require_auth(request: Request) -> Dict:
 # Startup and shutdown events
 @app.on_event("startup")
 async def startup():
-    """Initialize database and start collector"""
-    global db_pool, collector
+    """Initialize database and start collectors"""
+    global db_pool, manager_collector, otlp_collector
     
     try:
         # Create database pool
@@ -149,12 +151,21 @@ async def startup():
             # Create managers tables
             with open("/app/sql/manager_tables.sql", "r") as f:
                 await conn.execute(f.read())
+            # Create OTLP tables
+            with open("/app/sql/otlp_tables.sql", "r") as f:
+                await conn.execute(f.read())
             logger.info("Database tables initialized")
             
         # Start manager collector
-        collector = ManagerCollector(DATABASE_URL)
-        asyncio.create_task(collector.start())
+        manager_collector = ManagerCollector(DATABASE_URL)
+        asyncio.create_task(manager_collector.start())
         logger.info("Manager collector started")
+        
+        # Start OTLP collector if enabled
+        if os.getenv("OTLP_COLLECTION_ENABLED", "true").lower() == "true":
+            otlp_collector = OTLPCollector(DATABASE_URL)
+            asyncio.create_task(otlp_collector.start())
+            logger.info("OTLP collector started")
         
     except Exception as e:
         logger.error(f"Startup error: {e}")
@@ -163,10 +174,13 @@ async def startup():
 @app.on_event("shutdown")
 async def shutdown():
     """Cleanup on shutdown"""
-    global db_pool, collector
+    global db_pool, manager_collector, otlp_collector
     
-    if collector:
-        await collector.stop()
+    if manager_collector:
+        await manager_collector.stop()
+        
+    if otlp_collector:
+        await otlp_collector.stop()
         
     if db_pool:
         await db_pool.close()
@@ -420,7 +434,7 @@ async def add_manager(config: ManagerConfig, user: Dict = Depends(require_auth))
         
     try:
         # Add to database and start collection
-        manager_id = await collector.add_manager(
+        manager_id = await manager_collector.add_manager(
             name=config.name,
             url=config.url,
             description=config.description,
@@ -492,10 +506,10 @@ async def update_manager(manager_id: int, updates: ManagerUpdate, user: Dict = D
 @app.delete("/api/admin/managers/{manager_id}")
 async def delete_manager(manager_id: int, user: Dict = Depends(require_auth)):
     """Remove a manager (disable collection)"""
-    if not collector:
-        raise HTTPException(status_code=503, detail="Collector not available")
+    if not manager_collector:
+        raise HTTPException(status_code=503, detail="Manager collector not available")
         
-    await collector.remove_manager(manager_id)
+    await manager_collector.remove_manager(manager_id)
     return {"status": "deleted", "manager_id": manager_id}
 
 @app.get("/api/admin/managers/{manager_id}/agents")
@@ -569,10 +583,10 @@ async def get_all_discovered_agents(user: Dict = Depends(require_auth)):
 @app.get("/api/admin/stats")
 async def get_stats(user: Dict = Depends(require_auth)):
     """Get overall statistics"""
-    if not collector:
+    if not manager_collector:
         return {"stats": {}}
         
-    stats = await collector.get_manager_stats()
+    stats = await manager_collector.get_manager_stats()
     return {"stats": stats}
 
 # WebSocket endpoint placeholder

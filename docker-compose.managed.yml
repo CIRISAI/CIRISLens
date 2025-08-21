@@ -37,15 +37,22 @@ services:
     restart: unless-stopped
     ports:
       - "8000:8000"  # Internal only, accessed via nginx
+    env_file:
+      - .env
     environment:
-      - ENV=development
+      - ENV=${ENV:-development}
       - OAUTH_CLIENT_ID=${GOOGLE_CLIENT_ID:-mock-client-id}
       - OAUTH_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-mock-secret}
-      - OAUTH_CALLBACK_URL=http://localhost:8080/cirislens/api/admin/auth/callback
-      - MANAGER_API_URL=http://host.docker.internal:8888/manager/v1
-      - ALLOWED_DOMAIN=ciris.ai
+      - OAUTH_CALLBACK_URL=${OAUTH_CALLBACK_URL:-http://localhost:8080/cirislens/api/admin/auth/callback}
+      - MANAGER_API_URL=${MANAGER_API_URL:-http://host.docker.internal:8888/manager/v1}
+      - ALLOWED_DOMAIN=${ALLOWED_DOMAIN:-ciris.ai}
       - SESSION_SECRET=${SESSION_SECRET:-dev-secret-change-in-production}
       - DATABASE_URL=postgresql://user:password@host:5432/dbname
+      - COLLECTION_INTERVAL_SECONDS=${COLLECTION_INTERVAL_SECONDS:-30}
+      - OTLP_COLLECTION_ENABLED=${OTLP_COLLECTION_ENABLED:-true}
+      # Agent tokens passed through from .env
+      - AGENT_DATUM_TOKEN=${AGENT_DATUM_TOKEN}
+      - AGENT_DATUM_URL=${AGENT_DATUM_URL}
     volumes:
       - ./api:/app
       - ./config:/app/config:ro
