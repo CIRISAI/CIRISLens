@@ -25,9 +25,11 @@ CREATE TABLE IF NOT EXISTS manager_telemetry (
     status VARCHAR(50),
     version VARCHAR(50),
     uptime_seconds INTEGER,
-    raw_data JSONB,
-    INDEX idx_manager_telemetry_time (manager_id, collected_at DESC)
+    raw_data JSONB
 );
+
+-- Create index for manager telemetry
+CREATE INDEX IF NOT EXISTS idx_manager_telemetry_time ON manager_telemetry(manager_id, collected_at);
 
 -- Agent discoveries from managers
 CREATE TABLE IF NOT EXISTS discovered_agents (
@@ -45,10 +47,7 @@ CREATE TABLE IF NOT EXISTS discovered_agents (
     deployment VARCHAR(255),
     last_seen TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     raw_data JSONB,
-    UNIQUE(manager_id, agent_id),
-    INDEX idx_discovered_agents_manager (manager_id),
-    INDEX idx_discovered_agents_status (status),
-    INDEX idx_discovered_agents_last_seen (last_seen DESC)
+    UNIQUE(manager_id, agent_id)
 );
 
 -- Default manager for agents.ciris.ai

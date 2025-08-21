@@ -19,6 +19,7 @@ import logging
 import asyncio
 from manager_collector import ManagerCollector
 from otlp_collector import OTLPCollector
+from token_manager import TokenManager
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -58,6 +59,7 @@ DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://user:password@host:5432/d
 db_pool = None
 manager_collector = None
 otlp_collector = None
+token_manager = TokenManager()
 
 # Models
 class OAuthUser(BaseModel):
@@ -104,6 +106,11 @@ class ManagerUpdate(BaseModel):
     collection_interval_seconds: Optional[int] = None
     enabled: Optional[bool] = None
 
+class AgentTokenConfig(BaseModel):
+    agent_name: str
+    token: str
+    url: str
+
 # Session management
 def create_session(user: OAuthUser) -> str:
     """Create a new session for authenticated user"""
@@ -148,10 +155,7 @@ async def startup():
         
         # Initialize tables
         async with db_pool.acquire() as conn:
-            # Create managers tables
-            with open("/app/sql/manager_tables.sql", "r") as f:
-                await conn.execute(f.read())
-            # Create OTLP tables
+            # Create OTLP tables (manager tables already created by init.sql)
             with open("/app/sql/otlp_tables.sql", "r") as f:
                 await conn.execute(f.read())
             logger.info("Database tables initialized")
@@ -588,6 +592,58 @@ async def get_stats(user: Dict = Depends(require_auth)):
         
     stats = await manager_collector.get_manager_stats()
     return {"stats": stats}
+
+# Agent token management endpoints
+@app.get("/api/admin/agent-tokens")
+async def get_agent_tokens(user: Dict = Depends(require_auth)):
+    """Get configured agent tokens (without actual token values)"""
+    agents = await token_manager.get_configured_agents()
+    return {"agents": agents}
+
+@app.post("/api/admin/agent-tokens")
+async def set_agent_token(config: AgentTokenConfig, user: Dict = Depends(require_auth)):
+    """Set or update an agent token"""
+    success = await token_manager.set_agent_token(
+        agent_name=config.agent_name,
+        token=config.token,
+        url=config.url,
+        updated_by=user["email"]
+    )
+    
+    if success:
+        # Restart OTLP collector to pick up new token
+        global otlp_collector
+        if otlp_collector:
+            await otlp_collector.stop()
+            otlp_collector = OTLPCollector(DATABASE_URL)
+            asyncio.create_task(otlp_collector.start())
+            
+        return {
+            "status": "success",
+            "message": f"Token for {config.agent_name} has been updated"
+        }
+    else:
+        raise HTTPException(status_code=500, detail="Failed to update token")
+
+@app.delete("/api/admin/agent-tokens/{agent_name}")
+async def remove_agent_token(agent_name: str, user: Dict = Depends(require_auth)):
+    """Remove an agent token"""
+    success = await token_manager.remove_agent_token(agent_name)
+    
+    if success:
+        # Restart OTLP collector
+        global otlp_collector
+        if otlp_collector:
+            await otlp_collector.stop()
+            otlp_collector = OTLPCollector(DATABASE_URL)
+            asyncio.create_task(otlp_collector.start())
+            
+        return {
+            "status": "success",
+            "message": f"Token for {agent_name} has been removed"
+        }
+    else:
+        raise HTTPException(status_code=404, detail="Agent not found")
 
 # WebSocket endpoint placeholder
 @app.websocket("/ws/admin/agents")
