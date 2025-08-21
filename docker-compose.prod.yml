@@ -1,0 +1,183 @@
+# Production override for agents.ciris.ai deployment
+# Usage: docker compose -f docker-compose.managed.yml -f docker-compose.prod.yml up -d
+
+version: '3.8'
+
+services:
+  # Remove mock nginx - production uses real nginx
+  mock-managed-nginx:
+    deploy:
+      replicas: 0
+
+  # API connects to production network
+  cirislens-api:
+    networks:
+      - ciris-network
+      - cirislens-internal
+    ports:
+      - "127.0.0.1:8200:8000"  # Local access only
+    environment:
+      - ENV=production
+      - MANAGER_API_URL=http://host.docker.internal:8888/manager/v1
+      - OAUTH_CALLBACK_URL=https://agents.ciris.ai/lens/admin/auth/callback
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+
+  # Grafana accessible via nginx
+  cirislens-grafana:
+    networks:
+      - ciris-network
+      - cirislens-internal
+    ports:
+      - "127.0.0.1:3001:3000"  # Local access only
+    environment:
+      - GF_SERVER_ROOT_URL=https://agents.ciris.ai/lens/
+      - GF_SERVER_SERVE_FROM_SUB_PATH=true
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
+      - GF_SECURITY_DISABLE_INITIAL_ADMIN_CREATION=false
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '0.5'
+
+  # Database on internal network only
+  cirislens-db:
+    networks:
+      - cirislens-internal
+    ports:
+      - "127.0.0.1:5433:5432"  # Different port to avoid conflicts
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+
+  # Collector on internal network
+  cirislens-collector:
+    networks:
+      - cirislens-internal
+    ports: []  # No external ports in production
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+
+  # Prometheus internal only
+  cirislens-prometheus:
+    networks:
+      - cirislens-internal
+    ports:
+      - "127.0.0.1:9090:9090"  # Local access only
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '0.5'
+
+  # Loki internal only
+  cirislens-loki:
+    networks:
+      - cirislens-internal
+    ports: []  # No external access
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '0.5'
+
+  # Tempo internal only
+  cirislens-tempo:
+    networks:
+      - cirislens-internal
+    ports: []  # No external access
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '0.5'
+
+  # Mimir for long-term storage
+  cirislens-mimir:
+    networks:
+      - cirislens-internal
+    ports: []  # No external access
+    environment:
+      - MIMIR_COMPACTOR_BLOCKS_RETENTION_PERIOD=90d
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '1.0'
+
+  # MinIO internal only
+  cirislens-minio:
+    networks:
+      - cirislens-internal
+    ports: []  # No external access
+    volumes:
+      - /data/cirislens/minio:/data  # Use dedicated storage path
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+
+# Production networks
+networks:
+  ciris-network:
+    external: true  # Use existing production network
+  cirislens-internal:
+    driver: bridge
+    internal: true  # No external access
+    ipam:
+      config:
+        - subnet: 172.30.0.0/16  # Unique subnet to avoid conflicts
+
+# Production volumes with specific mount points
+volumes:
+  cirislens_db_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /data/cirislens/postgres
+  cirislens_grafana_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /data/cirislens/grafana
+  cirislens_prometheus_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /data/cirislens/prometheus
+  cirislens_loki_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /data/cirislens/loki
+  cirislens_tempo_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /data/cirislens/tempo
+  cirislens_mimir_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /data/cirislens/mimir
+  cirislens_sessions:
+    driver: local
