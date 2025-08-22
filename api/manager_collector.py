@@ -95,7 +95,7 @@ class ManagerCollector:
             # Collect manager status
             try:
                 status_response = await client.get(
-                    f"{manager_url}/manager/v1/status",
+                    f"{manager_url}/status",
                     headers=headers
                 )
                 status_data = status_response.json() if status_response.status_code == 200 else None
@@ -106,7 +106,7 @@ class ManagerCollector:
             # Collect agents list
             try:
                 agents_response = await client.get(
-                    f"{manager_url}/manager/v1/agents",
+                    f"{manager_url}/agents",
                     headers=headers
                 )
                 agents_data = agents_response.json() if agents_response.status_code == 200 else []
@@ -117,7 +117,7 @@ class ManagerCollector:
         # Store collected data
         await self.store_manager_telemetry(manager_id, status_data, agents_data)
         
-    async def store_manager_telemetry(self, manager_id: int, status_data: Optional[Dict], agents_data: List[Dict]):
+    async def store_manager_telemetry(self, manager_id: str, status_data: Optional[Dict], agents_data: List[Dict]):
         """Store collected telemetry in database"""
         async with self.pool.acquire() as conn:
             # Update manager last_seen
@@ -196,14 +196,14 @@ class ManagerCollector:
                 INSERT INTO managers 
                 (name, url, description, auth_token, collection_interval_seconds, enabled)
                 VALUES ($1, $2, $3, $4, $5, true)
-                RETURNING id
+                RETURNING manager_id
             """, name, url, description, auth_token, collection_interval)
             
-            manager_id = row['id']
+            manager_id = row['manager_id']
             
             # Start collection for new manager
             manager = {
-                'id': manager_id,
+                'manager_id': manager_id,
                 'name': name,
                 'url': url,
                 'auth_token': auth_token,
