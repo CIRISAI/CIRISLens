@@ -41,8 +41,8 @@ services:
       - GF_SERVER_ROOT_URL=https://agents.ciris.ai/lens
       - GF_SERVER_SERVE_FROM_SUB_PATH=false
       - GF_AUTH_ANONYMOUS_ENABLED=true
-      - GF_AUTH_ANONYMOUS_ORG_NAME=Public
-      - GF_AUTH_ANONYMOUS_ORG_ID=2
+      - GF_AUTH_ANONYMOUS_ORG_NAME=Main Org.
+      - GF_AUTH_ANONYMOUS_ORG_ID=1
       - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
       - GF_AUTH_ANONYMOUS_HIDE_VERSION=true
       - GF_AUTH_DISABLE_LOGIN_FORM=false
