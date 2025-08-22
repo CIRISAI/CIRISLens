@@ -87,8 +87,7 @@ services:
   cirislens-prometheus:
     networks:
       - cirislens-internal
-    ports:
-      - "127.0.0.1:9090:9090"  # Local access only
+    ports: []  # Disabled due to port conflict
     deploy:
       resources:
         limits:
