@@ -13,12 +13,29 @@ deleteDatasources:
     orgId: 1
 
 datasources:
+  # PostgreSQL for OTLP telemetry data (PRIMARY)
+  - name: PostgreSQL
+    type: postgres
+    access: proxy
+    url: cirislens-db:5432
+    database: cirislens
+    user: cirislens
+    isDefault: true
+    editable: true
+    jsonData:
+      sslmode: disable
+      postgresVersion: 1500
+      timescaledb: false
+    secureJsonData:
+      password: cirislens
+    uid: postgresql
+
   # Mimir for metrics
   - name: Mimir
     type: prometheus
     access: proxy
     url: http://mimir:9009/prometheus
-    isDefault: true
+    isDefault: false
     editable: true
     jsonData:
       httpMethod: POST
