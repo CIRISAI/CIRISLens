@@ -16,7 +16,44 @@
   "gnetId": null,
   "graphTooltip": 0,
   "id": null,
-  "links": [],
+  "links": [
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": false,
+      "keepTime": true,
+      "tags": [],
+      "targetBlank": false,
+      "title": "Service Details",
+      "tooltip": "View detailed service metrics",
+      "type": "link",
+      "url": "/d/ciris-service-metrics/ciris-service-metrics"
+    },
+    {
+      "asDropdown": false,
+      "icon": "graph-bar",
+      "includeVars": false,
+      "keepTime": true,
+      "tags": [],
+      "targetBlank": false,
+      "title": "Traces",
+      "tooltip": "View distributed traces",
+      "type": "link",
+      "url": "/d/ciris-traces/ciris-traces"
+    },
+    {
+      "asDropdown": false,
+      "icon": "file-alt",
+      "includeVars": false,
+      "keepTime": true,
+      "tags": [],
+      "targetBlank": false,
+      "title": "Logs",
+      "tooltip": "View system logs",
+      "type": "link",
+      "url": "/d/ciris-logs/ciris-logs"
+    }
+  ],
   "panels": [
     {
       "datasource": "PostgreSQL",
