@@ -53,9 +53,11 @@ SESSION_SECRET=$(openssl rand -hex 32)
 COLLECTION_INTERVAL_SECONDS=30
 OTLP_COLLECTION_ENABLED=true
 
-# Grafana
-GF_SECURITY_ADMIN_USER=admin
-GF_SECURITY_ADMIN_PASSWORD=$(openssl rand -hex 16)
+# Grafana Admin (IMPORTANT: Change this!)
+GF_ADMIN_USER=admin
+GF_ADMIN_PASSWORD=$(openssl rand -hex 16)
+GF_ADMIN_EMAIL=admin@ciris.ai
+GF_SECRET_KEY=$(openssl rand -hex 32)
 
 # MinIO
 MINIO_ROOT_USER=admin
@@ -121,8 +123,8 @@ echo "- Public Dashboards: https://agents.ciris.ai/lens/"
 echo "- Admin Interface: https://agents.ciris.ai/lens/admin/"
 echo "- API Health: https://agents.ciris.ai/lens/api/health"
 echo ""
-echo "Default Credentials (saved in .env):"
-grep "GF_SECURITY_ADMIN" .env
+echo "Grafana Admin Credentials (saved in .env):"
+grep "GF_ADMIN_USER\|GF_ADMIN_PASSWORD" .env | grep -v SECRET_KEY
 echo ""
 echo "Next Steps:"
 echo "1. Access admin UI and configure agent tokens"
