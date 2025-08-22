@@ -57,13 +57,13 @@ class ManagerCollector:
         """Get all enabled managers from database"""
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(
-                "SELECT * FROM managers WHERE enabled = true"
+                "SELECT * FROM managers WHERE status = 'online'"
             )
             return [dict(row) for row in rows]
             
     async def collect_manager_loop(self, manager: Dict):
         """Collection loop for a single manager"""
-        manager_id = manager['id']
+        manager_id = manager['manager_id']
         manager_name = manager['name']
         manager_url = manager['url'].rstrip('/')
         interval = manager.get('collection_interval_seconds', 30)
@@ -82,7 +82,7 @@ class ManagerCollector:
             
     async def collect_from_manager(self, manager: Dict):
         """Collect telemetry from a single manager"""
-        manager_id = manager['id']
+        manager_id = manager['manager_id']
         manager_name = manager['name']
         manager_url = manager['url'].rstrip('/')
         auth_token = manager.get('auth_token')
