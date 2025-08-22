@@ -169,7 +169,10 @@ class OTLPCollector:
         """Process OTLP metrics and store in time-series format"""
         if "resourceMetrics" not in metrics:
             return
-            
+        
+        metric_count = 0
+        error_count = 0
+        
         for resource_metric in metrics["resourceMetrics"]:
             resource_attrs = resource_metric.get("resource", {}).get("attributes", [])
             
@@ -178,39 +181,58 @@ class OTLPCollector:
                     metric_name = metric.get("name")
                     
                     # Handle different metric types
+                    data_points = []
                     if "gauge" in metric:
                         data_points = metric["gauge"].get("dataPoints", [])
                     elif "sum" in metric:
                         data_points = metric["sum"].get("dataPoints", [])
-                    else:
-                        continue
+                    elif "histogram" in metric:
+                        data_points = metric["histogram"].get("dataPoints", [])
                         
                     for point in data_points:
-                        # Extract value based on type
-                        if "asDouble" in point:
-                            value = point["asDouble"]
-                        elif "asInt" in point:
-                            value = point["asInt"]
-                        else:
-                            continue
-                            
-                        # Extract labels from attributes
-                        labels = {}
-                        for attr in point.get("attributes", []):
-                            labels[attr["key"]] = attr["value"].get("stringValue", "")
-                            
-                        # Store metric
-                        await conn.execute("""
-                            INSERT INTO agent_metrics 
-                            (agent_name, metric_name, value, labels, timestamp)
-                            VALUES ($1, $2, $3, $4, $5)
-                        """,
-                            agent_name,
-                            metric_name,
-                            float(value),
-                            json.dumps(labels),
-                            datetime.fromtimestamp(float(point.get("timeUnixNano", 0)) / 1e9, tz=timezone.utc)
-                        )
+                        try:
+                            # Extract value based on type
+                            value = None
+                            if "asDouble" in point:
+                                value = point["asDouble"]
+                            elif "asInt" in point:
+                                value = point["asInt"]
+                            else:
+                                continue
+                                
+                            # Extract labels from attributes - handle all value types
+                            labels = {}
+                            for attr in point.get("attributes", []):
+                                key = attr.get("key", "")
+                                val = attr.get("value", {})
+                                if "stringValue" in val:
+                                    labels[key] = val["stringValue"]
+                                elif "intValue" in val:
+                                    labels[key] = str(val["intValue"])
+                                elif "boolValue" in val:
+                                    labels[key] = str(val["boolValue"]).lower()
+                                    
+                            # Store metric with conflict handling
+                            await conn.execute("""
+                                INSERT INTO agent_metrics 
+                                (agent_name, metric_name, value, labels, timestamp)
+                                VALUES ($1, $2, $3, $4, $5)
+                                ON CONFLICT (agent_name, metric_name, timestamp, labels)
+                                DO UPDATE SET value = EXCLUDED.value
+                            """,
+                                agent_name,
+                                metric_name,
+                                float(value),
+                                json.dumps(labels),
+                                datetime.fromtimestamp(float(point.get("timeUnixNano", 0)) / 1e9, tz=timezone.utc)
+                            )
+                            metric_count += 1
+                        except Exception as e:
+                            logger.warning(f"Failed to store metric {metric_name}: {e}")
+                            error_count += 1
+        
+        if metric_count > 0 or error_count > 0:
+            logger.info(f"Processed {metric_count} metrics for {agent_name} ({error_count} errors)")
                         
     async def _process_traces(self, conn, agent_name: str, traces: Dict):
         """Process OTLP traces"""
@@ -220,12 +242,13 @@ class OTLPCollector:
         for resource_span in traces["resourceSpans"]:
             for scope_span in resource_span.get("scopeSpans", []):
                 for span in scope_span.get("spans", []):
-                    # Store trace span
+                    # Store trace span with conflict handling
                     await conn.execute("""
                         INSERT INTO agent_traces 
                         (agent_name, trace_id, span_id, operation_name, 
                          start_time, end_time, attributes, events)
                         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                        ON CONFLICT (trace_id, span_id) DO NOTHING
                     """,
                         agent_name,
                         span.get("traceId"),
