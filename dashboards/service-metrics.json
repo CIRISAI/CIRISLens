@@ -95,7 +95,7 @@
           "group": [],
           "metricColumn": "none",
           "rawQuery": true,
-          "rawSql": "SELECT \n  timestamp AS \"time\",\n  labels->>'service' AS metric,\n  value\nFROM agent_metrics\nWHERE \n  agent_name = '$agent'\n  AND metric_name = 'service.requests'\n  AND timestamp BETWEEN $__timeFrom() AND $__timeTo()\nORDER BY timestamp",
+          "rawSql": "SELECT \n  timestamp AS \"time\",\n  agent_name || '/' || labels->>'service' AS metric,\n  value\nFROM agent_metrics\nWHERE \n  agent_name = '$agent'\n  AND metric_name = 'service.requests'\n  AND timestamp BETWEEN $__timeFrom() AND $__timeTo()\nORDER BY timestamp",
           "refId": "A",
           "select": [
             [
@@ -193,7 +193,7 @@
           "group": [],
           "metricColumn": "none",
           "rawQuery": true,
-          "rawSql": "SELECT \n  timestamp AS \"time\",\n  labels->>'service' AS metric,\n  value\nFROM agent_metrics\nWHERE \n  agent_name = '$agent'\n  AND metric_name = 'service.error_rate'\n  AND timestamp BETWEEN $__timeFrom() AND $__timeTo()\nORDER BY timestamp",
+          "rawSql": "SELECT \n  timestamp AS \"time\",\n  agent_name || '/' || labels->>'service' AS metric,\n  value\nFROM agent_metrics\nWHERE \n  agent_name = '$agent'\n  AND metric_name = 'service.error_rate'\n  AND timestamp BETWEEN $__timeFrom() AND $__timeTo()\nORDER BY timestamp",
           "refId": "A",
           "select": [
             [
@@ -389,7 +389,7 @@
           "group": [],
           "metricColumn": "none",
           "rawQuery": true,
-          "rawSql": "SELECT \n  labels->>'service' AS \"Service\",\n  SUM(CASE WHEN metric_name = 'service.requests' THEN value ELSE 0 END)::INT AS \"Total Requests\",\n  SUM(CASE WHEN metric_name = 'service.errors' THEN value ELSE 0 END)::INT AS \"Total Errors\",\n  AVG(CASE WHEN metric_name = 'service.error_rate' THEN value ELSE NULL END)::NUMERIC(5,4) AS \"Error Rate\",\n  AVG(CASE WHEN metric_name = 'service.uptime' THEN value ELSE NULL END)::INT AS \"Uptime (s)\",\n  MAX(CASE WHEN metric_name = 'service.healthy' THEN value ELSE 0 END)::INT AS \"Healthy\"\nFROM agent_metrics\nWHERE \n  agent_name = '$agent'\n  AND metric_name LIKE 'service.%'\n  AND timestamp BETWEEN $__timeFrom() AND $__timeTo()\n  AND labels->>'service' IS NOT NULL\nGROUP BY labels->>'service'\nORDER BY \"Total Requests\" DESC",
+          "rawSql": "SELECT \n  agent_name || '/' || labels->>'service' AS \"Service\",\n  SUM(CASE WHEN metric_name = 'service.requests' THEN value ELSE 0 END)::INT AS \"Total Requests\",\n  SUM(CASE WHEN metric_name = 'service.errors' THEN value ELSE 0 END)::INT AS \"Total Errors\",\n  AVG(CASE WHEN metric_name = 'service.error_rate' THEN value ELSE NULL END)::NUMERIC(5,4) AS \"Error Rate\",\n  AVG(CASE WHEN metric_name = 'service.uptime' THEN value ELSE NULL END)::INT AS \"Uptime (s)\",\n  MAX(CASE WHEN metric_name = 'service.healthy' THEN value ELSE 0 END)::INT AS \"Healthy\"\nFROM agent_metrics\nWHERE \n  agent_name = '$agent'\n  AND metric_name LIKE 'service.%'\n  AND timestamp BETWEEN $__timeFrom() AND $__timeTo()\n  AND labels->>'service' IS NOT NULL\nGROUP BY agent_name, labels->>'service'\nORDER BY \"Total Requests\" DESC",
           "refId": "A",
           "select": [
             [
