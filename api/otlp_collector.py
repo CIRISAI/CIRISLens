@@ -243,22 +243,27 @@ class OTLPCollector:
             for scope_span in resource_span.get("scopeSpans", []):
                 for span in scope_span.get("spans", []):
                     # Store trace span with conflict handling
-                    await conn.execute("""
-                        INSERT INTO agent_traces 
-                        (agent_name, trace_id, span_id, operation_name, 
-                         start_time, end_time, attributes, events)
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-                        ON CONFLICT (trace_id, span_id) DO NOTHING
-                    """,
-                        agent_name,
-                        span.get("traceId"),
-                        span.get("spanId"),
-                        span.get("name"),
-                        datetime.fromtimestamp(float(span.get("startTimeUnixNano", 0)) / 1e9, tz=timezone.utc),
-                        datetime.fromtimestamp(float(span.get("endTimeUnixNano", 0)) / 1e9, tz=timezone.utc),
-                        json.dumps(span.get("attributes", [])),
-                        json.dumps(span.get("events", []))
-                    )
+                    try:
+                        await conn.execute("""
+                            INSERT INTO agent_traces 
+                            (agent_name, trace_id, span_id, parent_span_id, operation_name, 
+                             start_time, end_time, attributes, events, status)
+                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                            ON CONFLICT (trace_id, span_id) DO NOTHING
+                        """,
+                            agent_name,
+                            span.get("traceId"),
+                            span.get("spanId"),
+                            span.get("parentSpanId"),
+                            span.get("name"),
+                            datetime.fromtimestamp(float(span.get("startTimeUnixNano", 0)) / 1e9, tz=timezone.utc),
+                            datetime.fromtimestamp(float(span.get("endTimeUnixNano", 0)) / 1e9, tz=timezone.utc),
+                            json.dumps(span.get("attributes", [])),
+                            json.dumps(span.get("events", [])),
+                            span.get("status", {}).get("code", "OK")
+                        )
+                    except Exception as e:
+                        logger.warning(f"Failed to store trace for {agent_name}: {e}")
                     
     async def _process_logs(self, conn, agent_name: str, logs: Dict):
         """Process OTLP logs"""
