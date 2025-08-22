@@ -122,7 +122,7 @@ class ManagerCollector:
         async with self.pool.acquire() as conn:
             # Update manager last_seen
             await conn.execute(
-                "UPDATE managers SET last_seen = $1, last_error = NULL WHERE id = $2",
+                "UPDATE managers SET last_seen = $1 WHERE manager_id = $2",
                 datetime.now(timezone.utc), manager_id
             )
             
