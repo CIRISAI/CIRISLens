@@ -364,7 +364,7 @@
           "group": [],
           "metricColumn": "none",
           "rawQuery": true,
-          "rawSql": "WITH request_diffs AS (\n  SELECT \n    timestamp,\n    agent_name,\n    value,\n    LAG(value) OVER (PARTITION BY agent_name ORDER BY timestamp) as prev_value,\n    EXTRACT(EPOCH FROM (timestamp - LAG(timestamp) OVER (PARTITION BY agent_name ORDER BY timestamp))) as time_diff\n  FROM agent_metrics\n  WHERE \n    metric_name = 'requests.total'\n    AND timestamp BETWEEN $__timeFrom() AND $__timeTo()\n)\nSELECT \n  timestamp AS \"time\",\n  agent_name AS metric,\n  CASE \n    WHEN time_diff > 0 AND time_diff < 300 THEN (value - prev_value) / time_diff\n    ELSE 0\n  END as value\nFROM request_diffs\nWHERE prev_value IS NOT NULL\nORDER BY timestamp",
+          "rawSql": "WITH request_diffs AS (\n  SELECT \n    timestamp,\n    agent_name,\n    value,\n    LAG(value) OVER (PARTITION BY agent_name ORDER BY timestamp) as prev_value,\n    EXTRACT(EPOCH FROM (timestamp - LAG(timestamp) OVER (PARTITION BY agent_name ORDER BY timestamp))) as time_diff\n  FROM agent_metrics\n  WHERE \n    metric_name = 'requests.total'\n    AND timestamp BETWEEN $__timeFrom() AND $__timeTo()\n)\nSELECT \n  timestamp AS \"time\",\n  agent_name AS metric,\n  CASE \n    WHEN time_diff > 0 AND time_diff < 300 AND value >= prev_value THEN (value - prev_value) / time_diff\n    WHEN time_diff > 0 AND time_diff < 300 AND value < prev_value THEN value / time_diff  -- Counter reset\n    ELSE 0\n  END as value\nFROM request_diffs\nWHERE prev_value IS NOT NULL\nORDER BY timestamp",
           "refId": "A",
           "select": [],
           "table": "agent_metrics",
