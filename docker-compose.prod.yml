@@ -35,12 +35,20 @@ services:
       - cirislens-internal
     ports:
       - "127.0.0.1:3001:3000"  # Local access only
+    volumes:
+      - ./config/grafana.ini:/etc/grafana/grafana.ini:ro
     environment:
       - GF_SERVER_ROOT_URL=https://agents.ciris.ai/lens/
       - GF_SERVER_SERVE_FROM_SUB_PATH=true
       - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_NAME=Public
       - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
+      - GF_AUTH_ANONYMOUS_HIDE_VERSION=true
+      - GF_AUTH_DISABLE_LOGIN_FORM=false
       - GF_SECURITY_DISABLE_INITIAL_ADMIN_CREATION=false
+      - GF_USERS_DEFAULT_THEME=light
+      - GF_EXPLORE_ENABLED=false
+      - GF_ALERTING_ENABLED=false
     deploy:
       resources:
         limits:
