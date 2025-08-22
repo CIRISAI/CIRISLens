@@ -147,7 +147,7 @@
         {
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT \n  date_trunc('minute', timestamp) AS \"time\",\n  severity AS metric,\n  COUNT(*) as value\nFROM agent_logs\nWHERE timestamp >= NOW() - INTERVAL '30 minutes'\nGROUP BY date_trunc('minute', timestamp), severity\nORDER BY 1",
+          "rawSql": "SELECT \n  date_trunc('minute', timestamp) AS \"time\",\n  severity AS metric,\n  COUNT(*) as value\nFROM agent_logs\nWHERE timestamp BETWEEN $__timeFrom() AND $__timeTo()\nGROUP BY date_trunc('minute', timestamp), severity\nORDER BY 1",
           "refId": "A"
         }
       ],
@@ -234,7 +234,7 @@
         {
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT \n  timestamp AS \"Timestamp\",\n  agent_name AS \"Agent\",\n  severity AS \"Severity\",\n  message AS \"Message\",\n  trace_id AS \"Trace ID\",\n  attributes->>'service.name' AS \"Service\"\nFROM agent_logs\nWHERE timestamp > NOW() - INTERVAL '30 minutes'\nORDER BY timestamp DESC\nLIMIT 500",
+          "rawSql": "SELECT \n  timestamp AS \"Timestamp\",\n  agent_name AS \"Agent\",\n  severity AS \"Severity\",\n  message AS \"Message\",\n  trace_id AS \"Trace ID\",\n  attributes->>'service.name' AS \"Service\"\nFROM agent_logs\nWHERE timestamp BETWEEN $__timeFrom() AND $__timeTo()\nORDER BY timestamp DESC\nLIMIT 500",
           "refId": "A"
         }
       ],
@@ -249,7 +249,7 @@
     "list": []
   },
   "time": {
-    "from": "now-30m",
+    "from": "now-24h",
     "to": "now"
   },
   "timepicker": {},
