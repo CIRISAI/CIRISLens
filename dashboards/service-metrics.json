@@ -95,7 +95,7 @@
           "group": [],
           "metricColumn": "none",
           "rawQuery": true,
-          "rawSql": "SELECT \n  timestamp AS \"time\",\n  labels->>'service' AS metric,\n  value\nFROM agent_metrics\nWHERE \n  agent_name = '$agent'\n  AND metric_name = 'service.requests'\n  AND timestamp >= NOW() - INTERVAL '30 minutes'\nORDER BY timestamp",
+          "rawSql": "SELECT \n  timestamp AS \"time\",\n  labels->>'service' AS metric,\n  value\nFROM agent_metrics\nWHERE \n  agent_name = '$agent'\n  AND metric_name = 'service.requests'\n  AND timestamp BETWEEN $__timeFrom() AND $__timeTo()\nORDER BY timestamp",
           "refId": "A",
           "select": [
             [
@@ -193,7 +193,7 @@
           "group": [],
           "metricColumn": "none",
           "rawQuery": true,
-          "rawSql": "SELECT \n  timestamp AS \"time\",\n  labels->>'service' AS metric,\n  value\nFROM agent_metrics\nWHERE \n  agent_name = '$agent'\n  AND metric_name = 'service.error_rate'\n  AND timestamp >= NOW() - INTERVAL '30 minutes'\nORDER BY timestamp",
+          "rawSql": "SELECT \n  timestamp AS \"time\",\n  labels->>'service' AS metric,\n  value\nFROM agent_metrics\nWHERE \n  agent_name = '$agent'\n  AND metric_name = 'service.error_rate'\n  AND timestamp BETWEEN $__timeFrom() AND $__timeTo()\nORDER BY timestamp",
           "refId": "A",
           "select": [
             [
@@ -264,7 +264,7 @@
           "group": [],
           "metricColumn": "none",
           "rawQuery": true,
-          "rawSql": "SELECT \n  COUNT(DISTINCT labels->>'service') AS value\nFROM agent_metrics\nWHERE \n  agent_name = '$agent'\n  AND metric_name LIKE 'service.%'\n  AND timestamp >= NOW() - INTERVAL '5 minutes'",
+          "rawSql": "SELECT \n  COUNT(DISTINCT labels->>'service') AS value\nFROM agent_metrics\nWHERE \n  agent_name = '$agent'\n  AND metric_name LIKE 'service.%'\n  AND timestamp BETWEEN $__timeFrom() AND $__timeTo()",
           "refId": "A",
           "select": [
             [
@@ -331,7 +331,7 @@
           "group": [],
           "metricColumn": "none",
           "rawQuery": true,
-          "rawSql": "SELECT \n  COUNT(DISTINCT metric_name) AS value\nFROM agent_metrics\nWHERE \n  agent_name = '$agent'\n  AND timestamp >= NOW() - INTERVAL '5 minutes'",
+          "rawSql": "SELECT \n  COUNT(DISTINCT metric_name) AS value\nFROM agent_metrics\nWHERE \n  agent_name = '$agent'\n  AND timestamp BETWEEN $__timeFrom() AND $__timeTo()",
           "refId": "A",
           "select": [
             [
@@ -389,7 +389,7 @@
           "group": [],
           "metricColumn": "none",
           "rawQuery": true,
-          "rawSql": "SELECT \n  labels->>'service' AS \"Service\",\n  SUM(CASE WHEN metric_name = 'service.requests' THEN value ELSE 0 END)::INT AS \"Total Requests\",\n  SUM(CASE WHEN metric_name = 'service.errors' THEN value ELSE 0 END)::INT AS \"Total Errors\",\n  AVG(CASE WHEN metric_name = 'service.error_rate' THEN value ELSE NULL END)::NUMERIC(5,4) AS \"Error Rate\",\n  AVG(CASE WHEN metric_name = 'service.uptime' THEN value ELSE NULL END)::INT AS \"Uptime (s)\",\n  MAX(CASE WHEN metric_name = 'service.healthy' THEN value ELSE 0 END)::INT AS \"Healthy\"\nFROM agent_metrics\nWHERE \n  agent_name = '$agent'\n  AND metric_name LIKE 'service.%'\n  AND timestamp >= NOW() - INTERVAL '5 minutes'\n  AND labels->>'service' IS NOT NULL\nGROUP BY labels->>'service'\nORDER BY \"Total Requests\" DESC",
+          "rawSql": "SELECT \n  labels->>'service' AS \"Service\",\n  SUM(CASE WHEN metric_name = 'service.requests' THEN value ELSE 0 END)::INT AS \"Total Requests\",\n  SUM(CASE WHEN metric_name = 'service.errors' THEN value ELSE 0 END)::INT AS \"Total Errors\",\n  AVG(CASE WHEN metric_name = 'service.error_rate' THEN value ELSE NULL END)::NUMERIC(5,4) AS \"Error Rate\",\n  AVG(CASE WHEN metric_name = 'service.uptime' THEN value ELSE NULL END)::INT AS \"Uptime (s)\",\n  MAX(CASE WHEN metric_name = 'service.healthy' THEN value ELSE 0 END)::INT AS \"Healthy\"\nFROM agent_metrics\nWHERE \n  agent_name = '$agent'\n  AND metric_name LIKE 'service.%'\n  AND timestamp BETWEEN $__timeFrom() AND $__timeTo()\n  AND labels->>'service' IS NOT NULL\nGROUP BY labels->>'service'\nORDER BY \"Total Requests\" DESC",
           "refId": "A",
           "select": [
             [
@@ -423,14 +423,14 @@
           "value": "datum"
         },
         "datasource": "PostgreSQL",
-        "definition": "SELECT DISTINCT agent_name FROM agent_metrics WHERE timestamp > NOW() - INTERVAL '1 hour'",
+        "definition": "SELECT DISTINCT agent_name FROM agent_metrics WHERE timestamp BETWEEN $__timeFrom() AND $__timeTo()",
         "hide": 0,
         "includeAll": false,
         "label": "Agent",
         "multi": false,
         "name": "agent",
         "options": [],
-        "query": "SELECT DISTINCT agent_name FROM agent_metrics WHERE timestamp > NOW() - INTERVAL '1 hour'",
+        "query": "SELECT DISTINCT agent_name FROM agent_metrics WHERE timestamp BETWEEN $__timeFrom() AND $__timeTo()",
         "refresh": 1,
         "regex": "",
         "skipUrlSync": false,
@@ -444,7 +444,7 @@
     ]
   },
   "time": {
-    "from": "now-30m",
+    "from": "now-24h",
     "to": "now"
   },
   "timepicker": {},
