@@ -13,7 +13,7 @@ ADMIN_PASS="admin"
 # Wait for Grafana to be ready
 echo "Waiting for Grafana to start..."
 for i in {1..30}; do
-    if curl -s "$GRAFANA_URL/api/health" > /dev/null; then
+    if curl -s "$GRAFANA_URL/api/health" > /dev/null 2>&1; then
         echo "Grafana is ready!"
         break
     fi
@@ -21,18 +21,35 @@ for i in {1..30}; do
     sleep 2
 done
 
-# Create or update the Public organization
-echo "Setting up Public organization..."
-curl -X POST "$GRAFANA_URL/api/orgs" \
-    -H "Content-Type: application/json" \
-    -u "$ADMIN_USER:$ADMIN_PASS" \
-    -d '{
-        "name": "Public"
-    }' 2>/dev/null || echo "Organization might already exist"
+# First, check if Public organization already exists
+echo "Checking for existing Public organization..."
+PUBLIC_ORG=$(curl -s "$GRAFANA_URL/api/orgs/name/Public" \
+    -u "$ADMIN_USER:$ADMIN_PASS" 2>/dev/null)
 
-# Get the Public org ID
-PUBLIC_ORG_ID=$(curl -s "$GRAFANA_URL/api/orgs/name/Public" \
-    -u "$ADMIN_USER:$ADMIN_PASS" | jq -r '.id')
+if echo "$PUBLIC_ORG" | grep -q "org.notFound"; then
+    echo "Creating Public organization..."
+    # Create the Public organization
+    CREATE_RESULT=$(curl -s -X POST "$GRAFANA_URL/api/orgs" \
+        -H "Content-Type: application/json" \
+        -u "$ADMIN_USER:$ADMIN_PASS" \
+        -d '{"name":"Public"}' 2>/dev/null)
+    
+    if echo "$CREATE_RESULT" | grep -q "orgId"; then
+        echo "Public organization created successfully"
+        PUBLIC_ORG_ID=$(echo "$CREATE_RESULT" | jq -r '.orgId')
+    else
+        echo "Failed to create Public organization: $CREATE_RESULT"
+        # Try alternative approach - switch to Main org and rename it
+        echo "Attempting alternative approach..."
+        curl -s -X PUT "$GRAFANA_URL/api/org" \
+            -H "Content-Type: application/json" \
+            -u "$ADMIN_USER:$ADMIN_PASS" \
+            -d '{"name":"Public"}' 2>/dev/null
+    fi
+else
+    echo "Public organization already exists"
+    PUBLIC_ORG_ID=$(echo "$PUBLIC_ORG" | jq -r '.id')
+fi
 
 echo "Public Org ID: $PUBLIC_ORG_ID"
 
