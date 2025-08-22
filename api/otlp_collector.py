@@ -237,11 +237,17 @@ class OTLPCollector:
     async def _process_traces(self, conn, agent_name: str, traces: Dict):
         """Process OTLP traces"""
         if "resourceSpans" not in traces:
+            logger.warning(f"No resourceSpans in traces for {agent_name}")
             return
-            
+        
+        trace_count = 0
+        error_count = 0
+        
         for resource_span in traces["resourceSpans"]:
             for scope_span in resource_span.get("scopeSpans", []):
-                for span in scope_span.get("spans", []):
+                spans = scope_span.get("spans", [])
+                logger.info(f"Processing {len(spans)} spans for {agent_name}")
+                for span in spans:
                     # Store trace span with conflict handling
                     try:
                         await conn.execute("""
@@ -262,8 +268,15 @@ class OTLPCollector:
                             json.dumps(span.get("events", [])),
                             span.get("status", {}).get("code", "OK")
                         )
+                        trace_count += 1
                     except Exception as e:
                         logger.warning(f"Failed to store trace for {agent_name}: {e}")
+                        error_count += 1
+        
+        if trace_count > 0 or error_count > 0:
+            logger.info(f"Processed {trace_count} traces for {agent_name} ({error_count} errors)")
+        elif len(traces.get("resourceSpans", [])) > 0:
+            logger.info(f"No spans found in traces for {agent_name}")
                     
     async def _process_logs(self, conn, agent_name: str, logs: Dict):
         """Process OTLP logs"""
