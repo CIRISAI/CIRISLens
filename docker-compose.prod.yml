@@ -34,7 +34,7 @@ services:
       - ciris-network
       - cirislens-internal
     ports:
-      - "127.0.0.1:3002:3000"  # Changed port to avoid conflict
+      - "127.0.0.1:3001:3000"  # Local access only
     volumes:
       - ./config/grafana.ini:/etc/grafana/grafana.ini:ro
     environment:
