@@ -102,7 +102,10 @@ sleep 10
 echo "8. Checking service health..."
 docker compose -f docker-compose.managed.yml -f docker-compose.prod.yml ps
 
-echo "9. Testing endpoints..."
+echo "9. Setting up Grafana for public access..."
+./scripts/setup-grafana-public.sh
+
+echo "10. Testing endpoints..."
 echo -n "API Health: "
 curl -s http://localhost:8200/health | jq -r '.status' || echo "Failed"
 
