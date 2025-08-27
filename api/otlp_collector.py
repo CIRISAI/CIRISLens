@@ -59,8 +59,8 @@ class OTLPCollector:
                     container_name = row['container_name'] or agent_name
                     
                     # Build agent URL - agents expose telemetry on their API port
-                    # Use container name for Docker network access
-                    agent_url = f"http://{container_name}:{row['api_port'] or 8080}"
+                    # Use host.docker.internal to access host-exposed ports from container
+                    agent_url = f"http://host.docker.internal:{row['api_port'] or 8080}"
                     
                     # Try environment variable token first, fallback to manager token
                     token = os.getenv(f"AGENT_{agent_name.upper()}_TOKEN", "")
