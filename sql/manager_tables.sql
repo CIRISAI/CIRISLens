@@ -3,8 +3,10 @@
 
 CREATE TABLE IF NOT EXISTS managers (
     id SERIAL PRIMARY KEY,
+    manager_id VARCHAR(255) UNIQUE NOT NULL DEFAULT gen_random_uuid()::text,
     name VARCHAR(255) UNIQUE NOT NULL,
     url VARCHAR(512) NOT NULL,
+    status VARCHAR(50) DEFAULT 'online',
     enabled BOOLEAN DEFAULT true,
     auth_required BOOLEAN DEFAULT false,
     auth_token TEXT,
@@ -19,7 +21,7 @@ CREATE TABLE IF NOT EXISTS managers (
 -- Manager telemetry collection history
 CREATE TABLE IF NOT EXISTS manager_telemetry (
     id SERIAL PRIMARY KEY,
-    manager_id INTEGER REFERENCES managers(id) ON DELETE CASCADE,
+    manager_id VARCHAR(255) REFERENCES managers(manager_id) ON DELETE CASCADE,
     collected_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     agent_count INTEGER,
     status VARCHAR(50),
@@ -34,7 +36,7 @@ CREATE INDEX IF NOT EXISTS idx_manager_telemetry_time ON manager_telemetry(manag
 -- Agent discoveries from managers
 CREATE TABLE IF NOT EXISTS discovered_agents (
     id SERIAL PRIMARY KEY,
-    manager_id INTEGER REFERENCES managers(id) ON DELETE CASCADE,
+    manager_id VARCHAR(255) REFERENCES managers(manager_id) ON DELETE CASCADE,
     agent_id VARCHAR(255) NOT NULL,
     agent_name VARCHAR(255),
     status VARCHAR(50),

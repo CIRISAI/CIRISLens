@@ -24,10 +24,66 @@ class OTLPCollector:
         self.pool: Optional[Pool] = None
         self.running = False
         self.tasks = []
-        self.agent_configs = self._load_agent_configs()
+        self.agent_configs = {}  # Will be loaded dynamically from database
+        self.agent_tasks = {}  # Track tasks by agent_id for dynamic updates
+        self.refresh_interval = int(os.getenv("AGENT_DISCOVERY_INTERVAL", "60"))
         
-    def _load_agent_configs(self) -> Dict[str, Dict[str, str]]:
-        """Load agent configurations from environment variables"""
+    async def _load_agent_configs_from_db(self) -> Dict[str, Dict[str, str]]:
+        """Load agent configurations from discovered_agents table"""
+        configs = {}
+        
+        try:
+            async with self.pool.acquire() as conn:
+                # Get active agents discovered by manager collector
+                rows = await conn.fetch("""
+                    SELECT DISTINCT ON (agent_id) 
+                        da.agent_id, 
+                        da.agent_name, 
+                        da.api_port,
+                        da.status,
+                        da.deployment,
+                        m.url as manager_url,
+                        m.auth_token as manager_token
+                    FROM discovered_agents da
+                    JOIN managers m ON da.manager_id = m.manager_id
+                    WHERE da.status IN ('running', 'active', 'healthy')
+                        AND da.last_seen > NOW() - INTERVAL '10 minutes'
+                        AND m.status = 'online'
+                    ORDER BY da.agent_id, da.last_seen DESC
+                """)
+                
+                for row in rows:
+                    agent_id = row['agent_id']
+                    agent_name = row['agent_name']
+                    
+                    # Build agent URL - agents expose telemetry on their API port
+                    # Assuming agents are accessible via container name on Docker network
+                    agent_url = f"http://{agent_name}:{row['api_port'] or 8080}"
+                    
+                    # Try environment variable token first, fallback to manager token
+                    token = os.getenv(f"AGENT_{agent_name.upper()}_TOKEN", "")
+                    if not token:
+                        # Use a default token or manager's token
+                        token = row['manager_token'] or os.getenv("DEFAULT_AGENT_TOKEN", "default")
+                    
+                    configs[agent_id] = {
+                        "url": agent_url,
+                        "token": token,
+                        "name": agent_name,
+                        "agent_id": agent_id
+                    }
+                    
+                logger.info(f"Loaded {len(configs)} agent configurations from database")
+                
+        except Exception as e:
+            logger.error(f"Failed to load agent configs from database: {e}")
+            # Fallback to environment variables
+            configs = self._load_agent_configs_from_env()
+            
+        return configs
+    
+    def _load_agent_configs_from_env(self) -> Dict[str, Dict[str, str]]:
+        """Fallback: Load agent configurations from environment variables"""
         configs = {}
         
         # Look for AGENT_*_TOKEN and AGENT_*_URL pairs
@@ -39,14 +95,62 @@ class OTLPCollector:
                 url = os.environ.get(url_key)
                 
                 if url:
-                    configs[agent_name] = {
+                    agent_id = f"env_{agent_name}"  # Prefix with env_ for env-based configs
+                    configs[agent_id] = {
                         "url": url.rstrip("/"),
                         "token": token,
-                        "name": agent_name
+                        "name": agent_name,
+                        "agent_id": agent_id
                     }
-                    logger.info(f"Loaded config for agent: {agent_name}")
+                    logger.info(f"Loaded config from env for agent: {agent_name}")
                     
         return configs
+    
+    async def _agent_discovery_loop(self):
+        """Periodically refresh agent configurations from database"""
+        while self.running:
+            try:
+                await asyncio.sleep(self.refresh_interval)
+                await self._refresh_agent_configs()
+            except Exception as e:
+                logger.error(f"Error in agent discovery loop: {e}")
+                
+    async def _refresh_agent_configs(self):
+        """Refresh agent configurations and update collection tasks"""
+        logger.info("Refreshing agent configurations from database")
+        
+        # Load latest configs
+        new_configs = await self._load_agent_configs_from_db()
+        
+        # Find agents to add (in new_configs but not in current)
+        agents_to_add = set(new_configs.keys()) - set(self.agent_configs.keys())
+        
+        # Find agents to remove (in current but not in new_configs)
+        agents_to_remove = set(self.agent_configs.keys()) - set(new_configs.keys())
+        
+        # Remove old agents
+        for agent_id in agents_to_remove:
+            if agent_id in self.agent_tasks:
+                logger.info(f"Stopping collection for removed agent: {agent_id}")
+                self.agent_tasks[agent_id].cancel()
+                del self.agent_tasks[agent_id]
+            if agent_id in self.agent_configs:
+                del self.agent_configs[agent_id]
+                
+        # Add new agents
+        for agent_id in agents_to_add:
+            config = new_configs[agent_id]
+            logger.info(f"Starting collection for new agent: {config['name']} (ID: {agent_id})")
+            task = asyncio.create_task(self.collect_agent_loop(config))
+            self.agent_tasks[agent_id] = task
+            self.tasks.append(task)
+            self.agent_configs[agent_id] = config
+            
+        # Update existing agents' configs (URL/token might have changed)
+        for agent_id in set(new_configs.keys()) & set(self.agent_configs.keys()):
+            self.agent_configs[agent_id].update(new_configs[agent_id])
+            
+        logger.info(f"Agent discovery complete. Active agents: {len(self.agent_configs)}")
     
     async def start(self):
         """Start the OTLP collector"""
@@ -54,12 +158,13 @@ class OTLPCollector:
         self.pool = await asyncpg.create_pool(self.database_url, min_size=2, max_size=10)
         self.running = True
         
-        # Start collection for each configured agent
-        for agent_name, config in self.agent_configs.items():
-            task = asyncio.create_task(self.collect_agent_loop(config))
-            self.tasks.append(task)
-            
-        logger.info(f"Started OTLP collection for {len(self.agent_configs)} agents")
+        # Load initial agent configs from database
+        await self._refresh_agent_configs()
+        
+        # Start the agent discovery refresh task
+        self.tasks.append(asyncio.create_task(self._agent_discovery_loop()))
+        
+        logger.info(f"Started OTLP collector with dynamic agent discovery")
         
     async def stop(self):
         """Stop the collector"""
@@ -77,10 +182,11 @@ class OTLPCollector:
     async def collect_agent_loop(self, config: Dict[str, str]):
         """Collection loop for a single agent"""
         agent_name = config["name"]
+        agent_id = config.get("agent_id", agent_name)
         agent_url = config["url"]
         interval = int(os.getenv("COLLECTION_INTERVAL_SECONDS", "30"))
         
-        logger.info(f"Starting OTLP collection for {agent_name} every {interval}s")
+        logger.info(f"Starting OTLP collection for {agent_name} (ID: {agent_id}) at {agent_url} every {interval}s")
         
         while self.running:
             try:
