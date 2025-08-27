@@ -42,6 +42,7 @@ class OTLPCollector:
                         da.api_port,
                         da.status,
                         da.deployment,
+                        da.raw_data->>'container_name' as container_name,
                         m.url as manager_url,
                         m.auth_token as manager_token
                     FROM discovered_agents da
@@ -55,10 +56,11 @@ class OTLPCollector:
                 for row in rows:
                     agent_id = row['agent_id']
                     agent_name = row['agent_name']
+                    container_name = row['container_name'] or agent_name
                     
                     # Build agent URL - agents expose telemetry on their API port
-                    # Assuming agents are accessible via container name on Docker network
-                    agent_url = f"http://{agent_name}:{row['api_port'] or 8080}"
+                    # Use container name for Docker network access
+                    agent_url = f"http://{container_name}:{row['api_port'] or 8080}"
                     
                     # Try environment variable token first, fallback to manager token
                     token = os.getenv(f"AGENT_{agent_name.upper()}_TOKEN", "")
