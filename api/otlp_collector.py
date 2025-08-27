@@ -63,7 +63,9 @@ class OTLPCollector:
                     agent_url = f"http://host.docker.internal:{row['api_port'] or 8080}"
                     
                     # Try environment variable token first, fallback to manager token
-                    token = os.getenv(f"AGENT_{agent_name.upper()}_TOKEN", "")
+                    # Clean agent name for env var lookup (remove spaces and special chars)
+                    clean_name = agent_id.upper().replace("-", "_")
+                    token = os.getenv(f"AGENT_{clean_name}_TOKEN", "")
                     if not token:
                         # Use a default token or manager's token
                         token = row['manager_token'] or os.getenv("DEFAULT_AGENT_TOKEN", "default")
