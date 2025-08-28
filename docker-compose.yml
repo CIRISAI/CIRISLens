@@ -130,6 +130,54 @@ services:
     networks:
       - cirislens
 
+  # PostgreSQL database for CIRISLens metadata
+  postgres:
+    image: postgres:15-alpine
+    container_name: cirislens-db
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=cirislens
+      - POSTGRES_PASSWORD=cirislens
+      - POSTGRES_DB=cirislens
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./sql:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "127.0.0.1:5433:5432"  # Only expose to localhost
+    networks:
+      - cirislens
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cirislens"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # CIRISLens API service
+  api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    image: cirislens-api:dev
+    container_name: cirislens-api
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql://user:password@host:5432/dbname
+    volumes:
+      - ./api:/app:ro
+      - ./config:/app/config:ro
+      - ./sql:/app/sql:ro
+    ports:
+      - "8000:8000"
+    networks:
+      - cirislens
+    depends_on:
+      postgres:
+        condition: service_healthy
+    extra_hosts:
+      - "agents.ciris.ai:host-gateway"
+
 volumes:
   grafana_data:
   tempo_data:
@@ -137,6 +185,7 @@ volumes:
   mimir_data:
   minio_data:
   prometheus_data:
+  postgres_data:
 
 networks:
   cirislens:
