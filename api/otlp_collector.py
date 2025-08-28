@@ -388,7 +388,7 @@ class OTLPCollector:
                             datetime.fromtimestamp(float(span.get("endTimeUnixNano", 0)) / 1e9, tz=timezone.utc),
                             json.dumps(span.get("attributes", [])),
                             json.dumps(span.get("events", [])),
-                            span.get("status", {}).get("code", "OK")
+                            str(span.get("status", {}).get("code", "OK"))
                         )
                         trace_count += 1
                     except Exception as e:
