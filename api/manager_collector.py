@@ -109,7 +109,15 @@ class ManagerCollector:
                     f"{manager_url}/agents",
                     headers=headers
                 )
-                agents_data = agents_response.json() if agents_response.status_code == 200 else []
+                if agents_response.status_code == 200:
+                    response_data = agents_response.json()
+                    # Handle both dict with 'agents' key and direct list
+                    if isinstance(response_data, dict):
+                        agents_data = response_data.get('agents', [])
+                    else:
+                        agents_data = response_data
+                else:
+                    agents_data = []
             except Exception as e:
                 logger.warning(f"Failed to get agents from {manager_name}: {e}")
                 agents_data = []
