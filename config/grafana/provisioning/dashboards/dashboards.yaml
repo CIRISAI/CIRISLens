@@ -3,13 +3,14 @@
 apiVersion: 1
 
 providers:
-  # Provision dashboards for all orgs (will apply to both Main and Public)
+  # Read-only dashboards for anonymous users
   - name: 'CIRIS Dashboards'
     orgId: 1
     type: file
-    disableDeletion: false
+    disableDeletion: true      # Prevent deletion
     updateIntervalSeconds: 10
-    allowUiUpdates: true
+    allowUiUpdates: false       # Prevent UI updates
+    editable: false            # Make dashboards read-only
     options:
       path: /var/lib/grafana/dashboards
       foldersFromFilesStructure: true
