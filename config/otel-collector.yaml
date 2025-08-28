@@ -34,45 +34,13 @@ processors:
   # Add CIRIS taxonomy metadata to all telemetry
   attributes:
     actions:
-      # Enrich with taxonomy categories based on service name
-      - key: taxonomy.category
-        action: insert
-        from_attribute: service.name
-        converted_type: string
+      # Add default taxonomy tier
       - key: taxonomy.tier
         action: insert
-        value: "unknown"
-      
-      # Map services to taxonomy tiers
-      - key: taxonomy.tier
-        action: update
-        value: "core"
-        from_attribute: service.name
-        regex: ^(AgentCore|StateManager|CognitiveCore|MemoryCore|SecurityCore).*
-      
-      - key: taxonomy.tier
-        action: update  
-        value: "message_bus"
-        from_attribute: service.name
-        regex: ^(MessageBus|EventBus|CommandBus).*
-      
-      - key: taxonomy.tier
-        action: update
-        value: "adapter"
-        from_attribute: service.name
-        regex: ^(.*Adapter|.*Connector|.*Bridge)$
-      
-      - key: taxonomy.tier
-        action: update
-        value: "processor"
-        from_attribute: service.name
-        regex: ^(.*Processor|.*Handler|.*Worker)$
-      
-      - key: taxonomy.tier
-        action: update
-        value: "registry"
-        from_attribute: service.name
-        regex: ^(.*Registry|.*Repository|.*Store)$
+        value: "service"
+      - key: taxonomy.source
+        action: insert
+        value: "ciris"
 
   # Sanitize PII for public dashboards
   transform:
@@ -160,17 +128,11 @@ exporters:
       enabled: true
     add_metric_suffixes: false
 
-  # Export logs to Loki
-  loki:
-    endpoint: http://loki:3100/loki/api/v1/push
-    tenant_id: ciris
-    labels:
-      attributes:
-        service.name: "service"
-        taxonomy.tier: "tier"
-        taxonomy.category: "category"
-        agent.cognitive_state: "cognitive_state"
-        severity: "level"
+  # Export logs to Loki via OTLP
+  otlphttp/loki:
+    endpoint: http://loki:3100
+    tls:
+      insecure: true
 
   # Also export metrics in Prometheus format for local scraping
   prometheus:
@@ -203,7 +165,7 @@ service:
     logs:
       receivers: [otlp]
       processors: [memory_limiter, attributes, transform, batch]
-      exporters: [loki, debug]
+      exporters: [otlphttp/loki, debug]
 
   telemetry:
     logs:
@@ -212,4 +174,4 @@ service:
         service: otel-collector
     metrics:
       level: detailed
-      address: 0.0.0.0:8888
+      address: "0.0.0.0:8888"
