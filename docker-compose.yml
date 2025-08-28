@@ -23,10 +23,15 @@ services:
     environment:
       - GF_SECURITY_ADMIN_USER=admin
       - GF_SECURITY_ADMIN_PASSWORD=admin
-      - GF_FEATURE_TOGGLES_ENABLE=traceToMetrics,traceToLogs,correlations
+      - GF_SERVER_ROOT_URL=https://agents.ciris.ai/lens/
+      - GF_SERVER_SERVE_FROM_SUB_PATH=true
+      - GF_FEATURE_TOGGLES_ENABLE=traceToMetrics,traceToLogs,correlations,publicDashboards
       - GF_AUTH_ANONYMOUS_ENABLED=true
       - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
-      - GF_AUTH_ANONYMOUS_ORG_NAME=Public
+      - GF_AUTH_ANONYMOUS_ORG_NAME=Main Org
+      - GF_AUTH_ANONYMOUS_ORG_ID=1
+      - GF_AUTH_DISABLE_LOGIN_FORM=false
+      - GF_AUTH_BASIC_ENABLED=true
       # Tempo and Loki datasources are built-in now, no need to install
     volumes:
       - grafana_data:/var/lib/grafana
