@@ -34,7 +34,7 @@ services:
       - ./dashboards:/var/lib/grafana/dashboards:ro
       - ./plugins:/var/lib/grafana/plugins:ro
     ports:
-      - "3000:3000"
+      - "3001:3000"
     depends_on:
       - tempo
       - loki
