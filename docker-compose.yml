@@ -33,6 +33,14 @@ services:
       - GF_AUTH_ANONYMOUS_ORG_ID=1
       - GF_AUTH_DISABLE_LOGIN_FORM=false
       - GF_AUTH_BASIC_ENABLED=true
+      # Disable editing for anonymous users
+      - GF_USERS_VIEWERS_CAN_EDIT=false
+      - GF_DISABLE_GRAVATAR=true
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_USERS_ALLOW_ORG_CREATE=false
+      - GF_AUTH_DISABLE_SIGNOUT_MENU=true
+      # Hide edit UI elements
+      - GF_EXPLORE_ENABLED=false
       # Tempo and Loki datasources are built-in now, no need to install
     volumes:
       - grafana_data:/var/lib/grafana
