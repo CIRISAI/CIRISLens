@@ -86,6 +86,11 @@ class OTLPCollector:
                     
                 logger.info(f"Loaded {len(configs)} agent configurations from database")
                 
+                # If no configs found in database, fallback to environment variables
+                if not configs:
+                    logger.info("No agents in database, falling back to environment variables")
+                    configs = self._load_agent_configs_from_env()
+                
         except Exception as e:
             logger.error(f"Failed to load agent configs from database: {e}")
             # Fallback to environment variables
