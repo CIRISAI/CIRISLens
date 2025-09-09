@@ -86,9 +86,66 @@ class OTLPCollector:
                     
                 logger.info(f"Loaded {len(configs)} agent configurations from database")
                 
-                # Only use discovered agents from database
+                # FAIL FAST AND LOUD: No agents means system failure
                 if not configs:
-                    logger.info("No agents discovered yet from manager")
+                    # Check if we've ever had agents before
+                    total_agents_count = await conn.fetchval(
+                        "SELECT COUNT(*) FROM discovered_agents"
+                    )
+                    if total_agents_count > 0:
+                        logger.error(f"CRITICAL: All {total_agents_count} known agents are now unreachable! "
+                                   f"This indicates manager discovery failure or network issues. "
+                                   f"Using fallback strategy to continue monitoring.")
+                        
+                        # RESILIENCE: Use stale data with extended timeout for emergency
+                        rows = await conn.fetch("""
+                            SELECT DISTINCT ON (da.agent_id) 
+                                da.agent_id, 
+                                da.agent_name, 
+                                da.api_port,
+                                da.raw_data->>'container_name' as container_name,
+                                m.url as manager_url,
+                                m.auth_token as manager_token
+                            FROM discovered_agents da
+                            JOIN managers m ON da.manager_id = m.manager_id
+                            WHERE da.status IN ('running', 'active', 'healthy')
+                                AND da.last_seen > NOW() - INTERVAL '6 hours'  -- Emergency fallback
+                                AND m.status = 'online'
+                            ORDER BY da.agent_id, da.last_seen DESC
+                        """)
+                        
+                        if rows:
+                            logger.warning(f"FALLBACK: Using {len(rows)} stale agent configurations. "
+                                         f"Agent discovery MUST be fixed!")
+                            
+                            for row in rows:
+                                agent_id = row['agent_id']
+                                agent_name = row['agent_name']
+                                
+                                # Build agent URL
+                                clean_name = agent_id.upper().replace("-", "_")
+                                env_url = os.getenv(f"AGENT_{clean_name}_URL", "")
+                                if env_url:
+                                    agent_url = env_url.rstrip("/")
+                                else:
+                                    host_ip = os.getenv("DOCKER_HOST_IP", "172.17.0.1")
+                                    agent_url = f"http://{host_ip}:{row['api_port'] or 8080}"
+                                
+                                # Try environment variable token first
+                                token = os.getenv(f"AGENT_{clean_name}_TOKEN", "")
+                                if not token:
+                                    token = row['manager_token'] or "default"
+                                
+                                configs[agent_id] = {
+                                    "url": agent_url,
+                                    "token": token,
+                                    "name": f"{agent_name} [STALE]",  # Mark as stale
+                                    "agent_id": agent_id
+                                }
+                        else:
+                            logger.error("CRITICAL: No fallback agents available. Monitoring is down!")
+                    else:
+                        logger.info("No agents discovered yet from manager")
                 
         except Exception as e:
             logger.error(f"Failed to load agent configs from database: {e}")
