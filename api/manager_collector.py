@@ -74,8 +74,9 @@ class ManagerCollector:
             try:
                 await self.collect_from_manager(manager)
             except Exception as e:
-                logger.error(f"Error collecting from {manager_name}: {e}")
+                logger.error(f"COLLECTION FAILURE for {manager_name}: {e}")
                 await self.update_manager_error(manager_id, str(e))
+                await self.record_discovery_failure(manager_id, f"Collection loop error: {e}")
                 
             # Wait for next collection interval
             await asyncio.sleep(interval)
@@ -119,9 +120,16 @@ class ManagerCollector:
                 else:
                     agents_data = []
             except Exception as e:
-                logger.warning(f"Failed to get agents from {manager_name}: {e}")
+                logger.error(f"AGENT DISCOVERY FAILED for {manager_name}: {e}")
+                # Record this failure with detailed context
+                await self.record_discovery_failure(manager_id, str(e))
                 agents_data = []
                 
+        # FAIL FAST AND LOUD: Alert if discovery is broken
+        if status_data and not agents_data:
+            logger.error(f"CRITICAL: Manager {manager_name} is running but returned NO agents! "
+                        f"This may indicate agent discovery failure or all agents are down.")
+        
         # Store collected data
         await self.store_manager_telemetry(manager_id, status_data, agents_data)
         
@@ -186,6 +194,20 @@ class ManagerCollector:
                 )
                 
             logger.info(f"Stored telemetry for manager {manager_id}: {len(agents_data)} agents")
+    
+    async def record_discovery_failure(self, manager_id: str, error_message: str):
+        """Record discovery failures for alerting and debugging"""
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO collection_errors 
+                (source, error_type, error_message, occurred_at)
+                VALUES ($1, $2, $3, $4)
+            """, 
+                f"manager_collector:{manager_id}",
+                "DISCOVERY_FAILURE", 
+                error_message[:1000],  # Truncate long errors
+                datetime.now(timezone.utc)
+            )
             
     async def update_manager_error(self, manager_id: int, error: str):
         """Update manager with error status"""
