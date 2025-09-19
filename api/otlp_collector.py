@@ -311,13 +311,13 @@ class OTLPCollector:
             logger.error(f"Error fetching {url}: {e}")
             return None
             
-    async def store_otlp_data(self, agent_name: str, metrics: Optional[Dict], 
+    async def store_otlp_data(self, agent_name: str, metrics: Optional[Dict],
                              traces: Optional[Dict], logs: Optional[Dict]):
         """Store OTLP data in database"""
         async with self.pool.acquire() as conn:
             # Store raw OTLP data
             await conn.execute("""
-                INSERT INTO otlp_telemetry 
+                INSERT INTO otlp_telemetry
                 (agent_name, collected_at, metrics_data, traces_data, logs_data)
                 VALUES ($1, $2, $3, $4, $5)
             """,
@@ -327,19 +327,28 @@ class OTLPCollector:
                 json.dumps(traces) if traces else None,
                 json.dumps(logs) if logs else None
             )
-            
+
             # Process and store metrics in time-series format
             if metrics:
-                await self._process_metrics(conn, agent_name, metrics)
-                
+                try:
+                    await self._process_metrics(conn, agent_name, metrics)
+                except Exception as e:
+                    logger.error(f"Error processing metrics for {agent_name}: {e}")
+
             # Process and store traces
             if traces:
-                await self._process_traces(conn, agent_name, traces)
-                
+                try:
+                    await self._process_traces(conn, agent_name, traces)
+                except Exception as e:
+                    logger.error(f"Error processing traces for {agent_name}: {e}")
+
             # Process and store logs
             if logs:
-                await self._process_logs(conn, agent_name, logs)
-                
+                try:
+                    await self._process_logs(conn, agent_name, logs)
+                except Exception as e:
+                    logger.error(f"Error processing logs for {agent_name}: {e}")
+
             logger.info(f"Stored OTLP data for {agent_name}")
             
     async def _process_metrics(self, conn, agent_name: str, metrics: Dict):
@@ -416,10 +425,10 @@ class OTLPCollector:
         if "resourceSpans" not in traces:
             logger.warning(f"No resourceSpans in traces for {agent_name}")
             return
-        
+
         trace_count = 0
         error_count = 0
-        
+
         for resource_span in traces["resourceSpans"]:
             for scope_span in resource_span.get("scopeSpans", []):
                 spans = scope_span.get("spans", [])
@@ -427,9 +436,27 @@ class OTLPCollector:
                 for span in spans:
                     # Store trace span with conflict handling
                     try:
+                        # Extract timestamps safely
+                        start_time_nano = span.get("startTimeUnixNano", 0)
+                        end_time_nano = span.get("endTimeUnixNano", 0)
+
+                        # Convert string nano timestamps to float if needed
+                        if isinstance(start_time_nano, str):
+                            start_time_nano = float(start_time_nano)
+                        if isinstance(end_time_nano, str):
+                            end_time_nano = float(end_time_nano)
+
+                        start_time = datetime.fromtimestamp(start_time_nano / 1e9, tz=timezone.utc)
+                        end_time = datetime.fromtimestamp(end_time_nano / 1e9, tz=timezone.utc)
+
+                        # Get status from span
+                        status_code = "OK"
+                        if "status" in span:
+                            status_code = span["status"].get("code", "OK")
+
                         await conn.execute("""
-                            INSERT INTO agent_traces 
-                            (agent_name, trace_id, span_id, parent_span_id, operation_name, 
+                            INSERT INTO agent_traces
+                            (agent_name, trace_id, span_id, parent_span_id, operation_name,
                              start_time, end_time, attributes, events, status)
                             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                             ON CONFLICT (trace_id, span_id) DO NOTHING
@@ -439,17 +466,18 @@ class OTLPCollector:
                             span.get("spanId"),
                             span.get("parentSpanId"),
                             span.get("name"),
-                            datetime.fromtimestamp(float(span.get("startTimeUnixNano", 0)) / 1e9, tz=timezone.utc),
-                            datetime.fromtimestamp(float(span.get("endTimeUnixNano", 0)) / 1e9, tz=timezone.utc),
+                            start_time,
+                            end_time,
                             json.dumps(span.get("attributes", [])),
                             json.dumps(span.get("events", [])),
-                            str(span.get("status", {}).get("code", "OK"))
+                            str(status_code)
                         )
                         trace_count += 1
                     except Exception as e:
-                        logger.warning(f"Failed to store trace for {agent_name}: {e}")
+                        logger.error(f"Failed to store trace for {agent_name}: {e}")
+                        logger.error(f"Span data: {json.dumps(span, indent=2)}")
                         error_count += 1
-        
+
         if trace_count > 0 or error_count > 0:
             logger.info(f"Processed {trace_count} traces for {agent_name} ({error_count} errors)")
         elif len(traces.get("resourceSpans", [])) > 0:
