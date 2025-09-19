@@ -449,12 +449,17 @@ class OTLPCollector:
                         start_time = datetime.fromtimestamp(start_time_nano / 1e9, tz=timezone.utc)
                         end_time = datetime.fromtimestamp(end_time_nano / 1e9, tz=timezone.utc)
 
+                        # Debug logging for first few traces
+                        if trace_count < 3:
+                            logger.info(f"DEBUG: Processing trace {span.get('traceId', 'unknown')[:16]}... "
+                                       f"start_time={start_time}, end_time={end_time}")
+
                         # Get status from span
                         status_code = "OK"
                         if "status" in span:
                             status_code = span["status"].get("code", "OK")
 
-                        await conn.execute("""
+                        result = await conn.execute("""
                             INSERT INTO agent_traces
                             (agent_name, trace_id, span_id, parent_span_id, operation_name,
                              start_time, end_time, attributes, events, status)
@@ -472,6 +477,11 @@ class OTLPCollector:
                             json.dumps(span.get("events", [])),
                             str(status_code)
                         )
+
+                        # Debug logging for first few inserts
+                        if trace_count < 3:
+                            logger.info(f"DEBUG: Insert result: {result} for trace {span.get('traceId', 'unknown')[:16]}...")
+
                         trace_count += 1
                     except Exception as e:
                         logger.error(f"Failed to store trace for {agent_name}: {e}")
