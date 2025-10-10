@@ -142,37 +142,55 @@ def require_auth(request: Request) -> Dict:
         raise HTTPException(status_code=401, detail="Authentication required")
     return user
 
+async def run_manager_collector():
+    """Wrapper to run manager collector with exception handling"""
+    try:
+        await manager_collector.start()
+    except Exception as e:
+        logger.error(f"CRITICAL: Manager collector failed to start: {e}", exc_info=True)
+        raise
+
+async def run_otlp_collector():
+    """Wrapper to run OTLP collector with exception handling"""
+    try:
+        await otlp_collector.start()
+    except Exception as e:
+        logger.error(f"CRITICAL: OTLP collector failed to start: {e}", exc_info=True)
+        raise
+
 # Startup and shutdown events
 @app.on_event("startup")
 async def startup():
     """Initialize database and start collectors"""
     global db_pool, manager_collector, otlp_collector
-    
+
     try:
         # Create database pool
         db_pool = await asyncpg.create_pool(DATABASE_URL, min_size=2, max_size=10)
         logger.info("Database pool created")
-        
+
         # Initialize tables
         async with db_pool.acquire() as conn:
             # Create OTLP tables (manager tables already created by init.sql)
             with open("/app/sql/otlp_tables.sql", "r") as f:
                 await conn.execute(f.read())
             logger.info("Database tables initialized")
-            
+
         # Start manager collector
         manager_collector = ManagerCollector(DATABASE_URL)
-        asyncio.create_task(manager_collector.start())
-        logger.info("Manager collector started")
-        
+        task = asyncio.create_task(run_manager_collector())
+        task.add_done_callback(lambda t: logger.error(f"Manager collector task ended: {t.exception()}") if t.exception() else None)
+        logger.info("Manager collector task created")
+
         # Start OTLP collector if enabled
         if os.getenv("OTLP_COLLECTION_ENABLED", "true").lower() == "true":
             otlp_collector = OTLPCollector(DATABASE_URL)
-            asyncio.create_task(otlp_collector.start())
-            logger.info("OTLP collector started")
-        
+            task = asyncio.create_task(run_otlp_collector())
+            task.add_done_callback(lambda t: logger.error(f"OTLP collector task ended: {t.exception()}") if t.exception() else None)
+            logger.info("OTLP collector task created")
+
     except Exception as e:
-        logger.error(f"Startup error: {e}")
+        logger.error(f"Startup error: {e}", exc_info=True)
         # Continue anyway for development
 
 @app.on_event("shutdown")

@@ -25,17 +25,34 @@ class ManagerCollector:
         
     async def start(self):
         """Start the collector service"""
-        logger.info("Starting ManagerCollector service")
-        self.pool = await asyncpg.create_pool(self.database_url, min_size=2, max_size=10)
-        self.running = True
-        
-        # Start collection tasks for each manager
-        managers = await self.get_enabled_managers()
-        for manager in managers:
-            task = asyncio.create_task(self.collect_manager_loop(manager))
-            self.tasks.append(task)
-            
-        logger.info(f"Started collection for {len(managers)} managers")
+        logger.info("ManagerCollector: Initializing service")
+
+        try:
+            # Create database pool
+            logger.info("ManagerCollector: Creating database pool")
+            self.pool = await asyncpg.create_pool(self.database_url, min_size=2, max_size=10)
+            logger.info("ManagerCollector: Database pool created successfully")
+
+            self.running = True
+
+            # Start collection tasks for each manager
+            logger.info("ManagerCollector: Fetching enabled managers")
+            managers = await self.get_enabled_managers()
+            logger.info(f"ManagerCollector: Found {len(managers)} enabled managers")
+
+            if not managers:
+                logger.warning("ManagerCollector: No enabled managers found - no collection tasks started")
+            else:
+                for manager in managers:
+                    logger.info(f"ManagerCollector: Starting collection task for {manager.get('name', 'unknown')}")
+                    task = asyncio.create_task(self.collect_manager_loop(manager))
+                    self.tasks.append(task)
+
+                logger.info(f"ManagerCollector: Started {len(self.tasks)} collection tasks successfully")
+
+        except Exception as e:
+            logger.error(f"ManagerCollector: FAILED to start: {e}", exc_info=True)
+            raise
         
     async def stop(self):
         """Stop the collector service"""
@@ -67,17 +84,23 @@ class ManagerCollector:
         manager_name = manager['name']
         manager_url = manager['url'].rstrip('/')
         interval = manager.get('collection_interval_seconds', 30)
-        
-        logger.info(f"Starting collection loop for {manager_name} ({manager_url}) every {interval}s")
-        
+
+        logger.info(f"ManagerCollector: Collection loop STARTED for {manager_name} ({manager_url}) every {interval}s")
+
+        iteration = 0
         while self.running:
             try:
+                iteration += 1
+                if iteration <= 3:
+                    logger.info(f"ManagerCollector: Starting collection iteration {iteration} for {manager_name}")
                 await self.collect_from_manager(manager)
+                if iteration <= 3:
+                    logger.info(f"ManagerCollector: Completed collection iteration {iteration} for {manager_name}")
             except Exception as e:
-                logger.error(f"COLLECTION FAILURE for {manager_name}: {e}")
+                logger.error(f"COLLECTION FAILURE for {manager_name} (iteration {iteration}): {e}", exc_info=True)
                 await self.update_manager_error(manager_id, str(e))
                 await self.record_discovery_failure(manager_id, f"Collection loop error: {e}")
-                
+
             # Wait for next collection interval
             await asyncio.sleep(interval)
             
