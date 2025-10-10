@@ -17,21 +17,25 @@ logger = logging.getLogger(__name__)
 
 
 class ManagerCollector:
-    def __init__(self, database_url: str):
+    def __init__(self, database_url: str, pool: Optional[Pool] = None):
         self.database_url = database_url
-        self.pool: Optional[Pool] = None
+        self.pool: Optional[Pool] = pool
+        self.owns_pool = pool is None  # Track if we created the pool
         self.running = False
         self.tasks = []
-        
+
     async def start(self):
         """Start the collector service"""
         logger.info("ManagerCollector: Initializing service")
 
         try:
-            # Create database pool
-            logger.info("ManagerCollector: Creating database pool")
-            self.pool = await asyncpg.create_pool(self.database_url, min_size=2, max_size=10)
-            logger.info("ManagerCollector: Database pool created successfully")
+            # Create database pool only if not provided
+            if self.pool is None:
+                logger.info("ManagerCollector: Creating database pool")
+                self.pool = await asyncpg.create_pool(self.database_url, min_size=2, max_size=10)
+                logger.info("ManagerCollector: Database pool created successfully")
+            else:
+                logger.info("ManagerCollector: Using provided database pool")
 
             self.running = True
 
@@ -58,17 +62,18 @@ class ManagerCollector:
         """Stop the collector service"""
         logger.info("Stopping ManagerCollector service")
         self.running = False
-        
+
         # Cancel all collection tasks
         for task in self.tasks:
             task.cancel()
-            
+
         # Wait for tasks to complete
         await asyncio.gather(*self.tasks, return_exceptions=True)
-        
-        # Close database pool
-        if self.pool:
+
+        # Close database pool only if we created it
+        if self.pool and self.owns_pool:
             await self.pool.close()
+            logger.info("ManagerCollector: Closed database pool")
             
     async def get_enabled_managers(self) -> List[Dict]:
         """Get all enabled managers from database"""

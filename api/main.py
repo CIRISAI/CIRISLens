@@ -176,8 +176,8 @@ async def startup():
                 await conn.execute(f.read())
             logger.info("Database tables initialized")
 
-        # Start manager collector
-        manager_collector = ManagerCollector(DATABASE_URL)
+        # Start manager collector with shared pool
+        manager_collector = ManagerCollector(DATABASE_URL, pool=db_pool)
         task = asyncio.create_task(run_manager_collector())
         task.add_done_callback(lambda t: logger.error(f"Manager collector task ended: {t.exception()}") if t.exception() else None)
         logger.info("Manager collector task created")
