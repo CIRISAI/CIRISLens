@@ -119,8 +119,9 @@ class ManagerCollector:
         headers = {}
         if auth_token:
             headers['Authorization'] = f"Bearer {auth_token}"
-            
-        async with httpx.AsyncClient(timeout=10.0) as client:
+
+        # Disable SSL verification for internal services (agents.ciris.ai is behind Cloudflare)
+        async with httpx.AsyncClient(timeout=10.0, verify=False) as client:
             # Collect manager status
             try:
                 status_response = await client.get(
