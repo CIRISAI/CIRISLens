@@ -79,14 +79,17 @@ CREATE INDEX IF NOT EXISTS idx_logs_attributes ON agent_logs USING gin(attribute
 -- Collection errors tracking
 CREATE TABLE IF NOT EXISTS collection_errors (
     id SERIAL PRIMARY KEY,
-    agent_name VARCHAR(255) NOT NULL,
-    error_message TEXT,
+    source VARCHAR(255) NOT NULL,           -- e.g., 'manager_collector:primary', 'otlp_collector', 'agent:datum'
+    error_type VARCHAR(100) NOT NULL,       -- e.g., 'DISCOVERY_FAILURE', 'NETWORK_ERROR', 'SSL_ERROR'
+    error_message TEXT NOT NULL,
     occurred_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     resolved_at TIMESTAMP WITH TIME ZONE
 );
 
--- Create index for collection errors
-CREATE INDEX IF NOT EXISTS idx_collection_errors_agent ON collection_errors(agent_name, occurred_at);
+-- Create indexes for collection errors
+CREATE INDEX IF NOT EXISTS idx_collection_errors_source_time ON collection_errors(source, occurred_at);
+CREATE INDEX IF NOT EXISTS idx_collection_errors_type ON collection_errors(error_type);
+CREATE INDEX IF NOT EXISTS idx_collection_errors_unresolved ON collection_errors(occurred_at) WHERE resolved_at IS NULL;
 
 -- Agent configuration (for discovered OTLP endpoints)
 CREATE TABLE IF NOT EXISTS agent_otlp_configs (
@@ -151,10 +154,16 @@ LEFT JOIN (
     GROUP BY agent_name
 ) l ON a.agent_name = l.agent_name
 LEFT JOIN (
-    SELECT agent_name, COUNT(*) as error_count
+    SELECT
+        CASE
+            WHEN source LIKE 'agent:%' THEN SUBSTRING(source FROM 7)  -- Extract agent name from 'agent:name'
+            ELSE NULL
+        END as agent_name,
+        COUNT(*) as error_count
     FROM collection_errors
     WHERE occurred_at > NOW() - INTERVAL '5 minutes'
       AND resolved_at IS NULL
+      AND source LIKE 'agent:%'
     GROUP BY agent_name
 ) e ON a.agent_name = e.agent_name;
 
