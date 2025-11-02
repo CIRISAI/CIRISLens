@@ -188,12 +188,17 @@ class ManagerCollector:
                 
             # Store/update discovered agents
             for agent in agents_data:
+                # Extract occurrence_id and server_id for unique identification
+                occurrence_id = agent.get('occurrence_id')
+                server_id = agent.get('server_id')
+
                 await conn.execute("""
-                    INSERT INTO discovered_agents 
-                    (manager_id, agent_id, agent_name, status, cognitive_state, version, 
-                     codename, api_port, health, template, deployment, last_seen, raw_data)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-                    ON CONFLICT (manager_id, agent_id) 
+                    INSERT INTO discovered_agents
+                    (manager_id, agent_id, agent_name, status, cognitive_state, version,
+                     codename, api_port, health, template, deployment, occurrence_id, server_id,
+                     last_seen, raw_data)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+                    ON CONFLICT ON CONSTRAINT discovered_agents_unique_occurrence
                     DO UPDATE SET
                         agent_name = EXCLUDED.agent_name,
                         status = EXCLUDED.status,
@@ -218,6 +223,8 @@ class ManagerCollector:
                     agent.get('health'),
                     agent.get('template'),
                     agent.get('deployment'),
+                    occurrence_id,
+                    server_id,
                     datetime.now(timezone.utc),
                     json.dumps(agent)
                 )
