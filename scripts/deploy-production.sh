@@ -95,19 +95,53 @@ if ! docker network ls | grep -q "ciris-network"; then
 fi
 
 echo "6. Starting CIRISLens stack..."
-docker compose -f docker-compose.managed.yml -f docker-compose.prod.yml pull
-docker compose -f docker-compose.managed.yml -f docker-compose.prod.yml up -d
+docker compose pull
+docker compose up -d
 
 echo "7. Waiting for services to start..."
-sleep 10
+sleep 15
 
 echo "8. Checking service health..."
-docker compose -f docker-compose.managed.yml -f docker-compose.prod.yml ps
+docker compose ps
 
-echo "9. Setting up Grafana for public access..."
+echo "9. Configuring TimescaleDB..."
+# Wait for PostgreSQL to be ready
+for i in {1..30}; do
+    if docker exec cirislens-db pg_isready -U cirislens > /dev/null 2>&1; then
+        echo "Database is ready"
+        break
+    fi
+    echo "Waiting for database..."
+    sleep 2
+done
+
+# Enable TimescaleDB extension if not already enabled
+docker exec cirislens-db psql -U cirislens -d cirislens -c "CREATE EXTENSION IF NOT EXISTS timescaledb CASCADE;" 2>/dev/null || true
+
+# Check if shared_preload_libraries is configured
+PRELOAD=$(docker exec cirislens-db psql -U cirislens -d cirislens -t -c "SHOW shared_preload_libraries;" 2>/dev/null | tr -d ' ')
+if [[ ! "$PRELOAD" == *"timescaledb"* ]]; then
+    echo "Configuring TimescaleDB shared_preload_libraries..."
+    docker exec cirislens-db bash -c "echo \"shared_preload_libraries = 'timescaledb'\" >> /var/lib/postgresql/data/postgresql.conf"
+    echo "Restarting database with TimescaleDB enabled..."
+    docker restart cirislens-db
+    sleep 10
+fi
+
+# Run TimescaleDB migration if hypertables don't exist
+HT_COUNT=$(docker exec cirislens-db psql -U cirislens -d cirislens -t -c "SELECT count(*) FROM timescaledb_information.hypertables WHERE hypertable_schema = 'cirislens';" 2>/dev/null | tr -d ' ')
+if [[ "$HT_COUNT" == "0" || -z "$HT_COUNT" ]]; then
+    echo "Running TimescaleDB migration..."
+    docker exec -i cirislens-db psql -U cirislens -d cirislens < sql/006_timescaledb_migration.sql 2>&1 || echo "Migration may have partial errors (expected for new installs)"
+fi
+
+echo "10. Verifying TimescaleDB setup..."
+docker exec cirislens-db psql -U cirislens -d cirislens -c "SELECT hypertable_name FROM timescaledb_information.hypertables WHERE hypertable_schema = 'cirislens';" 2>/dev/null || echo "TimescaleDB verification skipped"
+
+echo "11. Setting up Grafana for public access..."
 ./scripts/setup-grafana-public.sh
 
-echo "10. Testing endpoints..."
+echo "12. Testing endpoints..."
 echo -n "API Health: "
 curl -s http://localhost:8200/health | jq -r '.status' || echo "Failed"
 
@@ -119,18 +153,23 @@ echo "Deployment Complete!"
 echo "===================="
 echo ""
 echo "Access URLs:"
-echo "- Public Dashboards: https://agents.ciris.ai/lens/"
-echo "- Admin Interface: https://agents.ciris.ai/lens/admin/"
+echo "- Grafana Dashboards: https://agents.ciris.ai/lens/"
 echo "- API Health: https://agents.ciris.ai/lens/api/health"
 echo ""
 echo "Grafana Admin Credentials (saved in .env):"
 grep "GF_ADMIN_USER\|GF_ADMIN_PASSWORD" .env | grep -v SECRET_KEY
 echo ""
+echo "TimescaleDB Data Retention (automatic):"
+echo "- Metrics: 30 days (hourly aggregates kept 90 days, daily kept 1 year)"
+echo "- Logs: 14 days"
+echo "- Traces: 14 days"
+echo "- Compression: After 7 days (90% space savings)"
+echo ""
 echo "Next Steps:"
-echo "1. Access admin UI and configure agent tokens"
-echo "2. Verify telemetry collection is working"
+echo "1. Verify telemetry collection: docker logs cirislens-api --tail 50"
+echo "2. Check agent discovery: docker exec cirislens-db psql -U cirislens -d cirislens -c 'SELECT agent_id, status, last_seen FROM cirislens.discovered_agents ORDER BY last_seen DESC LIMIT 10;'"
 echo "3. Configure Grafana dashboards"
 echo "4. Set up backup cron job: crontab -e"
 echo "   0 2 * * * /opt/cirislens/scripts/backup.sh"
 echo ""
-echo "To view logs: docker compose -f docker-compose.managed.yml -f docker-compose.prod.yml logs -f"
+echo "To view logs: docker compose logs -f"

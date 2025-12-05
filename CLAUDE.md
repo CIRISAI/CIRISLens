@@ -87,8 +87,8 @@ ciris_adapter_active_connections{}
 ### Access Production CIRISLens
 
 ```bash
-# SSH to production server
-ssh -i ~/.ssh/ciris_deploy root@observability.ciris.ai
+# SSH to production server (same server as CIRISManager)
+ssh -i ~/.ssh/ciris_deploy root@agents.ciris.ai
 
 # CIRISLens location
 cd /opt/cirislens
@@ -97,26 +97,68 @@ cd /opt/cirislens
 docker-compose ps
 
 # Check logs
-docker-compose logs -f grafana
-docker-compose logs -f otel-collector
+docker-compose logs -f api         # Manager collector + OTLP collector
+docker-compose logs -f grafana     # Grafana dashboard
+docker-compose logs -f postgres    # TimescaleDB
 
 # Restart services
 docker-compose restart
 ```
 
 ### Production URLs
-- **Grafana**: https://lens.ciris.ai (behind Cloudflare)
-- **Public Dashboard**: https://lens.ciris.ai/public/
-- **Prometheus**: Internal only (port 9090)
-- **OTLP Endpoint**: grpc://observability.ciris.ai:4317
+- **Grafana**: https://agents.ciris.ai/lens/ (behind nginx)
+- **API Health**: https://agents.ciris.ai/lens/api/health
+- **Internal API**: localhost:8000
 
-### Production Configuration
+### Production Stack
 
-The production deployment uses:
-- **Cloudflare**: DNS and SSL termination
-- **S3/MinIO**: Long-term storage for metrics/traces/logs
-- **High Retention**: 90 days metrics, 30 days traces, 14 days logs
-- **Auth**: Google OAuth for private dashboards
+| Component | Image | Purpose |
+|-----------|-------|---------|
+| TimescaleDB | `timescale/timescaledb:latest-pg15` | Time-series storage with compression |
+| Grafana | `grafana/grafana:latest` | Visualization (currently 12.3.0) |
+| CIRISLens API | `cirislens-api:dev` | Manager collector + OTLP collector |
+
+### TimescaleDB Configuration
+
+The production database uses TimescaleDB with automatic data lifecycle management:
+
+```sql
+-- View hypertables
+SELECT * FROM timescaledb_information.hypertables;
+
+-- View background jobs (compression, retention, aggregates)
+SELECT job_id, proc_name, schedule_interval, next_start
+FROM timescaledb_information.jobs;
+
+-- View compression status
+SELECT hypertable_name,
+       pg_size_pretty(before_compression_total_bytes) as before,
+       pg_size_pretty(after_compression_total_bytes) as after
+FROM timescaledb_information.compression_settings;
+
+-- Manual compression (if needed)
+SELECT compress_chunk(c) FROM show_chunks('cirislens.agent_metrics') c;
+```
+
+### Data Retention Policies (Automatic)
+
+| Table | Detail Retention | Compression | Continuous Aggregates |
+|-------|------------------|-------------|----------------------|
+| agent_metrics | 30 days | After 7 days | Hourly (90d), Daily (1yr) |
+| agent_logs | 14 days | After 7 days | None |
+| agent_traces | 14 days | After 7 days | None |
+
+### Block Storage
+
+Production data is stored on a dedicated 100GB block volume:
+```bash
+# Check disk usage
+df -h /mnt/lens_volume
+
+# Data locations (bind mounts in docker-compose.yml)
+/mnt/lens_volume/data/postgres  # TimescaleDB data
+/mnt/lens_volume/data/grafana   # Grafana data
+```
 
 ### Connecting Agents to Production CIRISLens
 
@@ -219,11 +261,28 @@ services:
 
 ### Disk Space
 
-Check storage usage:
+TimescaleDB handles retention automatically, but if disk fills up:
+
 ```bash
-docker system df
-docker volume ls
-docker volume prune  # Clean unused volumes
+# Check disk usage
+df -h /mnt/lens_volume
+
+# Check table sizes
+docker exec cirislens-db psql -U cirislens -d cirislens -c "
+SELECT tablename, pg_size_pretty(pg_total_relation_size('cirislens.' || tablename)) as size
+FROM pg_tables WHERE schemaname = 'cirislens' ORDER BY pg_total_relation_size('cirislens.' || tablename) DESC;
+"
+
+# Manual cleanup (if retention jobs haven't run)
+docker exec cirislens-db psql -U cirislens -d cirislens -c "
+DELETE FROM cirislens.agent_metrics WHERE timestamp < NOW() - INTERVAL '30 days';
+VACUUM FULL cirislens.agent_metrics;
+"
+
+# Force compression on old chunks
+docker exec cirislens-db psql -U cirislens -d cirislens -c "
+SELECT compress_chunk(c) FROM show_chunks('cirislens.agent_metrics', older_than => INTERVAL '7 days') c WHERE NOT is_compressed;
+"
 ```
 
 ## Important Notes
