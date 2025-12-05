@@ -39,9 +39,10 @@ services:
     networks:
       - cirislens
 
-  # PostgreSQL database for CIRISLens data storage
+  # TimescaleDB database for CIRISLens time-series data
+  # Provides automatic compression (90% savings) and retention policies
   postgres:
-    image: postgres:15-alpine
+    image: timescale/timescaledb:latest-pg15
     container_name: cirislens-db
     restart: unless-stopped
     environment:
