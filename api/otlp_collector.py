@@ -464,7 +464,7 @@ class OTLPCollector:
                             (agent_name, trace_id, span_id, parent_span_id, operation_name,
                              start_time, end_time, attributes, events, status)
                             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-                            ON CONFLICT (trace_id, span_id) DO NOTHING
+                            ON CONFLICT (trace_id, span_id, start_time) DO NOTHING
                         """,
                             agent_name,
                             span.get("traceId"),
