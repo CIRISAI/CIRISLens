@@ -550,16 +550,53 @@ Research conducted on AI regulatory requirements for CIRIS Android app billing/p
 - Must disclose use of AI in decisions affecting consumers
 - Opt-out rights for profiling
 
-### Recommended Retention Policy for CIRIS
+### Recommended Retention Policy for CIRIS ✅ LOCKED IN (2025-12-11)
 
-| Data Type | Retention | Justification |
-|-----------|-----------|---------------|
-| Agent telemetry (metrics) | 30 days detail, 1 year aggregates | Operational needs |
-| Agent logs/traces | 14 days | Debugging, not personal data |
-| Billing transactions | 7 years | Financial audit requirements |
-| Usage logs (with user hash) | 90 days | Service improvement |
-| Geolocation (if any) | Do not store | CCPA restriction |
-| AI decision logs | 10 years (aggregated) | EU AI Act compliance |
+| Data Type | Retention | Storage | Justification |
+|-----------|-----------|---------|---------------|
+| Agent telemetry (metrics) | 30 days detail, 1 year aggregates | TimescaleDB | Operational needs |
+| Agent logs/traces | 14 days | TimescaleDB | Debugging, not personal data |
+| Billing transactions | **10 years** | AWS S3 Glacier Deep Archive | Financial audit + EU AI Act |
+| Usage logs (with user hash) | 90 days | TimescaleDB | Service improvement |
+| Geolocation (if any) | Do not store | N/A | CCPA restriction |
+| AI decision logs | 10 years | Git history | EU AI Act compliance |
+
+### Billing Archive Architecture (AWS)
+
+**Decision**: AWS S3 + Glacier Deep Archive for 10-year billing retention
+
+```
+CIRISBilling PostgreSQL (hot, 90 days)
+    ↓ Monthly export cron
+AWS S3 bucket: ciris-billing-archive/
+    ├── Intelligent Tiering (0-90 days)
+    ├── Glacier Instant Retrieval (90 days - 1 year)
+    └── Glacier Deep Archive (1-10 years) ← Lifecycle rule
+```
+
+**S3 Lifecycle Policy:**
+```json
+{
+  "Rules": [
+    {
+      "ID": "BillingArchiveLifecycle",
+      "Status": "Enabled",
+      "Transitions": [
+        {"Days": 90, "StorageClass": "GLACIER_IR"},
+        {"Days": 365, "StorageClass": "DEEP_ARCHIVE"}
+      ],
+      "Expiration": {"Days": 3650}
+    }
+  ]
+}
+```
+
+**Cost Estimate:**
+- Glacier Deep Archive: $0.00099/GB/month
+- 100GB over 10 years ≈ **$12/year**
+- 11 nines durability (99.999999999%)
+
+**Export Format:** Parquet (compressed, queryable with Athena if needed)
 
 ### Key Takeaways
 
