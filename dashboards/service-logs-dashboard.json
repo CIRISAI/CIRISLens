@@ -1,65 +1,74 @@
 {
   "annotations": {
-    "list": []
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": "-- Grafana --",
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
   },
   "editable": true,
   "gnetId": null,
   "graphTooltip": 1,
   "id": null,
-  "links": [
-    {
-      "asDropdown": false,
-      "icon": "external link",
-      "includeVars": false,
-      "keepTime": true,
-      "tags": [],
-      "targetBlank": false,
-      "title": "Back to Main",
-      "type": "link",
-      "url": "/d/ciris-main/ciris-telemetry-dashboard"
-    }
-  ],
+  "links": [],
   "panels": [
     {
-      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
-      "id": 1,
-      "title": "Total Logs (24h)",
-      "type": "stat",
-      "datasource": {"type": "postgres", "uid": "postgresql"},
-      "targets": [
-        {
-          "rawSql": "SELECT COUNT(*) as value FROM cirislens.service_logs WHERE timestamp > NOW() - INTERVAL '24 hours'",
-          "format": "table"
-        }
-      ],
+      "datasource": "PostgreSQL",
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "thresholds" },
+          "mappings": [],
           "thresholds": {
             "mode": "absolute",
-            "steps": [
-              { "color": "green", "value": null }
-            ]
+            "steps": [{ "color": "green", "value": null }]
           },
           "unit": "short"
-        }
-      }
-    },
-    {
-      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
-      "id": 2,
-      "title": "Errors (24h)",
-      "type": "stat",
-      "datasource": {"type": "postgres", "uid": "postgresql"},
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "id": 1,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "pluginVersion": "8.0.0",
       "targets": [
         {
-          "rawSql": "SELECT COUNT(*) as value FROM cirislens.service_logs WHERE timestamp > NOW() - INTERVAL '24 hours' AND level IN ('ERROR', 'CRITICAL')",
-          "format": "table"
+          "format": "table",
+          "group": [],
+          "metricColumn": "none",
+          "rawQuery": true,
+          "rawSql": "SELECT COUNT(*) as value FROM cirislens.service_logs WHERE timestamp > NOW() - INTERVAL '24 hours'",
+          "refId": "A",
+          "select": [[{ "params": ["value"], "type": "column" }]],
+          "timeColumn": "time",
+          "where": []
         }
       ],
+      "title": "Total Logs (24h)",
+      "type": "stat"
+    },
+    {
+      "datasource": "PostgreSQL",
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "thresholds" },
+          "mappings": [],
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -69,24 +78,46 @@
             ]
           },
           "unit": "short"
-        }
-      }
-    },
-    {
-      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
-      "id": 3,
-      "title": "Warnings (24h)",
-      "type": "stat",
-      "datasource": {"type": "postgres", "uid": "postgresql"},
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "id": 2,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "pluginVersion": "8.0.0",
       "targets": [
         {
-          "rawSql": "SELECT COUNT(*) as value FROM cirislens.service_logs WHERE timestamp > NOW() - INTERVAL '24 hours' AND level = 'WARNING'",
-          "format": "table"
+          "format": "table",
+          "group": [],
+          "metricColumn": "none",
+          "rawQuery": true,
+          "rawSql": "SELECT COUNT(*) as value FROM cirislens.service_logs WHERE timestamp > NOW() - INTERVAL '24 hours' AND level IN ('ERROR', 'CRITICAL')",
+          "refId": "A",
+          "select": [[{ "params": ["value"], "type": "column" }]],
+          "timeColumn": "time",
+          "where": []
         }
       ],
+      "title": "Errors (24h)",
+      "type": "stat"
+    },
+    {
+      "datasource": "PostgreSQL",
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "thresholds" },
+          "mappings": [],
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -95,80 +126,166 @@
             ]
           },
           "unit": "short"
-        }
-      }
-    },
-    {
-      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
-      "id": 4,
-      "title": "Active Services",
-      "type": "stat",
-      "datasource": {"type": "postgres", "uid": "postgresql"},
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "id": 3,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "pluginVersion": "8.0.0",
       "targets": [
         {
-          "rawSql": "SELECT COUNT(DISTINCT service_name) as value FROM cirislens.service_logs WHERE timestamp > NOW() - INTERVAL '1 hour'",
-          "format": "table"
+          "format": "table",
+          "group": [],
+          "metricColumn": "none",
+          "rawQuery": true,
+          "rawSql": "SELECT COUNT(*) as value FROM cirislens.service_logs WHERE timestamp > NOW() - INTERVAL '24 hours' AND level = 'WARNING'",
+          "refId": "A",
+          "select": [[{ "params": ["value"], "type": "column" }]],
+          "timeColumn": "time",
+          "where": []
         }
       ],
+      "title": "Warnings (24h)",
+      "type": "stat"
+    },
+    {
+      "datasource": "PostgreSQL",
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "thresholds" },
+          "mappings": [],
           "thresholds": {
             "mode": "absolute",
-            "steps": [
-              { "color": "green", "value": null }
-            ]
+            "steps": [{ "color": "green", "value": null }]
           },
           "unit": "short"
-        }
-      }
-    },
-    {
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
-      "id": 5,
-      "title": "Log Volume by Service",
-      "type": "timeseries",
-      "datasource": {"type": "postgres", "uid": "postgresql"},
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "id": 4,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "pluginVersion": "8.0.0",
       "targets": [
         {
-          "rawSql": "SELECT time_bucket('5 minutes', timestamp) AS time, service_name, COUNT(*) as count FROM cirislens.service_logs WHERE $__timeFilter(timestamp) GROUP BY 1, 2 ORDER BY 1",
-          "format": "time_series"
+          "format": "table",
+          "group": [],
+          "metricColumn": "none",
+          "rawQuery": true,
+          "rawSql": "SELECT COUNT(DISTINCT service_name) as value FROM cirislens.service_logs WHERE timestamp > NOW() - INTERVAL '1 hour'",
+          "refId": "A",
+          "select": [[{ "params": ["value"], "type": "column" }]],
+          "timeColumn": "time",
+          "where": []
         }
       ],
+      "title": "Active Services",
+      "type": "stat"
+    },
+    {
+      "datasource": "PostgreSQL",
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "palette-classic" },
           "custom": {
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
             "drawStyle": "line",
             "fillOpacity": 20,
+            "gradientMode": "none",
+            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+            "lineInterpolation": "linear",
             "lineWidth": 2,
             "pointSize": 5,
+            "scaleDistribution": { "type": "linear" },
             "showPoints": "never",
-            "stacking": { "mode": "none" }
+            "spanNulls": false,
+            "stacking": { "group": "A", "mode": "none" },
+            "thresholdsStyle": { "mode": "off" }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "green", "value": null }]
           },
           "unit": "short"
-        }
-      }
-    },
-    {
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
-      "id": 6,
-      "title": "Log Level Distribution",
-      "type": "timeseries",
-      "datasource": {"type": "postgres", "uid": "postgresql"},
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "id": 5,
+      "options": {
+        "legend": { "calcs": [], "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "single" }
+      },
+      "pluginVersion": "8.0.0",
       "targets": [
         {
-          "rawSql": "SELECT time_bucket('5 minutes', timestamp) AS time, level, COUNT(*) as count FROM cirislens.service_logs WHERE $__timeFilter(timestamp) GROUP BY 1, 2 ORDER BY 1",
-          "format": "time_series"
+          "format": "time_series",
+          "group": [],
+          "metricColumn": "service_name",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  time_bucket('5 minutes', timestamp) AS time,\n  service_name AS metric,\n  COUNT(*) as value\nFROM cirislens.service_logs\nWHERE timestamp BETWEEN $__timeFrom() AND $__timeTo()\nGROUP BY 1, 2\nORDER BY 1",
+          "refId": "A",
+          "select": [[{ "params": ["value"], "type": "column" }]],
+          "timeColumn": "timestamp",
+          "timeColumnType": "timestamp",
+          "where": []
         }
       ],
+      "title": "Log Volume by Service",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "PostgreSQL",
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "palette-classic" },
           "custom": {
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
             "drawStyle": "bars",
             "fillOpacity": 100,
-            "stacking": { "mode": "normal" }
+            "gradientMode": "none",
+            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": { "type": "linear" },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": { "group": "A", "mode": "normal" },
+            "thresholdsStyle": { "mode": "off" }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "green", "value": null }]
           },
           "unit": "short"
         },
@@ -194,192 +311,101 @@
             "properties": [{ "id": "color", "value": { "fixedColor": "blue", "mode": "fixed" } }]
           }
         ]
-      }
-    },
-    {
-      "gridPos": { "h": 6, "w": 8, "x": 0, "y": 12 },
-      "id": 7,
-      "title": "Logs by Service (24h)",
-      "type": "piechart",
-      "datasource": {"type": "postgres", "uid": "postgresql"},
-      "targets": [
-        {
-          "rawSql": "SELECT service_name, COUNT(*) as count FROM cirislens.service_logs WHERE timestamp > NOW() - INTERVAL '24 hours' GROUP BY service_name ORDER BY count DESC",
-          "format": "table"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "palette-classic" }
-        }
       },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "id": 6,
       "options": {
-        "legend": { "displayMode": "table", "placement": "right" },
-        "pieType": "pie"
-      }
-    },
-    {
-      "gridPos": { "h": 6, "w": 8, "x": 8, "y": 12 },
-      "id": 8,
-      "title": "Top Events (24h)",
-      "type": "bargauge",
-      "datasource": {"type": "postgres", "uid": "postgresql"},
-      "targets": [
-        {
-          "rawSql": "SELECT COALESCE(event, 'unspecified') as event, COUNT(*) as count FROM cirislens.service_logs WHERE timestamp > NOW() - INTERVAL '24 hours' AND event IS NOT NULL GROUP BY event ORDER BY count DESC LIMIT 10",
-          "format": "table"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "palette-classic" },
-          "unit": "short"
-        }
+        "legend": { "calcs": [], "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "single" }
       },
-      "options": {
-        "displayMode": "gradient",
-        "orientation": "horizontal"
-      }
-    },
-    {
-      "gridPos": { "h": 6, "w": 8, "x": 16, "y": 12 },
-      "id": 9,
-      "title": "Service Health",
-      "type": "table",
-      "datasource": {"type": "postgres", "uid": "postgresql"},
+      "pluginVersion": "8.0.0",
       "targets": [
         {
-          "rawSql": "SELECT service_name as \"Service\", COUNT(*) as \"Total\", COUNT(*) FILTER (WHERE level IN ('ERROR', 'CRITICAL')) as \"Errors\", MAX(timestamp) as \"Last Seen\" FROM cirislens.service_logs WHERE timestamp > NOW() - INTERVAL '1 hour' GROUP BY service_name ORDER BY \"Errors\" DESC",
-          "format": "table"
+          "format": "time_series",
+          "group": [],
+          "metricColumn": "level",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  time_bucket('5 minutes', timestamp) AS time,\n  level AS metric,\n  COUNT(*) as value\nFROM cirislens.service_logs\nWHERE timestamp BETWEEN $__timeFrom() AND $__timeTo()\nGROUP BY 1, 2\nORDER BY 1",
+          "refId": "A",
+          "select": [[{ "params": ["value"], "type": "column" }]],
+          "timeColumn": "timestamp",
+          "timeColumnType": "timestamp",
+          "where": []
         }
       ],
+      "title": "Log Level Distribution",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "PostgreSQL",
       "fieldConfig": {
         "defaults": {},
-        "overrides": [
-          {
-            "matcher": { "id": "byName", "options": "Errors" },
-            "properties": [
-              {
-                "id": "custom.cellOptions",
-                "value": { "type": "color-background" }
-              },
-              {
-                "id": "thresholds",
-                "value": {
-                  "mode": "absolute",
-                  "steps": [
-                    { "color": "green", "value": null },
-                    { "color": "yellow", "value": 1 },
-                    { "color": "red", "value": 10 }
-                  ]
-                }
-              }
-            ]
-          }
-        ]
-      }
-    },
-    {
-      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 18 },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 12 },
       "id": 10,
-      "title": "Recent Logs",
-      "type": "table",
-      "datasource": {"type": "postgres", "uid": "postgresql"},
-      "targets": [
-        {
-          "rawSql": "SELECT timestamp as \"Time\", service_name as \"Service\", level as \"Level\", COALESCE(event, '-') as \"Event\", LEFT(message, 200) as \"Message\" FROM cirislens.service_logs WHERE $__timeFilter(timestamp) ORDER BY timestamp DESC LIMIT 100",
-          "format": "table"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {},
-        "overrides": [
-          {
-            "matcher": { "id": "byName", "options": "Level" },
-            "properties": [
-              {
-                "id": "custom.cellOptions",
-                "value": { "type": "color-text" }
-              },
-              {
-                "id": "mappings",
-                "value": [
-                  { "type": "value", "options": { "ERROR": { "color": "red", "text": "ERROR" } } },
-                  { "type": "value", "options": { "CRITICAL": { "color": "dark-red", "text": "CRITICAL" } } },
-                  { "type": "value", "options": { "WARNING": { "color": "yellow", "text": "WARNING" } } },
-                  { "type": "value", "options": { "INFO": { "color": "green", "text": "INFO" } } },
-                  { "type": "value", "options": { "DEBUG": { "color": "blue", "text": "DEBUG" } } }
-                ]
-              }
-            ]
-          }
-        ]
-      },
       "options": {
         "showHeader": true,
-        "cellHeight": "sm"
-      }
+        "cellHeight": "sm",
+        "footer": { "show": false, "reducer": ["sum"], "fields": "" },
+        "sortBy": []
+      },
+      "pluginVersion": "8.0.0",
+      "targets": [
+        {
+          "format": "table",
+          "group": [],
+          "metricColumn": "none",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  timestamp as \"Time\",\n  service_name as \"Service\",\n  level as \"Level\",\n  COALESCE(event, '-') as \"Event\",\n  LEFT(message, 200) as \"Message\"\nFROM cirislens.service_logs\nWHERE timestamp BETWEEN $__timeFrom() AND $__timeTo()\nORDER BY timestamp DESC\nLIMIT 100",
+          "refId": "A",
+          "select": [[{ "params": ["value"], "type": "column" }]],
+          "timeColumn": "timestamp",
+          "timeColumnType": "timestamp",
+          "where": []
+        }
+      ],
+      "title": "Recent Logs",
+      "type": "table"
     },
     {
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 28 },
-      "id": 11,
-      "title": "Recent Errors",
-      "type": "table",
-      "datasource": {"type": "postgres", "uid": "postgresql"},
-      "targets": [
-        {
-          "rawSql": "SELECT timestamp as \"Time\", service_name as \"Service\", COALESCE(event, '-') as \"Event\", message as \"Message\", attributes as \"Details\" FROM cirislens.service_logs WHERE $__timeFilter(timestamp) AND level IN ('ERROR', 'CRITICAL') ORDER BY timestamp DESC LIMIT 50",
-          "format": "table"
-        }
-      ],
+      "datasource": "PostgreSQL",
       "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "fixed", "fixedColor": "red" }
-        }
+        "defaults": {},
+        "overrides": []
       },
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 20 },
+      "id": 11,
       "options": {
         "showHeader": true,
-        "cellHeight": "sm"
-      }
+        "cellHeight": "sm",
+        "footer": { "show": false, "reducer": ["sum"], "fields": "" },
+        "sortBy": []
+      },
+      "pluginVersion": "8.0.0",
+      "targets": [
+        {
+          "format": "table",
+          "group": [],
+          "metricColumn": "none",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  timestamp as \"Time\",\n  service_name as \"Service\",\n  COALESCE(event, '-') as \"Event\",\n  message as \"Message\"\nFROM cirislens.service_logs\nWHERE timestamp BETWEEN $__timeFrom() AND $__timeTo()\n  AND level IN ('ERROR', 'CRITICAL')\nORDER BY timestamp DESC\nLIMIT 50",
+          "refId": "A",
+          "select": [[{ "params": ["value"], "type": "column" }]],
+          "timeColumn": "timestamp",
+          "timeColumnType": "timestamp",
+          "where": []
+        }
+      ],
+      "title": "Recent Errors",
+      "type": "table"
     }
   ],
   "refresh": "30s",
   "schemaVersion": 30,
   "style": "dark",
   "tags": ["service-logs", "ciris"],
-  "templating": {
-    "list": [
-      {
-        "current": { "selected": true, "text": "All", "value": "$__all" },
-        "datasource": {"type": "postgres", "uid": "postgresql"},
-        "definition": "SELECT DISTINCT service_name FROM cirislens.service_logs ORDER BY service_name",
-        "hide": 0,
-        "includeAll": true,
-        "label": "Service",
-        "multi": true,
-        "name": "service",
-        "query": "SELECT DISTINCT service_name FROM cirislens.service_logs ORDER BY service_name",
-        "refresh": 1,
-        "type": "query"
-      },
-      {
-        "current": { "selected": true, "text": "All", "value": "$__all" },
-        "hide": 0,
-        "includeAll": true,
-        "label": "Level",
-        "multi": true,
-        "name": "level",
-        "options": [
-          { "selected": false, "text": "DEBUG", "value": "DEBUG" },
-          { "selected": false, "text": "INFO", "value": "INFO" },
-          { "selected": false, "text": "WARNING", "value": "WARNING" },
-          { "selected": false, "text": "ERROR", "value": "ERROR" },
-          { "selected": false, "text": "CRITICAL", "value": "CRITICAL" }
-        ],
-        "type": "custom"
-      }
-    ]
-  },
+  "templating": { "list": [] },
   "time": { "from": "now-6h", "to": "now" },
   "timepicker": {},
   "timezone": "browser",
