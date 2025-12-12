@@ -282,23 +282,59 @@ async def oauth_login():
     query = "&".join(f"{k}={v}" for k, v in params.items())
     return RedirectResponse(f"https://accounts.google.com/o/oauth2/v2/auth?{query}")
 
-@app.post("/api/admin/auth/callback")
+@app.get("/api/admin/auth/callback")
 async def oauth_callback(code: str, state: Optional[str] = None):
-    """Handle OAuth callback"""
-    # In production, exchange code for token and get user info
-    # For now, mock the response
-    mock_user = OAuthUser(
-        email="dev@ciris.ai",
-        name="Development User",
-        hd="ciris.ai"
+    """Handle OAuth callback from Google"""
+    import httpx
+
+    # Exchange code for token
+    async with httpx.AsyncClient() as client:
+        token_response = await client.post(
+            "https://oauth2.googleapis.com/token",
+            data={
+                "client_id": OAUTH_CLIENT_ID,
+                "client_secret": OAUTH_CLIENT_SECRET,
+                "code": code,
+                "grant_type": "authorization_code",
+                "redirect_uri": OAUTH_CALLBACK_URL,
+            }
+        )
+
+        if token_response.status_code != 200:
+            logger.error(f"Token exchange failed: {token_response.text}")
+            return HTMLResponse(f"<h1>Authentication failed</h1><p>{token_response.text}</p>", status_code=400)
+
+        tokens = token_response.json()
+        access_token = tokens.get("access_token")
+
+        # Get user info
+        userinfo_response = await client.get(
+            "https://www.googleapis.com/oauth2/v2/userinfo",
+            headers={"Authorization": f"Bearer {access_token}"}
+        )
+
+        if userinfo_response.status_code != 200:
+            logger.error(f"User info fetch failed: {userinfo_response.text}")
+            return HTMLResponse("<h1>Failed to get user info</h1>", status_code=400)
+
+        userinfo = userinfo_response.json()
+
+    # Verify domain
+    hd = userinfo.get("hd", "")
+    if hd != ALLOWED_DOMAIN:
+        return HTMLResponse(f"<h1>Access denied</h1><p>Only @{ALLOWED_DOMAIN} accounts allowed</p>", status_code=403)
+
+    # Create session
+    user = OAuthUser(
+        email=userinfo.get("email"),
+        name=userinfo.get("name"),
+        hd=hd
     )
-    
-    session_id = create_session(mock_user)
-    return {
-        "authenticated": True,
-        "session_id": session_id,
-        "user": mock_user.dict()
-    }
+
+    session_id = create_session(user)
+    response = RedirectResponse(url="/lens/admin/", status_code=302)
+    response.set_cookie(key="session_id", value=session_id, httponly=True, samesite="lax")
+    return response
 
 @app.get("/api/admin/auth/status")
 async def auth_status(request: Request):
