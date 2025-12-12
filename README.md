@@ -61,7 +61,7 @@ docker compose -f docker-compose.managed.yml ps
 
 5. Access the interfaces:
 - **Admin UI**: http://localhost:8080/cirislens/admin/ (OAuth required)
-- **Grafana**: http://localhost:3000 (admin/admin)
+- **Grafana**: http://localhost:3000 (admin/admin - requires @ciris.ai Google login in production)
 - **MinIO Console**: http://localhost:9001 (admin/adminpassword123)
 
 ### Configure Agent Tokens

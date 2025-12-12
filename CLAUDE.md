@@ -47,8 +47,9 @@ CIRISManager → Exposes metrics → CIRISLens collects → Grafana visualizes
 - **DON'T**: Build custom UIs - use Grafana
 
 ### Privacy by Design
+- **DO**: Require authentication for all dashboards (@ciris.ai Google OAuth)
 - **DO**: Sanitize PII in OpenTelemetry Collector
-- **DO**: Hash agent IDs for public dashboards
+- **DO**: Hash agent IDs in any future public-facing views
 - **DON'T**: Store message content or user data
 - **DON'T**: Expose internal IPs or secrets
 
@@ -106,7 +107,8 @@ docker-compose restart
 ```
 
 ### Production URLs
-- **Grafana**: https://agents.ciris.ai/lens/ (behind nginx)
+- **Grafana**: https://agents.ciris.ai/lens/ (requires @ciris.ai Google login)
+- **Admin UI**: https://agents.ciris.ai/lens/admin/ (OAuth required)
 - **API Health**: https://agents.ciris.ai/lens/api/health
 - **Internal API**: localhost:8000
 
@@ -310,9 +312,9 @@ SELECT compress_chunk(c) FROM show_chunks('cirislens.agent_metrics', older_than 
 
 ## Security Considerations
 
+- **Authentication required**: Grafana uses Google OAuth restricted to @ciris.ai domain
 - **Never expose raw Prometheus/Loki/Tempo ports publicly**
 - **Always use Grafana as the gateway**
-- **Enable auth for production deployments**
 - **Sanitize data in collector, not dashboards**
 - **Use read-only datasources where possible**
 

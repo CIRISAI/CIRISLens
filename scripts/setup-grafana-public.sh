@@ -1,14 +1,14 @@
 #!/bin/bash
-# Setup Grafana for public dashboard access
+# Setup Grafana with OAuth authentication
 # Run this after Grafana starts for the first time
 
 set -e
 
-echo "Setting up Grafana for public access..."
+echo "Setting up Grafana authentication..."
 
 GRAFANA_URL="http://localhost:3001"
-ADMIN_USER="admin"
-ADMIN_PASS="admin"
+ADMIN_USER="${GF_ADMIN_USER:-admin}"
+ADMIN_PASS="${GF_ADMIN_PASSWORD:-admin}"
 
 # Wait for Grafana to be ready
 echo "Waiting for Grafana to start..."
@@ -21,73 +21,41 @@ for i in {1..30}; do
     sleep 2
 done
 
-# First, check if Public organization already exists
-echo "Checking for existing Public organization..."
-PUBLIC_ORG=$(curl -s "$GRAFANA_URL/api/orgs/name/Public" \
-    -u "$ADMIN_USER:$ADMIN_PASS" 2>/dev/null)
+# Check Grafana version
+echo "Checking Grafana version..."
+VERSION=$(curl -s "$GRAFANA_URL/api/health" | jq -r '.version')
+echo "Grafana version: $VERSION"
 
-if echo "$PUBLIC_ORG" | grep -q "org.notFound"; then
-    echo "Creating Public organization..."
-    # Create the Public organization
-    CREATE_RESULT=$(curl -s -X POST "$GRAFANA_URL/api/orgs" \
-        -H "Content-Type: application/json" \
-        -u "$ADMIN_USER:$ADMIN_PASS" \
-        -d '{"name":"Public"}' 2>/dev/null)
-    
-    if echo "$CREATE_RESULT" | grep -q "orgId"; then
-        echo "Public organization created successfully"
-        PUBLIC_ORG_ID=$(echo "$CREATE_RESULT" | jq -r '.orgId')
-    else
-        echo "Failed to create Public organization: $CREATE_RESULT"
-        # Try alternative approach - switch to Main org and rename it
-        echo "Attempting alternative approach..."
-        curl -s -X PUT "$GRAFANA_URL/api/org" \
-            -H "Content-Type: application/json" \
-            -u "$ADMIN_USER:$ADMIN_PASS" \
-            -d '{"name":"Public"}' 2>/dev/null
-    fi
+# Verify OAuth is configured
+echo "Checking OAuth configuration..."
+if [ "${GF_AUTH_GOOGLE_ENABLED:-false}" = "true" ]; then
+    echo "Google OAuth is ENABLED"
+    echo "Users must authenticate with @${ALLOWED_DOMAIN:-ciris.ai} accounts"
 else
-    echo "Public organization already exists"
-    PUBLIC_ORG_ID=$(echo "$PUBLIC_ORG" | jq -r '.id')
+    echo "Google OAuth is DISABLED (development mode)"
+    echo "Using basic auth with admin credentials"
 fi
 
-echo "Public Org ID: $PUBLIC_ORG_ID"
-
-# Update org preferences to set home dashboard
-if [ ! -z "$PUBLIC_ORG_ID" ]; then
-    echo "Setting default dashboard for Public org..."
-    curl -X PUT "$GRAFANA_URL/api/org/preferences" \
-        -H "Content-Type: application/json" \
-        -H "X-Grafana-Org-Id: $PUBLIC_ORG_ID" \
-        -u "$ADMIN_USER:$ADMIN_PASS" \
-        -d '{
-            "theme": "light",
-            "homeDashboardId": 0,
-            "timezone": "browser"
-        }'
-fi
-
-# Make dashboards publicly accessible
-echo "Configuring public dashboard access..."
-
-# Create an API key for automated operations (optional)
-API_KEY=$(curl -X POST "$GRAFANA_URL/api/auth/keys" \
+# Set org preferences
+echo "Configuring organization preferences..."
+curl -s -X PUT "$GRAFANA_URL/api/org/preferences" \
     -H "Content-Type: application/json" \
     -u "$ADMIN_USER:$ADMIN_PASS" \
     -d '{
-        "name": "cirislens-public",
-        "role": "Viewer"
-    }' 2>/dev/null | jq -r '.key')
-
-if [ ! -z "$API_KEY" ]; then
-    echo "API Key created for public access"
-fi
+        "theme": "dark",
+        "timezone": "utc"
+    }' 2>/dev/null || echo "Could not update preferences"
 
 echo ""
-echo "Grafana public access setup complete!"
+echo "Grafana authentication setup complete!"
 echo "======================================="
-echo "Public URL: https://agents.ciris.ai/lens/"
-echo "Admin URL: https://agents.ciris.ai/lens/login"
 echo ""
-echo "Note: Anonymous users will automatically see public dashboards"
-echo "Admin users can still login to edit dashboards"
+if [ "${GF_AUTH_GOOGLE_ENABLED:-false}" = "true" ]; then
+    echo "Access: https://agents.ciris.ai/lens/"
+    echo "Login: Google OAuth (@${ALLOWED_DOMAIN:-ciris.ai} accounts only)"
+else
+    echo "Access: http://localhost:3001"
+    echo "Login: admin / $ADMIN_PASS"
+fi
+echo ""
+echo "Note: Anonymous access is DISABLED. All users must authenticate."

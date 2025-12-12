@@ -59,6 +59,10 @@ GF_ADMIN_PASSWORD=$(openssl rand -hex 16)
 GF_ADMIN_EMAIL=admin@ciris.ai
 GF_SECRET_KEY=$(openssl rand -hex 32)
 
+# Grafana OAuth (uses same Google OAuth as Admin UI)
+# This enables Google Sign-In for Grafana dashboards
+GF_AUTH_GOOGLE_ENABLED=true
+
 # MinIO
 MINIO_ROOT_USER=admin
 MINIO_ROOT_PASSWORD=$(openssl rand -hex 16)
@@ -153,7 +157,8 @@ echo "Deployment Complete!"
 echo "===================="
 echo ""
 echo "Access URLs:"
-echo "- Grafana Dashboards: https://agents.ciris.ai/lens/"
+echo "- Grafana Dashboards: https://agents.ciris.ai/lens/ (requires @ciris.ai Google login)"
+echo "- Admin UI: https://agents.ciris.ai/lens/admin/"
 echo "- API Health: https://agents.ciris.ai/lens/api/health"
 echo ""
 echo "Grafana Admin Credentials (saved in .env):"
