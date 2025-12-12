@@ -462,12 +462,19 @@ def sanitize_log(record: dict) -> dict:
 - Added `https://agents.ciris.ai/lens/login/google` to Google Cloud Console redirect URIs
 - Restricted to `@ciris.ai` domain via `GF_AUTH_GOOGLE_ALLOWED_DOMAINS`
 
-### Phase 2: Add Log Ingestion
-- [ ] Create `service_logs` table migration
-- [ ] Create `service_tokens` table
-- [ ] Add `/api/v1/logs/ingest` endpoint to CIRISLens API
-- [ ] Generate service tokens for Billing, Proxy, Manager
+### Phase 2: Add Log Ingestion ✅ COMPLETE (2025-12-11)
+- [x] Create `service_logs` table migration (`sql/007_service_logs.sql`)
+- [x] Create `service_tokens` table (in same migration)
+- [x] Add `/api/v1/logs/ingest` endpoint to CIRISLens API
+- [ ] Generate service tokens for Billing, Proxy, Manager (via Admin UI)
 - [ ] Test ingestion with curl
+
+**Endpoints added:**
+- `POST /api/v1/logs/ingest` - Ingest logs (Bearer token auth)
+- `GET /api/admin/service-tokens` - List tokens
+- `POST /api/admin/service-tokens` - Create token
+- `DELETE /api/admin/service-tokens/{name}` - Revoke token
+- `GET /api/admin/service-logs` - View logs
 
 ### Phase 3: Integrate Services
 - [ ] Add LogShipper to CIRISBilling
