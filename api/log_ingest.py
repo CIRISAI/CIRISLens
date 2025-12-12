@@ -5,6 +5,7 @@ Handles log ingestion from CIRISBilling, CIRISProxy, and CIRISManager.
 """
 
 import hashlib
+import json
 import re
 import logging
 from datetime import datetime
@@ -209,7 +210,7 @@ class LogIngestService:
                         log.get("request_id"),
                         log.get("trace_id"),
                         user_hash,
-                        log.get("attributes", {}),
+                        json.dumps(log.get("attributes", {})),
                     )
 
                     accepted += 1
