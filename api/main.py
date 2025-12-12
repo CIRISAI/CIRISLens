@@ -20,6 +20,7 @@ import asyncio
 from manager_collector import ManagerCollector
 from otlp_collector import OTLPCollector
 from token_manager import TokenManager
+from log_ingest import LogIngestService
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -59,6 +60,7 @@ DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://user:password@host:5432/d
 db_pool = None
 manager_collector = None
 otlp_collector = None
+log_ingest_service = None
 token_manager = TokenManager()
 
 # Models
@@ -162,7 +164,7 @@ async def run_otlp_collector():
 @app.on_event("startup")
 async def startup():
     """Initialize database and start collectors"""
-    global db_pool, manager_collector, otlp_collector
+    global db_pool, manager_collector, otlp_collector, log_ingest_service
 
     try:
         # Create database pool
@@ -174,7 +176,18 @@ async def startup():
             # Create OTLP tables (manager tables already created by init.sql)
             with open("/app/sql/otlp_tables.sql", "r") as f:
                 await conn.execute(f.read())
+            # Create service logs tables
+            try:
+                with open("/app/sql/007_service_logs.sql", "r") as f:
+                    await conn.execute(f.read())
+                logger.info("Service logs tables initialized")
+            except Exception as e:
+                logger.warning(f"Service logs migration may have already run: {e}")
             logger.info("Database tables initialized")
+
+        # Initialize log ingest service
+        log_ingest_service = LogIngestService(db_pool)
+        logger.info("Log ingest service initialized")
 
         # Start manager collector with shared pool
         manager_collector = ManagerCollector(DATABASE_URL, pool=db_pool)
@@ -662,6 +675,176 @@ async def remove_agent_token(agent_name: str, user: Dict = Depends(require_auth)
         }
     else:
         raise HTTPException(status_code=404, detail="Agent not found")
+
+# ============================================
+# Service Log Ingestion Endpoints
+# ============================================
+
+class ServiceTokenCreate(BaseModel):
+    service_name: str
+    description: Optional[str] = None
+
+@app.post("/api/v1/logs/ingest")
+async def ingest_logs(request: Request):
+    """
+    Ingest logs from external services (Billing, Proxy, Manager).
+
+    Authentication: Bearer token in Authorization header
+    Content-Type: application/x-ndjson (newline-delimited JSON) or application/json
+
+    Example:
+        curl -X POST https://agents.ciris.ai/lens/api/v1/logs/ingest \
+          -H "Authorization: Bearer svc_xxx" \
+          -H "Content-Type: application/x-ndjson" \
+          -d '{"timestamp":"2025-12-11T12:00:00Z","level":"INFO","event":"request_completed","message":"OK"}'
+    """
+    if not log_ingest_service:
+        raise HTTPException(status_code=503, detail="Log ingestion service not available")
+
+    # Extract bearer token
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
+
+    token = auth_header[7:]  # Remove "Bearer "
+
+    # Verify token
+    service_name = await log_ingest_service.verify_token(token)
+    if not service_name:
+        raise HTTPException(status_code=401, detail="Invalid service token")
+
+    # Parse body
+    content_type = request.headers.get("Content-Type", "application/json")
+    body = await request.body()
+
+    try:
+        if "ndjson" in content_type:
+            # Newline-delimited JSON
+            logs = []
+            for line in body.decode("utf-8").strip().split("\n"):
+                if line.strip():
+                    logs.append(json.loads(line))
+        else:
+            # Regular JSON (single log or array)
+            data = json.loads(body)
+            if isinstance(data, list):
+                logs = data
+            else:
+                logs = [data]
+    except json.JSONDecodeError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid JSON: {e}")
+
+    if not logs:
+        return {"status": "ok", "accepted": 0, "rejected": 0, "errors": []}
+
+    # Ingest logs
+    result = await log_ingest_service.ingest_logs(service_name, logs)
+
+    return {"status": "ok", **result}
+
+
+@app.get("/api/admin/service-tokens")
+async def get_service_tokens(user: Dict = Depends(require_auth)):
+    """Get all service tokens (without actual token values)."""
+    if not log_ingest_service:
+        raise HTTPException(status_code=503, detail="Log ingestion service not available")
+
+    tokens = await log_ingest_service.get_tokens()
+    return {"tokens": tokens}
+
+
+@app.post("/api/admin/service-tokens")
+async def create_service_token(config: ServiceTokenCreate, user: Dict = Depends(require_auth)):
+    """
+    Create a new service token.
+    Returns the raw token - this is the only time it will be shown!
+    """
+    if not log_ingest_service:
+        raise HTTPException(status_code=503, detail="Log ingestion service not available")
+
+    raw_token = await log_ingest_service.create_token(
+        service_name=config.service_name,
+        description=config.description,
+        created_by=user["email"]
+    )
+
+    return {
+        "status": "created",
+        "service_name": config.service_name,
+        "token": raw_token,
+        "warning": "Save this token now - it cannot be retrieved later!"
+    }
+
+
+@app.delete("/api/admin/service-tokens/{service_name}")
+async def revoke_service_token(service_name: str, user: Dict = Depends(require_auth)):
+    """Revoke a service token."""
+    if not log_ingest_service:
+        raise HTTPException(status_code=503, detail="Log ingestion service not available")
+
+    success = await log_ingest_service.revoke_token(service_name)
+
+    if success:
+        return {"status": "revoked", "service_name": service_name}
+    else:
+        raise HTTPException(status_code=404, detail="Service token not found")
+
+
+@app.get("/api/admin/service-logs")
+async def get_service_logs(
+    service_name: Optional[str] = None,
+    level: Optional[str] = None,
+    limit: int = 100,
+    user: Dict = Depends(require_auth)
+):
+    """Get recent service logs with optional filtering."""
+    if not db_pool:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    async with db_pool.acquire() as conn:
+        query = """
+            SELECT service_name, server_id, timestamp, level, event, logger,
+                   message, request_id, trace_id, user_hash, attributes
+            FROM cirislens.service_logs
+            WHERE 1=1
+        """
+        params = []
+        param_count = 1
+
+        if service_name:
+            query += f" AND service_name = ${param_count}"
+            params.append(service_name)
+            param_count += 1
+
+        if level:
+            query += f" AND level = ${param_count}"
+            params.append(level.upper())
+            param_count += 1
+
+        query += f" ORDER BY timestamp DESC LIMIT ${param_count}"
+        params.append(min(limit, 1000))
+
+        rows = await conn.fetch(query, *params)
+
+        logs = [
+            {
+                "service_name": row["service_name"],
+                "server_id": row["server_id"],
+                "timestamp": row["timestamp"].isoformat(),
+                "level": row["level"],
+                "event": row["event"],
+                "logger": row["logger"],
+                "message": row["message"],
+                "request_id": row["request_id"],
+                "trace_id": row["trace_id"],
+                "user_hash": row["user_hash"],
+                "attributes": row["attributes"],
+            }
+            for row in rows
+        ]
+
+        return {"logs": logs, "count": len(logs)}
+
 
 # WebSocket endpoint placeholder
 @app.websocket("/ws/admin/agents")
