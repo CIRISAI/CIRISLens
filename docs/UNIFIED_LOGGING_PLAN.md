@@ -1,7 +1,8 @@
 # CIRISLens Unified Logging Platform Plan
 
 **Created**: 2025-12-10
-**Status**: Proposal
+**Updated**: 2025-12-11
+**Status**: In Progress (Phase 1 Complete)
 **Author**: Claude Code (for Eric Moore)
 
 ## Executive Summary
@@ -26,10 +27,10 @@ Extend CIRISLens to become the centralized log aggregation and observability pla
 | `agent_logs` | Agent application logs | 14 days |
 | `discovered_agents` | Agent registry | Indefinite |
 
-### Public Dashboard Status
-- Currently exposed at `/lens/` with anonymous read access
+### Dashboard Access Status (Updated 2025-12-11)
+- **PRIVATE**: `/lens/` now requires @ciris.ai Google OAuth login
 - Shows agent health, cognitive states, resource usage
-- **Risk**: If we add service logs, sensitive data could be exposed
+- Safe to add service logs - only authenticated CIRIS team members can view
 
 ---
 
@@ -450,11 +451,16 @@ def sanitize_log(record: dict) -> dict:
 
 ## Implementation Checklist
 
-### Phase 1: Make /lens/ Private
-- [ ] Update nginx config to require auth for `/lens/`
-- [ ] Configure Grafana Google OAuth (reuse existing CIRIS OAuth)
-- [ ] Test access with @ciris.ai accounts
-- [ ] Remove `GF_AUTH_ANONYMOUS_ENABLED=true` from docker-compose
+### Phase 1: Make /lens/ Private ✅ COMPLETE (2025-12-11)
+- [x] ~~Update nginx config to require auth for `/lens/`~~ (Not needed - Grafana handles auth internally)
+- [x] Configure Grafana Google OAuth (reuse existing CIRIS OAuth)
+- [x] Test access with @ciris.ai accounts
+- [x] Remove `GF_AUTH_ANONYMOUS_ENABLED=true` from docker-compose
+
+**Implementation notes:**
+- Used Grafana's built-in Google OAuth instead of nginx auth_request
+- Added `https://agents.ciris.ai/lens/login/google` to Google Cloud Console redirect URIs
+- Restricted to `@ciris.ai` domain via `GF_AUTH_GOOGLE_ALLOWED_DOMAINS`
 
 ### Phase 2: Add Log Ingestion
 - [ ] Create `service_logs` table migration
@@ -514,11 +520,64 @@ No additional containers needed - existing CIRISLens API handles ingestion.
 
 ---
 
+## Regulatory Compliance Research (2025-12-11)
+
+Research conducted on AI regulatory requirements for CIRIS Android app billing/proxy usage data.
+
+### EU Regulations
+
+**GDPR (General Data Protection Regulation)**
+- **Storage Limitation Principle**: Delete personal data when no longer needed for original purpose
+- No specific retention period mandated - must be "no longer than necessary"
+- Must document and justify retention periods in privacy policy
+
+**EU AI Act (2024)**
+- **10-year retention** required for technical documentation and logs for high-risk AI systems
+- This applies to system logs, NOT personal data (GDPR still requires minimization)
+- Logs must include: input data characteristics, training decisions, system modifications
+- **Effective**: August 2025 for most provisions
+
+### California Regulations
+
+**CCPA/CPRA (2025 Updates)**
+- Must specify **exact retention periods** for each data category (not "as long as necessary")
+- **5-year minimum** for risk assessment documentation
+- **Geolocation data**: Maximum 1 year after last user interaction
+- **Penalties**: $7,988 per intentional violation (2025 adjusted amount)
+
+**ADMT (Automated Decision-Making Technology)**
+- Compliance required by **January 1, 2027**
+- Must disclose use of AI in decisions affecting consumers
+- Opt-out rights for profiling
+
+### Recommended Retention Policy for CIRIS
+
+| Data Type | Retention | Justification |
+|-----------|-----------|---------------|
+| Agent telemetry (metrics) | 30 days detail, 1 year aggregates | Operational needs |
+| Agent logs/traces | 14 days | Debugging, not personal data |
+| Billing transactions | 7 years | Financial audit requirements |
+| Usage logs (with user hash) | 90 days | Service improvement |
+| Geolocation (if any) | Do not store | CCPA restriction |
+| AI decision logs | 10 years (aggregated) | EU AI Act compliance |
+
+### Key Takeaways
+
+1. **Separate personal data from system logs** - Different retention rules apply
+2. **Hash user identifiers** - Already implemented (`user_hash` field)
+3. **Document everything** - Retention justification must be written
+4. **Billing data is special** - Financial regulations require longer retention than GDPR minimization
+5. **EU AI Act is coming** - Plan for 10-year retention of AI system documentation
+
+---
+
 ## Questions for Review
 
-1. **Public dashboards**: Do we have users relying on `/lens/` being public? Should we announce the change?
+1. ~~**Public dashboards**: Do we have users relying on `/lens/` being public? Should we announce the change?~~
+   **RESOLVED**: Made private on 2025-12-11
 
 2. **Retention periods**: 30 days for service logs sufficient? Billing audit logs may need 90+ days.
+   **UPDATE**: See regulatory research above - billing needs 7 years, usage logs 90 days recommended
 
 3. **Alert destinations**: Where should alerts go? Discord? Email? PagerDuty?
 
