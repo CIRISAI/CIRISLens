@@ -579,6 +579,7 @@ async def admin_interface(request: Request):
     </div>
 
     <script>
+        // nginx maps /lens/backend/ -> /api/, so we call /lens/backend/admin/ -> /api/admin/
         const API_BASE = '/lens/backend';
 
         // Tab switching
@@ -606,12 +607,12 @@ async def admin_interface(request: Request):
         // Load tokens
         async function loadTokens() {{
             try {{
-                const response = await fetch(`${{API_BASE}}/api/admin/service-tokens`, {{
+                const response = await fetch(`${{API_BASE}}/admin/service-tokens`, {{
                     credentials: 'include'
                 }});
 
                 if (response.status === 401) {{
-                    window.location.href = `${{API_BASE}}/api/admin/auth/login`;
+                    window.location.href = `${{API_BASE}}/admin/auth/login`;
                     return;
                 }}
 
@@ -666,7 +667,7 @@ async def admin_interface(request: Request):
             }}
 
             try {{
-                const response = await fetch(`${{API_BASE}}/api/admin/service-tokens`, {{
+                const response = await fetch(`${{API_BASE}}/admin/service-tokens`, {{
                     method: 'POST',
                     credentials: 'include',
                     headers: {{ 'Content-Type': 'application/json' }},
@@ -704,7 +705,7 @@ async def admin_interface(request: Request):
             }}
 
             try {{
-                const response = await fetch(`${{API_BASE}}/api/admin/service-tokens/${{serviceName}}`, {{
+                const response = await fetch(`${{API_BASE}}/admin/service-tokens/${{serviceName}}`, {{
                     method: 'DELETE',
                     credentials: 'include'
                 }});
@@ -735,7 +736,7 @@ async def admin_interface(request: Request):
             document.getElementById('logs-table').classList.add('hidden');
 
             try {{
-                let url = `${{API_BASE}}/api/admin/service-logs?limit=${{limit}}`;
+                let url = `${{API_BASE}}/admin/service-logs?limit=${{limit}}`;
                 if (service) url += `&service_name=${{service}}`;
                 if (level) url += `&level=${{level}}`;
 
@@ -783,7 +784,7 @@ async def admin_interface(request: Request):
 
         // Logout
         async function logout() {{
-            await fetch(`${{API_BASE}}/api/admin/auth/logout`, {{
+            await fetch(`${{API_BASE}}/admin/auth/logout`, {{
                 method: 'POST',
                 credentials: 'include'
             }});
