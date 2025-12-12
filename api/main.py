@@ -238,19 +238,563 @@ async def admin_interface(request: Request):
     user = get_current_user(request)
     if not user:
         return RedirectResponse(url="/api/admin/auth/login")
-    
-    # In production, this would serve the actual admin HTML
-    return HTMLResponse("""
-    <!DOCTYPE html>
-    <html>
-    <head><title>CIRISLens Admin</title></head>
-    <body>
-        <h1>CIRISLens Admin Interface</h1>
-        <p>Logged in as: """ + user['email'] + """</p>
-        <p>This is a mock interface for development.</p>
-        <a href="/api/admin/auth/logout">Logout</a>
-    </body>
-    </html>
+
+    return HTMLResponse(f"""
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CIRISLens Admin</title>
+    <style>
+        * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+        body {{
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0f172a;
+            color: #e2e8f0;
+            min-height: 100vh;
+        }}
+        .header {{
+            background: #1e293b;
+            border-bottom: 1px solid #334155;
+            padding: 1rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }}
+        .header h1 {{
+            font-size: 1.5rem;
+            color: #38bdf8;
+        }}
+        .user-info {{
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }}
+        .user-info span {{ color: #94a3b8; }}
+        .logout-btn {{
+            background: #475569;
+            color: #e2e8f0;
+            border: none;
+            padding: 0.5rem 1rem;
+            border-radius: 6px;
+            cursor: pointer;
+            text-decoration: none;
+        }}
+        .logout-btn:hover {{ background: #64748b; }}
+        .container {{
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 2rem;
+        }}
+        .card {{
+            background: #1e293b;
+            border: 1px solid #334155;
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+        }}
+        .card h2 {{
+            color: #38bdf8;
+            margin-bottom: 1rem;
+            font-size: 1.25rem;
+        }}
+        .form-row {{
+            display: flex;
+            gap: 1rem;
+            margin-bottom: 1rem;
+            flex-wrap: wrap;
+        }}
+        .form-group {{
+            flex: 1;
+            min-width: 200px;
+        }}
+        .form-group label {{
+            display: block;
+            margin-bottom: 0.5rem;
+            color: #94a3b8;
+            font-size: 0.875rem;
+        }}
+        .form-group input, .form-group select {{
+            width: 100%;
+            padding: 0.75rem;
+            background: #0f172a;
+            border: 1px solid #334155;
+            border-radius: 6px;
+            color: #e2e8f0;
+            font-size: 1rem;
+        }}
+        .form-group input:focus, .form-group select:focus {{
+            outline: none;
+            border-color: #38bdf8;
+        }}
+        .btn {{
+            padding: 0.75rem 1.5rem;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 1rem;
+            font-weight: 500;
+            transition: all 0.2s;
+        }}
+        .btn-primary {{
+            background: #0ea5e9;
+            color: white;
+        }}
+        .btn-primary:hover {{ background: #0284c7; }}
+        .btn-danger {{
+            background: #dc2626;
+            color: white;
+        }}
+        .btn-danger:hover {{ background: #b91c1c; }}
+        .btn-sm {{
+            padding: 0.5rem 1rem;
+            font-size: 0.875rem;
+        }}
+        table {{
+            width: 100%;
+            border-collapse: collapse;
+        }}
+        th, td {{
+            text-align: left;
+            padding: 0.75rem;
+            border-bottom: 1px solid #334155;
+        }}
+        th {{
+            color: #94a3b8;
+            font-weight: 500;
+            font-size: 0.875rem;
+        }}
+        .status-enabled {{ color: #22c55e; }}
+        .status-disabled {{ color: #ef4444; }}
+        .token-display {{
+            background: #0f172a;
+            border: 1px solid #22c55e;
+            border-radius: 6px;
+            padding: 1rem;
+            margin: 1rem 0;
+            font-family: monospace;
+            word-break: break-all;
+        }}
+        .token-warning {{
+            background: #422006;
+            border: 1px solid #f59e0b;
+            border-radius: 6px;
+            padding: 1rem;
+            margin: 1rem 0;
+            color: #fbbf24;
+        }}
+        .alert {{
+            padding: 1rem;
+            border-radius: 6px;
+            margin-bottom: 1rem;
+        }}
+        .alert-success {{
+            background: #064e3b;
+            border: 1px solid #10b981;
+            color: #6ee7b7;
+        }}
+        .alert-error {{
+            background: #450a0a;
+            border: 1px solid #dc2626;
+            color: #fca5a5;
+        }}
+        .hidden {{ display: none; }}
+        .tabs {{
+            display: flex;
+            gap: 0.5rem;
+            margin-bottom: 1.5rem;
+        }}
+        .tab {{
+            padding: 0.75rem 1.5rem;
+            background: #1e293b;
+            border: 1px solid #334155;
+            border-radius: 6px 6px 0 0;
+            cursor: pointer;
+            color: #94a3b8;
+        }}
+        .tab.active {{
+            background: #334155;
+            color: #38bdf8;
+            border-bottom-color: #334155;
+        }}
+        .copy-btn {{
+            background: #475569;
+            color: #e2e8f0;
+            border: none;
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.75rem;
+            margin-left: 0.5rem;
+        }}
+        .copy-btn:hover {{ background: #64748b; }}
+        .empty-state {{
+            text-align: center;
+            padding: 3rem;
+            color: #64748b;
+        }}
+        .loading {{
+            text-align: center;
+            padding: 2rem;
+            color: #64748b;
+        }}
+    </style>
+</head>
+<body>
+    <header class="header">
+        <h1>CIRISLens Admin</h1>
+        <div class="user-info">
+            <span>{user['email']}</span>
+            <a href="#" onclick="logout()" class="logout-btn">Logout</a>
+        </div>
+    </header>
+
+    <div class="container">
+        <div class="tabs">
+            <div class="tab active" onclick="showTab('tokens')">Service Tokens</div>
+            <div class="tab" onclick="showTab('logs')">Service Logs</div>
+        </div>
+
+        <div id="alert-container"></div>
+
+        <!-- Service Tokens Tab -->
+        <div id="tokens-tab">
+            <div class="card">
+                <h2>Create Service Token</h2>
+                <p style="color: #64748b; margin-bottom: 1rem;">
+                    Generate tokens for CIRISBilling, CIRISProxy, and CIRISManager to send logs.
+                </p>
+                <form id="create-token-form" onsubmit="createToken(event)">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="service_name">Service Name</label>
+                            <select id="service_name" required>
+                                <option value="">Select a service...</option>
+                                <option value="cirisbilling">CIRISBilling</option>
+                                <option value="cirisproxy">CIRISProxy</option>
+                                <option value="cirismanager">CIRISManager</option>
+                                <option value="custom">Custom...</option>
+                            </select>
+                        </div>
+                        <div class="form-group" id="custom-name-group" style="display: none;">
+                            <label for="custom_name">Custom Service Name</label>
+                            <input type="text" id="custom_name" placeholder="my-service">
+                        </div>
+                        <div class="form-group">
+                            <label for="description">Description (optional)</label>
+                            <input type="text" id="description" placeholder="Production billing service">
+                        </div>
+                    </div>
+                    <button type="submit" class="btn btn-primary">Generate Token</button>
+                </form>
+
+                <div id="new-token-display" class="hidden">
+                    <div class="token-warning">
+                        <strong>Save this token now!</strong> It will not be shown again.
+                    </div>
+                    <div class="token-display">
+                        <span id="new-token-value"></span>
+                        <button class="copy-btn" onclick="copyToken()">Copy</button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>Active Service Tokens</h2>
+                <div id="tokens-loading" class="loading">Loading tokens...</div>
+                <div id="tokens-empty" class="empty-state hidden">
+                    No service tokens configured yet.
+                </div>
+                <table id="tokens-table" class="hidden">
+                    <thead>
+                        <tr>
+                            <th>Service</th>
+                            <th>Description</th>
+                            <th>Created</th>
+                            <th>Last Used</th>
+                            <th>Status</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tokens-body"></tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Service Logs Tab -->
+        <div id="logs-tab" class="hidden">
+            <div class="card">
+                <h2>Filter Logs</h2>
+                <form id="filter-logs-form" onsubmit="filterLogs(event)">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="log_service">Service</label>
+                            <select id="log_service">
+                                <option value="">All Services</option>
+                                <option value="cirisbilling">CIRISBilling</option>
+                                <option value="cirisproxy">CIRISProxy</option>
+                                <option value="cirismanager">CIRISManager</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="log_level">Level</label>
+                            <select id="log_level">
+                                <option value="">All Levels</option>
+                                <option value="ERROR">ERROR</option>
+                                <option value="WARNING">WARNING</option>
+                                <option value="INFO">INFO</option>
+                                <option value="DEBUG">DEBUG</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="log_limit">Limit</label>
+                            <input type="number" id="log_limit" value="100" min="10" max="1000">
+                        </div>
+                    </div>
+                    <button type="submit" class="btn btn-primary">Search</button>
+                </form>
+            </div>
+
+            <div class="card">
+                <h2>Recent Logs</h2>
+                <div id="logs-loading" class="loading hidden">Loading logs...</div>
+                <div id="logs-empty" class="empty-state">
+                    No logs found. Click Search to load logs.
+                </div>
+                <table id="logs-table" class="hidden">
+                    <thead>
+                        <tr>
+                            <th>Timestamp</th>
+                            <th>Service</th>
+                            <th>Level</th>
+                            <th>Event</th>
+                            <th>Message</th>
+                        </tr>
+                    </thead>
+                    <tbody id="logs-body"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = '/lens/backend';
+
+        // Tab switching
+        function showTab(tab) {{
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelector(`[onclick="showTab('${{tab}}')"]`).classList.add('active');
+
+            document.getElementById('tokens-tab').classList.toggle('hidden', tab !== 'tokens');
+            document.getElementById('logs-tab').classList.toggle('hidden', tab !== 'logs');
+        }}
+
+        // Alert display
+        function showAlert(message, type) {{
+            const container = document.getElementById('alert-container');
+            container.innerHTML = `<div class="alert alert-${{type}}">${{message}}</div>`;
+            setTimeout(() => container.innerHTML = '', 5000);
+        }}
+
+        // Custom service name toggle
+        document.getElementById('service_name').addEventListener('change', function() {{
+            const customGroup = document.getElementById('custom-name-group');
+            customGroup.style.display = this.value === 'custom' ? 'block' : 'none';
+        }});
+
+        // Load tokens
+        async function loadTokens() {{
+            try {{
+                const response = await fetch(`${{API_BASE}}/api/admin/service-tokens`, {{
+                    credentials: 'include'
+                }});
+
+                if (response.status === 401) {{
+                    window.location.href = `${{API_BASE}}/api/admin/auth/login`;
+                    return;
+                }}
+
+                const data = await response.json();
+                const tokens = data.tokens || [];
+
+                document.getElementById('tokens-loading').classList.add('hidden');
+
+                if (tokens.length === 0) {{
+                    document.getElementById('tokens-empty').classList.remove('hidden');
+                    document.getElementById('tokens-table').classList.add('hidden');
+                }} else {{
+                    document.getElementById('tokens-empty').classList.add('hidden');
+                    document.getElementById('tokens-table').classList.remove('hidden');
+
+                    const tbody = document.getElementById('tokens-body');
+                    tbody.innerHTML = tokens.map(t => `
+                        <tr>
+                            <td><strong>${{t.service_name}}</strong></td>
+                            <td>${{t.description || '-'}}</td>
+                            <td>${{formatDate(t.created_at)}}</td>
+                            <td>${{t.last_used_at ? formatDate(t.last_used_at) : 'Never'}}</td>
+                            <td class="${{t.enabled ? 'status-enabled' : 'status-disabled'}}">
+                                ${{t.enabled ? 'Active' : 'Revoked'}}
+                            </td>
+                            <td>
+                                ${{t.enabled ? `<button class="btn btn-danger btn-sm" onclick="revokeToken('${{t.service_name}}')">Revoke</button>` : ''}}
+                            </td>
+                        </tr>
+                    `).join('');
+                }}
+            }} catch (error) {{
+                document.getElementById('tokens-loading').innerHTML = 'Error loading tokens';
+                console.error('Failed to load tokens:', error);
+            }}
+        }}
+
+        // Create token
+        async function createToken(event) {{
+            event.preventDefault();
+
+            let serviceName = document.getElementById('service_name').value;
+            if (serviceName === 'custom') {{
+                serviceName = document.getElementById('custom_name').value;
+            }}
+
+            const description = document.getElementById('description').value;
+
+            if (!serviceName) {{
+                showAlert('Please select or enter a service name', 'error');
+                return;
+            }}
+
+            try {{
+                const response = await fetch(`${{API_BASE}}/api/admin/service-tokens`, {{
+                    method: 'POST',
+                    credentials: 'include',
+                    headers: {{ 'Content-Type': 'application/json' }},
+                    body: JSON.stringify({{ service_name: serviceName, description }})
+                }});
+
+                const data = await response.json();
+
+                if (response.ok) {{
+                    document.getElementById('new-token-value').textContent = data.token;
+                    document.getElementById('new-token-display').classList.remove('hidden');
+                    showAlert(`Token created for ${{serviceName}}`, 'success');
+                    loadTokens();
+                }} else {{
+                    showAlert(data.detail || 'Failed to create token', 'error');
+                }}
+            }} catch (error) {{
+                showAlert('Error creating token', 'error');
+                console.error('Failed to create token:', error);
+            }}
+        }}
+
+        // Copy token
+        function copyToken() {{
+            const token = document.getElementById('new-token-value').textContent;
+            navigator.clipboard.writeText(token).then(() => {{
+                showAlert('Token copied to clipboard', 'success');
+            }});
+        }}
+
+        // Revoke token
+        async function revokeToken(serviceName) {{
+            if (!confirm(`Are you sure you want to revoke the token for ${{serviceName}}?`)) {{
+                return;
+            }}
+
+            try {{
+                const response = await fetch(`${{API_BASE}}/api/admin/service-tokens/${{serviceName}}`, {{
+                    method: 'DELETE',
+                    credentials: 'include'
+                }});
+
+                if (response.ok) {{
+                    showAlert(`Token revoked for ${{serviceName}}`, 'success');
+                    loadTokens();
+                }} else {{
+                    const data = await response.json();
+                    showAlert(data.detail || 'Failed to revoke token', 'error');
+                }}
+            }} catch (error) {{
+                showAlert('Error revoking token', 'error');
+                console.error('Failed to revoke token:', error);
+            }}
+        }}
+
+        // Load logs
+        async function filterLogs(event) {{
+            if (event) event.preventDefault();
+
+            const service = document.getElementById('log_service').value;
+            const level = document.getElementById('log_level').value;
+            const limit = document.getElementById('log_limit').value;
+
+            document.getElementById('logs-loading').classList.remove('hidden');
+            document.getElementById('logs-empty').classList.add('hidden');
+            document.getElementById('logs-table').classList.add('hidden');
+
+            try {{
+                let url = `${{API_BASE}}/api/admin/service-logs?limit=${{limit}}`;
+                if (service) url += `&service_name=${{service}}`;
+                if (level) url += `&level=${{level}}`;
+
+                const response = await fetch(url, {{ credentials: 'include' }});
+                const data = await response.json();
+                const logs = data.logs || [];
+
+                document.getElementById('logs-loading').classList.add('hidden');
+
+                if (logs.length === 0) {{
+                    document.getElementById('logs-empty').classList.remove('hidden');
+                    document.getElementById('logs-empty').textContent = 'No logs found matching criteria.';
+                }} else {{
+                    document.getElementById('logs-table').classList.remove('hidden');
+
+                    const tbody = document.getElementById('logs-body');
+                    tbody.innerHTML = logs.map(log => `
+                        <tr>
+                            <td style="white-space: nowrap;">${{formatDate(log.timestamp)}}</td>
+                            <td>${{log.service_name}}</td>
+                            <td class="${{log.level === 'ERROR' ? 'status-disabled' : log.level === 'WARNING' ? 'status-enabled' : ''}}">
+                                ${{log.level}}
+                            </td>
+                            <td>${{log.event || '-'}}</td>
+                            <td style="max-width: 400px; overflow: hidden; text-overflow: ellipsis;">
+                                ${{log.message || '-'}}
+                            </td>
+                        </tr>
+                    `).join('');
+                }}
+            }} catch (error) {{
+                document.getElementById('logs-loading').classList.add('hidden');
+                document.getElementById('logs-empty').classList.remove('hidden');
+                document.getElementById('logs-empty').textContent = 'Error loading logs.';
+                console.error('Failed to load logs:', error);
+            }}
+        }}
+
+        // Format date
+        function formatDate(isoString) {{
+            if (!isoString) return '-';
+            const date = new Date(isoString);
+            return date.toLocaleString();
+        }}
+
+        // Logout
+        async function logout() {{
+            await fetch(`${{API_BASE}}/api/admin/auth/logout`, {{
+                method: 'POST',
+                credentials: 'include'
+            }});
+            window.location.href = '/lens/';
+        }}
+
+        // Initial load
+        loadTokens();
+    </script>
+</body>
+</html>
     """)
 
 # OAuth routes
