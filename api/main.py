@@ -45,7 +45,7 @@ app.add_middleware(
 # Configuration from environment
 OAUTH_CLIENT_ID = os.getenv("OAUTH_CLIENT_ID", "mock-client-id")
 OAUTH_CLIENT_SECRET = os.getenv("OAUTH_CLIENT_SECRET", "mock-secret")
-OAUTH_CALLBACK_URL = os.getenv("OAUTH_CALLBACK_URL", "http://localhost:8080/cirislens/api/admin/auth/callback")
+OAUTH_CALLBACK_URL = os.getenv("OAUTH_CALLBACK_URL", "http://localhost:8080/lens/backend/admin/auth/callback")
 MANAGER_API_URL = os.getenv("MANAGER_API_URL", "http://host.docker.internal:8888/manager/v1")
 ALLOWED_DOMAIN = os.getenv("ALLOWED_DOMAIN", "ciris.ai")
 SESSION_SECRET = os.getenv("SESSION_SECRET", "dev-secret-change-in-production")
@@ -266,7 +266,7 @@ async def oauth_login():
             hd="ciris.ai"
         )
         session_id = create_session(mock_user)
-        response = RedirectResponse(url="/cirislens/admin/", status_code=302)
+        response = RedirectResponse(url="/lens/admin/", status_code=302)
         response.set_cookie(key="session_id", value=session_id, httponly=True, samesite="lax")
         return response
     
