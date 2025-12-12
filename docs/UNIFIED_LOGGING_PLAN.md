@@ -491,11 +491,25 @@ curl -X POST http://localhost:8000/api/v1/logs/ingest \
 # - "Bearer abc123.token.xyz" → "Bearer [REDACTED]"
 ```
 
-### Phase 3: Integrate Services
-- [ ] Add LogShipper to CIRISBilling
-- [ ] Add LogShipper to CIRISProxy
-- [ ] Add LogShipper to CIRISManager
-- [ ] Verify logs appearing in CIRISLens
+### Phase 3: Integrate Services ✅ COMPLETE (2025-12-12)
+- [x] Add LogShipper to CIRISBilling
+- [x] Add LogShipper to CIRISProxy
+- [x] Add LogShipper to CIRISManager
+- [x] Service tokens generated via Admin UI
+- [ ] Verify logs appearing in CIRISLens (pending nginx route fix)
+
+**Assets created:**
+- `sdk/logshipper.py` - Drop-in log shipping module
+- `sdk/INTEGRATION.md` - Integration guide for all services
+- Admin UI at `/lens/admin/` for token management
+
+**Nginx route needed:**
+```nginx
+location /lens/api/ {
+    proxy_pass http://127.0.0.1:8000/api/;
+    ...
+}
+```
 
 ### Phase 4: Create Dashboards
 - [ ] Service Logs overview dashboard
