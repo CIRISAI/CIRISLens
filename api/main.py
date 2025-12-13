@@ -28,11 +28,17 @@ from token_manager import TokenManager
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Disable docs in production
+IS_PRODUCTION = os.getenv("ENV", "").lower() == "production"
+
 # Initialize FastAPI app
 app = FastAPI(
     title="CIRISLens API",
     description="Telemetry and Observability Platform for CIRIS",
     version="0.1.0-dev",
+    docs_url=None if IS_PRODUCTION else "/docs",
+    redoc_url=None if IS_PRODUCTION else "/redoc",
+    openapi_url=None if IS_PRODUCTION else "/openapi.json",
 )
 
 # CORS configuration
