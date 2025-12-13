@@ -858,8 +858,6 @@ async def oauth_login():
 @app.get("/api/admin/auth/callback")
 async def oauth_callback(code: str, state: str | None = None):
     """Handle OAuth callback from Google"""
-    import httpx
-
     # Exchange code for token
     async with httpx.AsyncClient() as client:
         token_response = await client.post(

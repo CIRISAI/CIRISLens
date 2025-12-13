@@ -57,8 +57,8 @@ COPY --from=builder /opt/venv /opt/venv
 # Copy application code
 COPY . .
 
-# Copy SQL migrations
-COPY sql/ /app/sql/
+# Create sql directory (migrations are mounted at runtime via volumes)
+RUN mkdir -p /app/sql
 
 # Create non-root user for security
 RUN useradd --create-home --shell /bin/bash --uid 1000 cirislens && \
