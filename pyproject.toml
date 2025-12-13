@@ -105,6 +105,8 @@ ignore = [
     "PTH100",   # Path methods
     "PTH120",   # Path methods
     "C401",     # Generator vs comprehension style
+    "RUF059",   # Unpacked variables in test fixtures
+    "PLC0415",  # Import not at top level (fine in tests for lazy imports)
 ]
 # FastAPI route handlers require auth user arg even if not used (dependency injection pattern)
 "api/main.py" = [
