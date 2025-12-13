@@ -197,9 +197,10 @@ async def startup():
 
         # Initialize tables
         async with db_pool.acquire() as conn:
-            # Create OTLP tables (manager tables already created by init.sql)
-            sql_content = Path("/app/sql/otlp_tables.sql").read_text()
-            await conn.execute(sql_content)
+            # Create OTLP tables only if OTLP collection is enabled
+            if os.getenv("OTLP_COLLECTION_ENABLED", "true").lower() == "true":
+                sql_content = Path("/app/sql/otlp_tables.sql").read_text()
+                await conn.execute(sql_content)
             # Create service logs tables
             try:
                 sql_content = Path("/app/sql/007_service_logs.sql").read_text()
