@@ -172,7 +172,7 @@ class TestManagerCollectorWithMocks:
     @pytest.mark.asyncio
     async def test_discover_agents_from_multiple_managers(self, collector, mock_database):
         """Test discovering agents from multiple managers"""
-        collector_instance, conn = collector
+        _collector_instance, conn = collector
 
         # Setup mock discovered agents
         discovered_agents = mock_database.get_recent_agents()
@@ -201,7 +201,7 @@ class TestManagerCollectorWithMocks:
     @pytest.mark.asyncio
     async def test_handle_manager_with_auth(self, collector):
         """Test manager with authentication token"""
-        collector_instance, conn = collector
+        collector_instance, _conn = collector
 
         # Create manager with auth
         manager = MockFactory.create_manager(
@@ -234,7 +234,7 @@ class TestManagerCollectorWithMocks:
     @pytest.mark.asyncio
     async def test_manager_error_handling(self, collector):
         """Test error handling with typed manager"""
-        collector_instance, conn = collector
+        collector_instance, _conn = collector
 
         # Create manager that will fail
         manager = MockFactory.create_manager(
@@ -286,7 +286,7 @@ class TestManagerCollectorWithMocks:
     @pytest.mark.asyncio
     async def test_telemetry_history_retrieval(self, collector, mock_database):
         """Test retrieving telemetry history with typed data"""
-        collector_instance, conn = collector
+        _collector_instance, conn = collector
 
         manager = mock_database.managers[0]
         history = mock_database.get_manager_telemetry(manager.id, limit=5)
