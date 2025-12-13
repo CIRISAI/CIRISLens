@@ -3,24 +3,26 @@ CIRISLens API Service
 Mock implementation for development
 """
 
-from fastapi import FastAPI, HTTPException, Depends, Request, Response, BackgroundTasks
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, EmailStr
-from typing import Optional, List, Dict, Any
-import httpx
-import asyncpg
-import os
+import asyncio
 import json
-import hashlib
+import logging
+import os
 import secrets
 from datetime import datetime, timedelta
-import logging
-import asyncio
+from pathlib import Path
+from typing import Any
+
+import asyncpg
+import httpx
+from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from pydantic import BaseModel, EmailStr
+
+from log_ingest import LogIngestService
 from manager_collector import ManagerCollector
 from otlp_collector import OTLPCollector
 from token_manager import TokenManager
-from log_ingest import LogIngestService
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -30,7 +32,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="CIRISLens API",
     description="Telemetry and Observability Platform for CIRIS",
-    version="0.1.0-dev"
+    version="0.1.0-dev",
 )
 
 # CORS configuration
@@ -45,7 +47,9 @@ app.add_middleware(
 # Configuration from environment
 OAUTH_CLIENT_ID = os.getenv("OAUTH_CLIENT_ID", "mock-client-id")
 OAUTH_CLIENT_SECRET = os.getenv("OAUTH_CLIENT_SECRET", "mock-secret")
-OAUTH_CALLBACK_URL = os.getenv("OAUTH_CALLBACK_URL", "http://localhost:8080/lens/backend/admin/auth/callback")
+OAUTH_CALLBACK_URL = os.getenv(
+    "OAUTH_CALLBACK_URL", "http://localhost:8080/lens/backend/admin/auth/callback"
+)
 MANAGER_API_URL = os.getenv("MANAGER_API_URL", "http://host.docker.internal:8888/manager/v1")
 ALLOWED_DOMAIN = os.getenv("ALLOWED_DOMAIN", "ciris.ai")
 SESSION_SECRET = os.getenv("SESSION_SECRET", "dev-secret-change-in-production")
@@ -56,19 +60,23 @@ telemetry_configs = {}
 visibility_configs = {}
 
 # Database configuration
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://user:password@host:5432/dbname")
+DATABASE_URL = os.getenv(
+    "DATABASE_URL", "postgresql://user:password@host:5432/dbname"
+)
 db_pool = None
 manager_collector = None
 otlp_collector = None
 log_ingest_service = None
 token_manager = TokenManager()
 
+
 # Models
 class OAuthUser(BaseModel):
     email: EmailStr
     name: str
-    picture: Optional[str] = None
-    hd: Optional[str] = None
+    picture: str | None = None
+    hd: str | None = None
+
 
 class TelemetryConfig(BaseModel):
     agent_id: str
@@ -79,6 +87,7 @@ class TelemetryConfig(BaseModel):
     logs_enabled: bool = True
     last_updated: str = ""
     updated_by: str = ""
+
 
 class VisibilityConfig(BaseModel):
     agent_id: str
@@ -92,26 +101,30 @@ class VisibilityConfig(BaseModel):
     last_updated: str = ""
     updated_by: str = ""
 
+
 class ManagerConfig(BaseModel):
     name: str
     url: str
-    description: Optional[str] = ""
-    auth_token: Optional[str] = None
+    description: str | None = ""
+    auth_token: str | None = None
     collection_interval_seconds: int = 30
     enabled: bool = True
 
+
 class ManagerUpdate(BaseModel):
-    name: Optional[str] = None
-    url: Optional[str] = None
-    description: Optional[str] = None
-    auth_token: Optional[str] = None
-    collection_interval_seconds: Optional[int] = None
-    enabled: Optional[bool] = None
+    name: str | None = None
+    url: str | None = None
+    description: str | None = None
+    auth_token: str | None = None
+    collection_interval_seconds: int | None = None
+    enabled: bool | None = None
+
 
 class AgentTokenConfig(BaseModel):
     agent_name: str
     token: str
     url: str
+
 
 # Session management
 def create_session(user: OAuthUser) -> str:
@@ -120,29 +133,32 @@ def create_session(user: OAuthUser) -> str:
     sessions[session_id] = {
         "user": user.dict(),
         "created_at": datetime.utcnow().isoformat(),
-        "expires_at": (datetime.utcnow() + timedelta(hours=24)).isoformat()
+        "expires_at": (datetime.utcnow() + timedelta(hours=24)).isoformat(),
     }
     return session_id
 
-def get_current_user(request: Request) -> Optional[Dict]:
+
+def get_current_user(request: Request) -> dict | None:
     """Get current user from session"""
     session_id = request.cookies.get("session_id")
     if not session_id or session_id not in sessions:
         return None
-    
+
     session = sessions[session_id]
     if datetime.fromisoformat(session["expires_at"]) < datetime.utcnow():
         del sessions[session_id]
         return None
-    
+
     return session["user"]
 
-def require_auth(request: Request) -> Dict:
+
+def require_auth(request: Request) -> dict:
     """Dependency to require authentication"""
     user = get_current_user(request)
     if not user:
         raise HTTPException(status_code=401, detail="Authentication required")
     return user
+
 
 async def run_manager_collector():
     """Wrapper to run manager collector with exception handling"""
@@ -152,6 +168,7 @@ async def run_manager_collector():
         logger.error(f"CRITICAL: Manager collector failed to start: {e}", exc_info=True)
         raise
 
+
 async def run_otlp_collector():
     """Wrapper to run OTLP collector with exception handling"""
     try:
@@ -159,6 +176,7 @@ async def run_otlp_collector():
     except Exception as e:
         logger.error(f"CRITICAL: OTLP collector failed to start: {e}", exc_info=True)
         raise
+
 
 # Startup and shutdown events
 @app.on_event("startup")
@@ -174,12 +192,12 @@ async def startup():
         # Initialize tables
         async with db_pool.acquire() as conn:
             # Create OTLP tables (manager tables already created by init.sql)
-            with open("/app/sql/otlp_tables.sql", "r") as f:
-                await conn.execute(f.read())
+            sql_content = Path("/app/sql/otlp_tables.sql").read_text()
+            await conn.execute(sql_content)
             # Create service logs tables
             try:
-                with open("/app/sql/007_service_logs.sql", "r") as f:
-                    await conn.execute(f.read())
+                sql_content = Path("/app/sql/007_service_logs.sql").read_text()
+                await conn.execute(sql_content)
                 logger.info("Service logs tables initialized")
             except Exception as e:
                 logger.warning(f"Service logs migration may have already run: {e}")
@@ -192,33 +210,43 @@ async def startup():
         # Start manager collector with shared pool
         manager_collector = ManagerCollector(DATABASE_URL, pool=db_pool)
         task = asyncio.create_task(run_manager_collector())
-        task.add_done_callback(lambda t: logger.error(f"Manager collector task ended: {t.exception()}") if t.exception() else None)
+        task.add_done_callback(
+            lambda t: logger.error(f"Manager collector task ended: {t.exception()}")
+            if t.exception()
+            else None
+        )
         logger.info("Manager collector task created")
 
         # Start OTLP collector if enabled
         if os.getenv("OTLP_COLLECTION_ENABLED", "true").lower() == "true":
             otlp_collector = OTLPCollector(DATABASE_URL)
             task = asyncio.create_task(run_otlp_collector())
-            task.add_done_callback(lambda t: logger.error(f"OTLP collector task ended: {t.exception()}") if t.exception() else None)
+            task.add_done_callback(
+                lambda t: logger.error(f"OTLP collector task ended: {t.exception()}")
+                if t.exception()
+                else None
+            )
             logger.info("OTLP collector task created")
 
     except Exception as e:
         logger.error(f"Startup error: {e}", exc_info=True)
         # Continue anyway for development
 
+
 @app.on_event("shutdown")
 async def shutdown():
     """Cleanup on shutdown"""
     global db_pool, manager_collector, otlp_collector
-    
+
     if manager_collector:
         await manager_collector.stop()
-        
+
     if otlp_collector:
         await otlp_collector.stop()
-        
+
     if db_pool:
         await db_pool.close()
+
 
 # Routes
 @app.get("/")
@@ -226,10 +254,12 @@ async def root():
     """Root endpoint"""
     return {"service": "CIRISLens API", "version": "0.1.0-dev", "status": "online"}
 
+
 @app.get("/health")
 async def health():
     """Health check endpoint"""
     return {"status": "healthy", "timestamp": datetime.utcnow().isoformat()}
+
 
 # Admin interface routes
 @app.get("/admin/")
@@ -798,6 +828,7 @@ async def admin_interface(request: Request):
 </html>
     """)
 
+
 # OAuth routes
 @app.get("/api/admin/auth/login")
 async def oauth_login():
@@ -805,16 +836,12 @@ async def oauth_login():
     # For development, mock the OAuth flow
     if OAUTH_CLIENT_ID == "mock-client-id":
         # Development mode - auto-authenticate
-        mock_user = OAuthUser(
-            email="dev@ciris.ai",
-            name="Development User",
-            hd="ciris.ai"
-        )
+        mock_user = OAuthUser(email="dev@ciris.ai", name="Development User", hd="ciris.ai")
         session_id = create_session(mock_user)
         response = RedirectResponse(url="/lens/admin/", status_code=302)
         response.set_cookie(key="session_id", value=session_id, httponly=True, samesite="lax")
         return response
-    
+
     # Production OAuth flow
     params = {
         "client_id": OAUTH_CLIENT_ID,
@@ -822,13 +849,14 @@ async def oauth_login():
         "response_type": "code",
         "scope": "openid email profile",
         "hd": ALLOWED_DOMAIN,
-        "prompt": "select_account"
+        "prompt": "select_account",
     }
     query = "&".join(f"{k}={v}" for k, v in params.items())
     return RedirectResponse(f"https://accounts.google.com/o/oauth2/v2/auth?{query}")
 
+
 @app.get("/api/admin/auth/callback")
-async def oauth_callback(code: str, state: Optional[str] = None):
+async def oauth_callback(code: str, state: str | None = None):
     """Handle OAuth callback from Google"""
     import httpx
 
@@ -842,12 +870,14 @@ async def oauth_callback(code: str, state: Optional[str] = None):
                 "code": code,
                 "grant_type": "authorization_code",
                 "redirect_uri": OAUTH_CALLBACK_URL,
-            }
+            },
         )
 
         if token_response.status_code != 200:
             logger.error(f"Token exchange failed: {token_response.text}")
-            return HTMLResponse(f"<h1>Authentication failed</h1><p>{token_response.text}</p>", status_code=400)
+            return HTMLResponse(
+                f"<h1>Authentication failed</h1><p>{token_response.text}</p>", status_code=400
+            )
 
         tokens = token_response.json()
         access_token = tokens.get("access_token")
@@ -855,7 +885,7 @@ async def oauth_callback(code: str, state: Optional[str] = None):
         # Get user info
         userinfo_response = await client.get(
             "https://www.googleapis.com/oauth2/v2/userinfo",
-            headers={"Authorization": f"Bearer {access_token}"}
+            headers={"Authorization": f"Bearer {access_token}"},
         )
 
         if userinfo_response.status_code != 200:
@@ -867,28 +897,25 @@ async def oauth_callback(code: str, state: Optional[str] = None):
     # Verify domain
     hd = userinfo.get("hd", "")
     if hd != ALLOWED_DOMAIN:
-        return HTMLResponse(f"<h1>Access denied</h1><p>Only @{ALLOWED_DOMAIN} accounts allowed</p>", status_code=403)
+        return HTMLResponse(
+            f"<h1>Access denied</h1><p>Only @{ALLOWED_DOMAIN} accounts allowed</p>", status_code=403
+        )
 
     # Create session
-    user = OAuthUser(
-        email=userinfo.get("email"),
-        name=userinfo.get("name"),
-        hd=hd
-    )
+    user = OAuthUser(email=userinfo.get("email"), name=userinfo.get("name"), hd=hd)
 
     session_id = create_session(user)
     response = RedirectResponse(url="/lens/admin/", status_code=302)
     response.set_cookie(key="session_id", value=session_id, httponly=True, samesite="lax")
     return response
 
+
 @app.get("/api/admin/auth/status")
 async def auth_status(request: Request):
     """Check authentication status"""
     user = get_current_user(request)
-    return {
-        "authenticated": user is not None,
-        "user": user
-    }
+    return {"authenticated": user is not None, "user": user}
+
 
 @app.post("/api/admin/auth/logout")
 async def logout(request: Request):
@@ -896,22 +923,21 @@ async def logout(request: Request):
     session_id = request.cookies.get("session_id")
     if session_id and session_id in sessions:
         del sessions[session_id]
-    
+
     response = JSONResponse({"status": "logged_out"})
     response.delete_cookie("session_id")
     return response
 
+
 # Configuration management routes
 @app.get("/api/admin/configurations")
-async def get_configurations(user: Dict = Depends(require_auth)):
+async def get_configurations(user: dict = Depends(require_auth)):
     """Get all telemetry and visibility configurations"""
-    return {
-        "telemetry": telemetry_configs,
-        "visibility": visibility_configs
-    }
+    return {"telemetry": telemetry_configs, "visibility": visibility_configs}
+
 
 @app.get("/api/admin/agents")
-async def get_agents(user: Dict = Depends(require_auth)):
+async def get_agents(user: dict = Depends(require_auth)):
     """Get all discovered agents from manager"""
     try:
         # Query the manager API (no auth needed)
@@ -921,7 +947,7 @@ async def get_agents(user: Dict = Depends(require_auth)):
                 return response.json()
     except Exception as e:
         logger.error(f"Failed to fetch agents: {e}")
-    
+
     # Return mock data for development
     return {
         "agents": [
@@ -933,25 +959,22 @@ async def get_agents(user: Dict = Depends(require_auth)):
                 "version": "1.4.4-beta",
                 "codename": "Graceful Guardian",
                 "api_port": 8080,
-                "health": "healthy"
+                "health": "healthy",
             }
         ]
     }
 
+
 # Telemetry configuration routes
 @app.get("/api/admin/telemetry/{agent_id}")
-async def get_telemetry_config(agent_id: str, user: Dict = Depends(require_auth)):
+async def get_telemetry_config(agent_id: str, user: dict = Depends(require_auth)):
     """Get telemetry configuration for an agent"""
-    return telemetry_configs.get(agent_id, {
-        "agent_id": agent_id,
-        "enabled": False
-    })
+    return telemetry_configs.get(agent_id, {"agent_id": agent_id, "enabled": False})
+
 
 @app.put("/api/admin/telemetry/{agent_id}")
 async def update_telemetry_config(
-    agent_id: str, 
-    config: TelemetryConfig,
-    user: Dict = Depends(require_auth)
+    agent_id: str, config: TelemetryConfig, user: dict = Depends(require_auth)
 ):
     """Update telemetry configuration for an agent"""
     config.last_updated = datetime.utcnow().isoformat()
@@ -959,11 +982,10 @@ async def update_telemetry_config(
     telemetry_configs[agent_id] = config.dict()
     return {"status": "updated", "config": config}
 
+
 @app.patch("/api/admin/telemetry/{agent_id}")
 async def patch_telemetry_config(
-    agent_id: str,
-    updates: Dict[str, Any],
-    user: Dict = Depends(require_auth)
+    agent_id: str, updates: dict[str, Any], user: dict = Depends(require_auth)
 ):
     """Partially update telemetry configuration"""
     config = telemetry_configs.get(agent_id, {"agent_id": agent_id})
@@ -973,21 +995,19 @@ async def patch_telemetry_config(
     telemetry_configs[agent_id] = config
     return {"status": "updated", "config": config}
 
+
 # Visibility configuration routes
 @app.get("/api/admin/visibility/{agent_id}")
-async def get_visibility_config(agent_id: str, user: Dict = Depends(require_auth)):
+async def get_visibility_config(agent_id: str, user: dict = Depends(require_auth)):
     """Get visibility configuration for an agent"""
-    return visibility_configs.get(agent_id, {
-        "agent_id": agent_id,
-        "public_visible": False,
-        "redact_pii": True
-    })
+    return visibility_configs.get(
+        agent_id, {"agent_id": agent_id, "public_visible": False, "redact_pii": True}
+    )
+
 
 @app.put("/api/admin/visibility/{agent_id}")
 async def update_visibility_config(
-    agent_id: str,
-    config: VisibilityConfig,
-    user: Dict = Depends(require_auth)
+    agent_id: str, config: VisibilityConfig, user: dict = Depends(require_auth)
 ):
     """Update visibility configuration for an agent"""
     config.last_updated = datetime.utcnow().isoformat()
@@ -996,11 +1016,10 @@ async def update_visibility_config(
     visibility_configs[agent_id] = config.dict()
     return {"status": "updated", "config": config}
 
+
 @app.patch("/api/admin/visibility/{agent_id}")
 async def patch_visibility_config(
-    agent_id: str,
-    updates: Dict[str, Any],
-    user: Dict = Depends(require_auth)
+    agent_id: str, updates: dict[str, Any], user: dict = Depends(require_auth)
 ):
     """Partially update visibility configuration"""
     config = visibility_configs.get(agent_id, {"agent_id": agent_id})
@@ -1011,43 +1030,47 @@ async def patch_visibility_config(
     visibility_configs[agent_id] = config
     return {"status": "updated", "config": config}
 
+
 # Manager management routes
 @app.get("/api/admin/managers")
-async def get_managers(user: Dict = Depends(require_auth)):
+async def get_managers(user: dict = Depends(require_auth)):
     """Get all registered managers"""
     if not db_pool:
         return {"managers": []}
-        
+
     async with db_pool.acquire() as conn:
         rows = await conn.fetch("""
-            SELECT id, name, url, description, enabled, last_seen, last_error, 
+            SELECT id, name, url, description, enabled, last_seen, last_error,
                    collection_interval_seconds, added_at
             FROM managers
             ORDER BY name
         """)
-        
+
         managers = []
         for row in rows:
-            managers.append({
-                "id": row["id"],
-                "name": row["name"],
-                "url": row["url"],
-                "description": row["description"],
-                "enabled": row["enabled"],
-                "last_seen": row["last_seen"].isoformat() if row["last_seen"] else None,
-                "last_error": row["last_error"],
-                "collection_interval_seconds": row["collection_interval_seconds"],
-                "added_at": row["added_at"].isoformat() if row["added_at"] else None
-            })
-            
+            managers.append(
+                {
+                    "id": row["id"],
+                    "name": row["name"],
+                    "url": row["url"],
+                    "description": row["description"],
+                    "enabled": row["enabled"],
+                    "last_seen": row["last_seen"].isoformat() if row["last_seen"] else None,
+                    "last_error": row["last_error"],
+                    "collection_interval_seconds": row["collection_interval_seconds"],
+                    "added_at": row["added_at"].isoformat() if row["added_at"] else None,
+                }
+            )
+
         return {"managers": managers}
 
+
 @app.post("/api/admin/managers")
-async def add_manager(config: ManagerConfig, user: Dict = Depends(require_auth)):
+async def add_manager(config: ManagerConfig, user: dict = Depends(require_auth)):
     """Add a new manager to monitor"""
     if not db_pool:
         raise HTTPException(status_code=503, detail="Database not available")
-        
+
     try:
         # Add to database and start collection
         manager_id = await manager_collector.add_manager(
@@ -1055,118 +1078,130 @@ async def add_manager(config: ManagerConfig, user: Dict = Depends(require_auth))
             url=config.url,
             description=config.description,
             auth_token=config.auth_token,
-            collection_interval=config.collection_interval_seconds
+            collection_interval=config.collection_interval_seconds,
         )
-        
+
         return {
             "status": "created",
             "manager_id": manager_id,
-            "message": f"Manager '{config.name}' added successfully"
+            "message": f"Manager '{config.name}' added successfully",
         }
     except Exception as e:
         logger.error(f"Failed to add manager: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
 
 @app.put("/api/admin/managers/{manager_id}")
-async def update_manager(manager_id: int, updates: ManagerUpdate, user: Dict = Depends(require_auth)):
+async def update_manager(
+    manager_id: int, updates: ManagerUpdate, user: dict = Depends(require_auth)
+):
     """Update a manager configuration"""
     if not db_pool:
         raise HTTPException(status_code=503, detail="Database not available")
-        
+
     async with db_pool.acquire() as conn:
         # Build update query dynamically based on provided fields
         update_fields = []
         values = []
         param_count = 1
-        
+
         if updates.name is not None:
             update_fields.append(f"name = ${param_count}")
             values.append(updates.name)
             param_count += 1
-            
+
         if updates.url is not None:
             update_fields.append(f"url = ${param_count}")
             values.append(updates.url)
             param_count += 1
-            
+
         if updates.description is not None:
             update_fields.append(f"description = ${param_count}")
             values.append(updates.description)
             param_count += 1
-            
+
         if updates.auth_token is not None:
             update_fields.append(f"auth_token = ${param_count}")
             values.append(updates.auth_token)
             param_count += 1
-            
+
         if updates.collection_interval_seconds is not None:
             update_fields.append(f"collection_interval_seconds = ${param_count}")
             values.append(updates.collection_interval_seconds)
             param_count += 1
-            
+
         if updates.enabled is not None:
             update_fields.append(f"enabled = ${param_count}")
             values.append(updates.enabled)
             param_count += 1
-            
+
         if not update_fields:
             return {"status": "no_changes"}
-            
+
         values.append(manager_id)
-        query = f"UPDATE managers SET {', '.join(update_fields)} WHERE id = ${param_count}"
-        
+        # Fields are validated against known names, values are parameterized
+        query = f"UPDATE managers SET {', '.join(update_fields)} WHERE id = ${param_count}"  # noqa: S608
+
         await conn.execute(query, *values)
-        
+
     return {"status": "updated", "manager_id": manager_id}
 
+
 @app.delete("/api/admin/managers/{manager_id}")
-async def delete_manager(manager_id: int, user: Dict = Depends(require_auth)):
+async def delete_manager(manager_id: int, user: dict = Depends(require_auth)):
     """Remove a manager (disable collection)"""
     if not manager_collector:
         raise HTTPException(status_code=503, detail="Manager collector not available")
-        
+
     await manager_collector.remove_manager(manager_id)
     return {"status": "deleted", "manager_id": manager_id}
 
+
 @app.get("/api/admin/managers/{manager_id}/agents")
-async def get_manager_agents(manager_id: int, user: Dict = Depends(require_auth)):
+async def get_manager_agents(manager_id: int, user: dict = Depends(require_auth)):
     """Get agents discovered by a specific manager"""
     if not db_pool:
         return {"agents": []}
-        
+
     async with db_pool.acquire() as conn:
-        rows = await conn.fetch("""
-            SELECT agent_id, agent_name, status, cognitive_state, version, 
+        rows = await conn.fetch(
+            """
+            SELECT agent_id, agent_name, status, cognitive_state, version,
                    codename, api_port, health, template, deployment, last_seen
             FROM discovered_agents
             WHERE manager_id = $1 AND last_seen > NOW() - INTERVAL '5 minutes'
             ORDER BY agent_name
-        """, manager_id)
-        
+        """,
+            manager_id,
+        )
+
         agents = []
         for row in rows:
-            agents.append({
-                "agent_id": row["agent_id"],
-                "agent_name": row["agent_name"],
-                "status": row["status"],
-                "cognitive_state": row["cognitive_state"],
-                "version": row["version"],
-                "codename": row["codename"],
-                "api_port": row["api_port"],
-                "health": row["health"],
-                "template": row["template"],
-                "deployment": row["deployment"],
-                "last_seen": row["last_seen"].isoformat() if row["last_seen"] else None
-            })
-            
+            agents.append(
+                {
+                    "agent_id": row["agent_id"],
+                    "agent_name": row["agent_name"],
+                    "status": row["status"],
+                    "cognitive_state": row["cognitive_state"],
+                    "version": row["version"],
+                    "codename": row["codename"],
+                    "api_port": row["api_port"],
+                    "health": row["health"],
+                    "template": row["template"],
+                    "deployment": row["deployment"],
+                    "last_seen": row["last_seen"].isoformat() if row["last_seen"] else None,
+                }
+            )
+
         return {"agents": agents}
 
+
 @app.get("/api/admin/agents/all")
-async def get_all_discovered_agents(user: Dict = Depends(require_auth)):
+async def get_all_discovered_agents(user: dict = Depends(require_auth)):
     """Get all discovered agents from all managers"""
     if not db_pool:
         return {"agents": []}
-        
+
     async with db_pool.acquire() as conn:
         rows = await conn.fetch("""
             SELECT da.*, m.name as manager_name, m.url as manager_url
@@ -1175,95 +1210,95 @@ async def get_all_discovered_agents(user: Dict = Depends(require_auth)):
             WHERE m.enabled = true AND da.last_seen > NOW() - INTERVAL '5 minutes'
             ORDER BY da.agent_name
         """)
-        
+
         agents = []
         for row in rows:
-            agents.append({
-                "agent_id": row["agent_id"],
-                "agent_name": row["agent_name"],
-                "status": row["status"],
-                "cognitive_state": row["cognitive_state"],
-                "version": row["version"],
-                "codename": row["codename"],
-                "api_port": row["api_port"],
-                "health": row["health"],
-                "template": row["template"],
-                "deployment": row["deployment"],
-                "manager_name": row["manager_name"],
-                "manager_url": row["manager_url"],
-                "last_seen": row["last_seen"].isoformat() if row["last_seen"] else None
-            })
-            
+            agents.append(
+                {
+                    "agent_id": row["agent_id"],
+                    "agent_name": row["agent_name"],
+                    "status": row["status"],
+                    "cognitive_state": row["cognitive_state"],
+                    "version": row["version"],
+                    "codename": row["codename"],
+                    "api_port": row["api_port"],
+                    "health": row["health"],
+                    "template": row["template"],
+                    "deployment": row["deployment"],
+                    "manager_name": row["manager_name"],
+                    "manager_url": row["manager_url"],
+                    "last_seen": row["last_seen"].isoformat() if row["last_seen"] else None,
+                }
+            )
+
         return {"agents": agents}
 
+
 @app.get("/api/admin/stats")
-async def get_stats(user: Dict = Depends(require_auth)):
+async def get_stats(user: dict = Depends(require_auth)):
     """Get overall statistics"""
     if not manager_collector:
         return {"stats": {}}
-        
+
     stats = await manager_collector.get_manager_stats()
     return {"stats": stats}
 
+
 # Agent token management endpoints
 @app.get("/api/admin/agent-tokens")
-async def get_agent_tokens(user: Dict = Depends(require_auth)):
+async def get_agent_tokens(user: dict = Depends(require_auth)):
     """Get configured agent tokens (without actual token values)"""
     agents = await token_manager.get_configured_agents()
     return {"agents": agents}
 
+
 @app.post("/api/admin/agent-tokens")
-async def set_agent_token(config: AgentTokenConfig, user: Dict = Depends(require_auth)):
+async def set_agent_token(config: AgentTokenConfig, user: dict = Depends(require_auth)):
     """Set or update an agent token"""
     success = await token_manager.set_agent_token(
-        agent_name=config.agent_name,
-        token=config.token,
-        url=config.url,
-        updated_by=user["email"]
+        agent_name=config.agent_name, token=config.token, url=config.url, updated_by=user["email"]
     )
-    
+
     if success:
         # Restart OTLP collector to pick up new token
         global otlp_collector
         if otlp_collector:
             await otlp_collector.stop()
             otlp_collector = OTLPCollector(DATABASE_URL)
-            asyncio.create_task(otlp_collector.start())
-            
-        return {
-            "status": "success",
-            "message": f"Token for {config.agent_name} has been updated"
-        }
+            _ = asyncio.create_task(otlp_collector.start())
+
+        return {"status": "success", "message": f"Token for {config.agent_name} has been updated"}
     else:
         raise HTTPException(status_code=500, detail="Failed to update token")
 
+
 @app.delete("/api/admin/agent-tokens/{agent_name}")
-async def remove_agent_token(agent_name: str, user: Dict = Depends(require_auth)):
+async def remove_agent_token(agent_name: str, user: dict = Depends(require_auth)):
     """Remove an agent token"""
     success = await token_manager.remove_agent_token(agent_name)
-    
+
     if success:
         # Restart OTLP collector
         global otlp_collector
         if otlp_collector:
             await otlp_collector.stop()
             otlp_collector = OTLPCollector(DATABASE_URL)
-            asyncio.create_task(otlp_collector.start())
-            
-        return {
-            "status": "success",
-            "message": f"Token for {agent_name} has been removed"
-        }
+            _ = asyncio.create_task(otlp_collector.start())
+
+        return {"status": "success", "message": f"Token for {agent_name} has been removed"}
     else:
         raise HTTPException(status_code=404, detail="Agent not found")
+
 
 # ============================================
 # Service Log Ingestion Endpoints
 # ============================================
 
+
 class ServiceTokenCreate(BaseModel):
     service_name: str
-    description: Optional[str] = None
+    description: str | None = None
+
 
 @app.post("/api/v1/logs/ingest")
 async def ingest_logs(request: Request):
@@ -1308,12 +1343,9 @@ async def ingest_logs(request: Request):
         else:
             # Regular JSON (single log or array)
             data = json.loads(body)
-            if isinstance(data, list):
-                logs = data
-            else:
-                logs = [data]
+            logs = data if isinstance(data, list) else [data]
     except json.JSONDecodeError as e:
-        raise HTTPException(status_code=400, detail=f"Invalid JSON: {e}")
+        raise HTTPException(status_code=400, detail=f"Invalid JSON: {e}") from e
 
     if not logs:
         return {"status": "ok", "accepted": 0, "rejected": 0, "errors": []}
@@ -1325,7 +1357,7 @@ async def ingest_logs(request: Request):
 
 
 @app.get("/api/admin/service-tokens")
-async def get_service_tokens(user: Dict = Depends(require_auth)):
+async def get_service_tokens(user: dict = Depends(require_auth)):
     """Get all service tokens (without actual token values)."""
     if not log_ingest_service:
         raise HTTPException(status_code=503, detail="Log ingestion service not available")
@@ -1335,7 +1367,7 @@ async def get_service_tokens(user: Dict = Depends(require_auth)):
 
 
 @app.post("/api/admin/service-tokens")
-async def create_service_token(config: ServiceTokenCreate, user: Dict = Depends(require_auth)):
+async def create_service_token(config: ServiceTokenCreate, user: dict = Depends(require_auth)):
     """
     Create a new service token.
     Returns the raw token - this is the only time it will be shown!
@@ -1344,21 +1376,19 @@ async def create_service_token(config: ServiceTokenCreate, user: Dict = Depends(
         raise HTTPException(status_code=503, detail="Log ingestion service not available")
 
     raw_token = await log_ingest_service.create_token(
-        service_name=config.service_name,
-        description=config.description,
-        created_by=user["email"]
+        service_name=config.service_name, description=config.description, created_by=user["email"]
     )
 
     return {
         "status": "created",
         "service_name": config.service_name,
         "token": raw_token,
-        "warning": "Save this token now - it cannot be retrieved later!"
+        "warning": "Save this token now - it cannot be retrieved later!",
     }
 
 
 @app.delete("/api/admin/service-tokens/{service_name}")
-async def revoke_service_token(service_name: str, user: Dict = Depends(require_auth)):
+async def revoke_service_token(service_name: str, user: dict = Depends(require_auth)):
     """Revoke a service token."""
     if not log_ingest_service:
         raise HTTPException(status_code=503, detail="Log ingestion service not available")
@@ -1373,10 +1403,10 @@ async def revoke_service_token(service_name: str, user: Dict = Depends(require_a
 
 @app.get("/api/admin/service-logs")
 async def get_service_logs(
-    service_name: Optional[str] = None,
-    level: Optional[str] = None,
+    service_name: str | None = None,
+    level: str | None = None,
     limit: int = 100,
-    user: Dict = Depends(require_auth)
+    user: dict = Depends(require_auth),
 ):
     """Get recent service logs with optional filtering."""
     if not db_pool:
@@ -1442,6 +1472,8 @@ async def websocket_agents(websocket):
     finally:
         await websocket.close()
 
+
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host="0.0.0.0", port=8000, reload=True)

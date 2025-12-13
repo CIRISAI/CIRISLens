@@ -36,11 +36,9 @@ import queue
 import socket
 import threading
 import time
-from datetime import datetime, timezone
-from typing import Any, Optional
+from datetime import UTC, datetime
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
-from urllib.error import URLError, HTTPError
-
 
 __version__ = "1.0.0"
 
@@ -60,7 +58,7 @@ class LogShipper:
         endpoint: str = "https://agents.ciris.ai/lens/api/v1/logs/ingest",
         batch_size: int = 100,
         flush_interval: float = 5.0,
-        server_id: Optional[str] = None,
+        server_id: str | None = None,
         max_retries: int = 3,
         timeout: float = 10.0,
     ):
@@ -89,12 +87,12 @@ class LogShipper:
         self._buffer: queue.Queue = queue.Queue()
         self._lock = threading.Lock()
         self._shutdown = threading.Event()
-        self._flush_thread: Optional[threading.Thread] = None
+        self._flush_thread: threading.Thread | None = None
 
         # Stats
         self._sent_count = 0
         self._error_count = 0
-        self._last_error: Optional[str] = None
+        self._last_error: str | None = None
 
         # Start background flush thread
         self._start_flush_thread()
@@ -118,16 +116,16 @@ class LogShipper:
         self,
         level: str,
         message: str,
-        event: Optional[str] = None,
-        logger_name: Optional[str] = None,
-        request_id: Optional[str] = None,
-        trace_id: Optional[str] = None,
-        user_id: Optional[str] = None,
+        event: str | None = None,
+        logger_name: str | None = None,
+        request_id: str | None = None,
+        trace_id: str | None = None,
+        user_id: str | None = None,
         **attributes,
     ):
         """Add a log entry to the buffer."""
         entry = {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "level": level,
             "message": message,
             "server_id": self.server_id,
@@ -247,7 +245,7 @@ class LogShipper:
 
             # Exponential backoff
             if attempt < self.max_retries - 1:
-                time.sleep(2 ** attempt)
+                time.sleep(2**attempt)
 
         return False
 
@@ -293,16 +291,33 @@ class LogShipperHandler(logging.Handler):
             attributes = {}
             for key, value in record.__dict__.items():
                 if key not in (
-                    "name", "msg", "args", "created", "filename", "funcName",
-                    "levelname", "levelno", "lineno", "module", "msecs",
-                    "pathname", "process", "processName", "relativeCreated",
-                    "stack_info", "exc_info", "exc_text", "thread", "threadName",
-                    "message", "asctime",
+                    "name",
+                    "msg",
+                    "args",
+                    "created",
+                    "filename",
+                    "funcName",
+                    "levelname",
+                    "levelno",
+                    "lineno",
+                    "module",
+                    "msecs",
+                    "pathname",
+                    "process",
+                    "processName",
+                    "relativeCreated",
+                    "stack_info",
+                    "exc_info",
+                    "exc_text",
+                    "thread",
+                    "threadName",
+                    "message",
+                    "asctime",
                 ):
                     # Only include serializable values
-                    if isinstance(value, (str, int, float, bool, type(None))):
+                    if isinstance(value, str | int | float | bool | type(None)):
                         attributes[key] = value
-                    elif isinstance(value, (list, dict)):
+                    elif isinstance(value, list | dict):
                         try:
                             json.dumps(value)  # Test serializability
                             attributes[key] = value
@@ -400,7 +415,7 @@ def setup_logging(
 
 
 # Convenience for environment-based configuration
-def from_env(service_name: Optional[str] = None) -> LogShipper:
+def from_env(service_name: str | None = None) -> LogShipper:
     """
     Create a LogShipper from environment variables.
 
@@ -418,8 +433,7 @@ def from_env(service_name: Optional[str] = None) -> LogShipper:
     name = service_name or os.environ.get("CIRISLENS_SERVICE_NAME")
     token = os.environ.get("CIRISLENS_TOKEN")
     endpoint = os.environ.get(
-        "CIRISLENS_ENDPOINT",
-        "https://agents.ciris.ai/lens/api/v1/logs/ingest"
+        "CIRISLENS_ENDPOINT", "https://agents.ciris.ai/lens/api/v1/logs/ingest"
     )
 
     if not name:

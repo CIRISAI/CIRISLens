@@ -36,6 +36,16 @@ services:
       - GF_AUTH_DISABLE_SIGNOUT_MENU=false
       # Enable explore for authenticated users
       - GF_EXPLORE_ENABLED=true
+      # USE POSTGRESQL FOR GRAFANA DATABASE (prevents SQLite locks)
+      - GF_DATABASE_TYPE=postgres
+      - GF_DATABASE_HOST=postgres:5432
+      - GF_DATABASE_NAME=grafana
+      - GF_DATABASE_USER=cirislens
+      - GF_DATABASE_PASSWORD=cirislens
+      - GF_DATABASE_SSL_MODE=disable
+      # Alerting configuration
+      - GF_UNIFIED_ALERTING_ENABLED=true
+      - GF_ALERTING_ENABLED=false
     volumes:
       - grafana_data:/var/lib/grafana
       - ./config/grafana/provisioning:/etc/grafana/provisioning:ro

@@ -3,11 +3,11 @@ Mock objects and fixtures for CIRISLens testing
 Provides typed mock data for managers, agents, and telemetry
 """
 
-from datetime import datetime, timezone, timedelta
-from typing import Dict, List, Optional, Any
-from dataclasses import dataclass, field, asdict
 import random
 import uuid
+from dataclasses import asdict, dataclass, field
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 
 @dataclass
@@ -16,16 +16,16 @@ class MockManager:
     id: int
     name: str
     url: str
-    description: Optional[str] = ""
+    description: str | None = ""
     enabled: bool = True
-    auth_token: Optional[str] = None
+    auth_token: str | None = None
     collection_interval_seconds: int = 30
-    last_seen: Optional[datetime] = None
-    last_error: Optional[str] = None
-    added_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    metadata: Dict[str, Any] = field(default_factory=dict)
-    
-    def to_dict(self) -> Dict[str, Any]:
+    last_seen: datetime | None = None
+    last_error: str | None = None
+    added_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for database/API compatibility"""
         data = asdict(self)
         # Convert datetime objects to ISO format strings
@@ -34,8 +34,8 @@ class MockManager:
         if data['added_at']:
             data['added_at'] = data['added_at'].isoformat()
         return data
-    
-    def to_db_row(self) -> Dict[str, Any]:
+
+    def to_db_row(self) -> dict[str, Any]:
         """Convert to database row format"""
         return {
             'id': self.id,
@@ -71,8 +71,8 @@ class MockAgent:
     mock_llm: bool = False
     image: str = "ghcr.io/cirisai/ciris-agent:latest"
     update_available: bool = False
-    
-    def to_dict(self) -> Dict[str, Any]:
+
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary matching manager API response"""
         return asdict(self)
 
@@ -83,16 +83,16 @@ class MockManagerStatus:
     status: str = "running"
     version: str = "2.2.0"
     uptime_seconds: int = field(default_factory=lambda: random.randint(3600, 86400))
-    start_time: datetime = field(default_factory=lambda: datetime.now(timezone.utc) - timedelta(hours=24))
+    start_time: datetime = field(default_factory=lambda: datetime.now(UTC) - timedelta(hours=24))
     auth_mode: str = "production"
-    components: Dict[str, str] = field(default_factory=lambda: {
+    components: dict[str, str] = field(default_factory=lambda: {
         "api_server": "running",
         "watchdog": "running",
         "nginx": "enabled"
     })
-    system_metrics: Dict[str, Any] = field(default_factory=dict)
-    
-    def to_dict(self) -> Dict[str, Any]:
+    system_metrics: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
         """Convert to API response format"""
         data = asdict(self)
         data['start_time'] = data['start_time'].isoformat()
@@ -114,13 +114,13 @@ class MockDiscoveredAgent:
     health: str
     template: str
     deployment: str
-    last_seen: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    raw_data: Dict[str, Any] = field(default_factory=dict)
+    last_seen: datetime = field(default_factory=lambda: datetime.now(UTC))
+    raw_data: dict[str, Any] = field(default_factory=dict)
     # Join fields
-    manager_name: Optional[str] = None
-    manager_url: Optional[str] = None
-    
-    def to_db_row(self) -> Dict[str, Any]:
+    manager_name: str | None = None
+    manager_url: str | None = None
+
+    def to_db_row(self) -> dict[str, Any]:
         """Convert to database row format"""
         return {
             'id': self.id,
@@ -147,21 +147,21 @@ class MockTelemetryEntry:
     """Mock telemetry history entry"""
     id: int
     manager_id: int
-    collected_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    collected_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     agent_count: int = 0
-    status: Optional[str] = "running"
-    version: Optional[str] = "2.2.0"
-    uptime_seconds: Optional[int] = None
-    raw_data: Dict[str, Any] = field(default_factory=dict)
-    
-    def to_db_row(self) -> Dict[str, Any]:
+    status: str | None = "running"
+    version: str | None = "2.2.0"
+    uptime_seconds: int | None = None
+    raw_data: dict[str, Any] = field(default_factory=dict)
+
+    def to_db_row(self) -> dict[str, Any]:
         """Convert to database row format"""
         return asdict(self)
 
 
 class MockFactory:
     """Factory for creating consistent mock objects"""
-    
+
     @staticmethod
     def create_manager(
         id: int = 1,
@@ -177,18 +177,18 @@ class MockFactory:
             url=url,
             description=f"{name} CIRISManager instance",
             enabled=enabled,
-            last_seen=datetime.now(timezone.utc) if not with_error else datetime.now(timezone.utc) - timedelta(minutes=10),
+            last_seen=datetime.now(UTC) if not with_error else datetime.now(UTC) - timedelta(minutes=10),
             last_error="Connection timeout" if with_error else None
         )
         return manager
-    
+
     @staticmethod
-    def create_managers(count: int = 3) -> List[MockManager]:
+    def create_managers(count: int = 3) -> list[MockManager]:
         """Create multiple mock managers"""
         names = ["Production", "Staging", "Development", "Testing", "Backup"]
-        urls = ["https://agents.ciris.ai", "https://staging.ciris.ai", "https://dev.ciris.ai", 
+        urls = ["https://agents.ciris.ai", "https://staging.ciris.ai", "https://dev.ciris.ai",
                 "https://test.ciris.ai", "https://backup.ciris.ai"]
-        
+
         managers = []
         for i in range(min(count, len(names))):
             managers.append(MockFactory.create_manager(
@@ -199,11 +199,11 @@ class MockFactory:
                 with_error=i == count - 1  # Last one has error
             ))
         return managers
-    
+
     @staticmethod
     def create_agent(
-        agent_id: Optional[str] = None,
-        agent_name: Optional[str] = None,
+        agent_id: str | None = None,
+        agent_name: str | None = None,
         cognitive_state: str = "WORK"
     ) -> MockAgent:
         """Create a mock agent"""
@@ -211,11 +211,11 @@ class MockFactory:
             agent_id = f"agent-{uuid.uuid4().hex[:8]}"
         if not agent_name:
             agent_name = agent_id.capitalize()
-            
+
         states = ["WORK", "DREAM", "PLAY", "SOLITUDE", "WAKEUP", "SHUTDOWN"]
-        codenames = ["Graceful Guardian", "Stellar Sentinel", "Quantum Quester", 
+        codenames = ["Graceful Guardian", "Stellar Sentinel", "Quantum Quester",
                     "Digital Dreamer", "Neural Navigator"]
-        
+
         return MockAgent(
             agent_id=agent_id,
             agent_name=agent_name,
@@ -223,13 +223,13 @@ class MockFactory:
             codename=random.choice(codenames),
             health=random.choice(["healthy", "healthy", "healthy", "unhealthy"])  # 75% healthy
         )
-    
+
     @staticmethod
-    def create_agents(count: int = 5) -> List[MockAgent]:
+    def create_agents(count: int = 5) -> list[MockAgent]:
         """Create multiple mock agents"""
         agent_names = ["Datum", "Nexus", "Prism", "Echo", "Forge", "Spark", "Pulse", "Wave"]
         agents = []
-        
+
         for i in range(count):
             name = agent_names[i] if i < len(agent_names) else f"Agent-{i+1}"
             agents.append(MockFactory.create_agent(
@@ -237,18 +237,18 @@ class MockFactory:
                 agent_name=name
             ))
         return agents
-    
+
     @staticmethod
     def create_discovered_agent(
         manager_id: int = 1,
-        agent: Optional[MockAgent] = None,
+        agent: MockAgent | None = None,
         manager_name: str = "Production",
         manager_url: str = "https://agents.ciris.ai"
     ) -> MockDiscoveredAgent:
         """Create a discovered agent from a mock agent"""
         if not agent:
             agent = MockFactory.create_agent()
-            
+
         return MockDiscoveredAgent(
             id=random.randint(1, 1000),
             manager_id=manager_id,
@@ -266,15 +266,15 @@ class MockFactory:
             manager_name=manager_name,
             manager_url=manager_url
         )
-    
+
     @staticmethod
     def create_manager_status(uptime_hours: int = 24) -> MockManagerStatus:
         """Create a mock manager status response"""
         return MockManagerStatus(
             uptime_seconds=uptime_hours * 3600,
-            start_time=datetime.now(timezone.utc) - timedelta(hours=uptime_hours)
+            start_time=datetime.now(UTC) - timedelta(hours=uptime_hours)
         )
-    
+
     @staticmethod
     def create_telemetry_entry(
         manager_id: int = 1,
@@ -285,24 +285,24 @@ class MockFactory:
         return MockTelemetryEntry(
             id=random.randint(1, 10000),
             manager_id=manager_id,
-            collected_at=datetime.now(timezone.utc) - timedelta(hours=hours_ago),
+            collected_at=datetime.now(UTC) - timedelta(hours=hours_ago),
             agent_count=agent_count,
             uptime_seconds=random.randint(3600, 86400)
         )
-    
+
     @staticmethod
     def create_telemetry_history(
         manager_id: int = 1,
         entries: int = 10,
         base_agent_count: int = 5
-    ) -> List[MockTelemetryEntry]:
+    ) -> list[MockTelemetryEntry]:
         """Create a telemetry history with realistic variations"""
         history = []
         for i in range(entries):
             # Vary agent count slightly
             agent_count = base_agent_count + random.randint(-2, 2)
             agent_count = max(0, agent_count)  # Ensure non-negative
-            
+
             history.append(MockFactory.create_telemetry_entry(
                 manager_id=manager_id,
                 agent_count=agent_count,
@@ -313,23 +313,23 @@ class MockFactory:
 
 class MockHTTPResponse:
     """Mock HTTP response for httpx testing"""
-    
-    def __init__(self, status_code: int = 200, json_data: Any = None, error: Optional[str] = None):
+
+    def __init__(self, status_code: int = 200, json_data: Any = None, error: str | None = None):
         self.status_code = status_code
         self._json_data = json_data or {}
         self.error = error
-        
+
     def json(self):
         """Return JSON data"""
         if self.error:
             raise Exception(self.error)
         return self._json_data
-    
+
     @classmethod
     def success(cls, data: Any):
         """Create a successful response"""
         return cls(status_code=200, json_data=data)
-    
+
     @classmethod
     def error(cls, status_code: int = 500, message: str = "Internal Server Error"):
         """Create an error response"""
@@ -338,37 +338,37 @@ class MockHTTPResponse:
 
 class MockDatabase:
     """Mock database for testing"""
-    
+
     def __init__(self):
-        self.managers: List[MockManager] = []
-        self.agents: List[MockDiscoveredAgent] = []
-        self.telemetry: List[MockTelemetryEntry] = []
-        
+        self.managers: list[MockManager] = []
+        self.agents: list[MockDiscoveredAgent] = []
+        self.telemetry: list[MockTelemetryEntry] = []
+
     def add_manager(self, manager: MockManager) -> int:
         """Add a manager and return its ID"""
         if not manager.id:
             manager.id = len(self.managers) + 1
         self.managers.append(manager)
         return manager.id
-    
+
     def add_discovered_agent(self, agent: MockDiscoveredAgent):
         """Add a discovered agent"""
         self.agents.append(agent)
-        
+
     def add_telemetry_entry(self, entry: MockTelemetryEntry):
         """Add a telemetry entry"""
         self.telemetry.append(entry)
-        
-    def get_enabled_managers(self) -> List[MockManager]:
+
+    def get_enabled_managers(self) -> list[MockManager]:
         """Get all enabled managers"""
         return [m for m in self.managers if m.enabled]
-    
-    def get_recent_agents(self, minutes: int = 5) -> List[MockDiscoveredAgent]:
+
+    def get_recent_agents(self, minutes: int = 5) -> list[MockDiscoveredAgent]:
         """Get recently seen agents"""
-        cutoff = datetime.now(timezone.utc) - timedelta(minutes=minutes)
+        cutoff = datetime.now(UTC) - timedelta(minutes=minutes)
         return [a for a in self.agents if a.last_seen > cutoff]
-    
-    def get_manager_telemetry(self, manager_id: int, limit: int = 10) -> List[MockTelemetryEntry]:
+
+    def get_manager_telemetry(self, manager_id: int, limit: int = 10) -> list[MockTelemetryEntry]:
         """Get telemetry history for a manager"""
         entries = [t for t in self.telemetry if t.manager_id == manager_id]
         entries.sort(key=lambda x: x.collected_at, reverse=True)

@@ -6,10 +6,9 @@ Handles log ingestion from CIRISBilling, CIRISProxy, and CIRISManager.
 
 import hashlib
 import json
-import re
 import logging
+import re
 from datetime import datetime
-from typing import Optional
 
 import asyncpg
 
@@ -17,18 +16,18 @@ logger = logging.getLogger(__name__)
 
 # PII redaction patterns
 REDACT_PATTERNS = [
-    (re.compile(r'Bearer [A-Za-z0-9\-_\.]+'), 'Bearer [REDACTED]'),
-    (re.compile(r'token=[A-Za-z0-9\-_\.]+'), 'token=[REDACTED]'),
-    (re.compile(r'password=\S+'), 'password=[REDACTED]'),
-    (re.compile(r'secret=\S+'), 'secret=[REDACTED]'),
-    (re.compile(r'api_key=\S+'), 'api_key=[REDACTED]'),
-    (re.compile(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'), '[EMAIL]'),
-    (re.compile(r'\b\d{4}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}\b'), '[CARD]'),
-    (re.compile(r'\b\d{3}-\d{2}-\d{4}\b'), '[SSN]'),
+    (re.compile(r"Bearer [A-Za-z0-9\-_\.]+"), "Bearer [REDACTED]"),
+    (re.compile(r"token=[A-Za-z0-9\-_\.]+"), "token=[REDACTED]"),
+    (re.compile(r"password=\S+"), "password=[REDACTED]"),
+    (re.compile(r"secret=\S+"), "secret=[REDACTED]"),
+    (re.compile(r"api_key=\S+"), "api_key=[REDACTED]"),
+    (re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b"), "[EMAIL]"),
+    (re.compile(r"\b\d{4}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}\b"), "[CARD]"),
+    (re.compile(r"\b\d{3}-\d{2}-\d{4}\b"), "[SSN]"),
 ]
 
 
-def sanitize_message(message: Optional[str]) -> Optional[str]:
+def sanitize_message(message: str | None) -> str | None:
     """Remove PII and secrets from log messages."""
     if not message:
         return message
@@ -64,7 +63,7 @@ class LogIngestService:
                 WHERE enabled = TRUE
             """)
 
-            self._token_cache = {row['service_name']: row['token_hash'] for row in rows}
+            self._token_cache = {row["service_name"]: row["token_hash"] for row in rows}
             self._cache_loaded = True
             logger.info(f"Loaded {len(self._token_cache)} service tokens")
 
@@ -73,7 +72,7 @@ class LogIngestService:
         self._cache_loaded = False
         await self._load_token_cache()
 
-    async def verify_token(self, token: str) -> Optional[str]:
+    async def verify_token(self, token: str) -> str | None:
         """
         Verify a service token and return the service name if valid.
         Returns None if invalid.
@@ -86,16 +85,21 @@ class LogIngestService:
             if stored_hash == token_hash:
                 # Update last_used_at
                 async with self.pool.acquire() as conn:
-                    await conn.execute("""
+                    await conn.execute(
+                        """
                         UPDATE cirislens.service_tokens
                         SET last_used_at = NOW()
                         WHERE service_name = $1
-                    """, service_name)
+                    """,
+                        service_name,
+                    )
                 return service_name
 
         return None
 
-    async def create_token(self, service_name: str, created_by: str, description: str = None) -> str:
+    async def create_token(
+        self, service_name: str, created_by: str, description: str | None = None
+    ) -> str:
         """
         Create a new service token.
         Returns the raw token (only shown once).
@@ -107,7 +111,8 @@ class LogIngestService:
         token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
 
         async with self.pool.acquire() as conn:
-            await conn.execute("""
+            await conn.execute(
+                """
                 INSERT INTO cirislens.service_tokens (service_name, token_hash, description, created_by)
                 VALUES ($1, $2, $3, $4)
                 ON CONFLICT (service_name) DO UPDATE SET
@@ -116,7 +121,12 @@ class LogIngestService:
                     created_by = EXCLUDED.created_by,
                     created_at = NOW(),
                     last_used_at = NULL
-            """, service_name, token_hash, description, created_by)
+            """,
+                service_name,
+                token_hash,
+                description,
+                created_by,
+            )
 
         # Reload cache
         await self.reload_tokens()
@@ -126,11 +136,14 @@ class LogIngestService:
     async def revoke_token(self, service_name: str) -> bool:
         """Revoke a service token."""
         async with self.pool.acquire() as conn:
-            result = await conn.execute("""
+            result = await conn.execute(
+                """
                 UPDATE cirislens.service_tokens
                 SET enabled = FALSE
                 WHERE service_name = $1
-            """, service_name)
+            """,
+                service_name,
+            )
 
         # Reload cache
         await self.reload_tokens()
@@ -153,7 +166,9 @@ class LogIngestService:
                     "description": row["description"],
                     "created_at": row["created_at"].isoformat() if row["created_at"] else None,
                     "created_by": row["created_by"],
-                    "last_used_at": row["last_used_at"].isoformat() if row["last_used_at"] else None,
+                    "last_used_at": row["last_used_at"].isoformat()
+                    if row["last_used_at"]
+                    else None,
                     "enabled": row["enabled"],
                 }
                 for row in rows
@@ -194,7 +209,8 @@ class LogIngestService:
                         user_hash = log.get("user_hash")
 
                     # Insert log
-                    await conn.execute("""
+                    await conn.execute(
+                        """
                         INSERT INTO cirislens.service_logs
                         (service_name, server_id, timestamp, level, event, logger,
                          message, request_id, trace_id, user_hash, attributes)
@@ -218,7 +234,7 @@ class LogIngestService:
                 except Exception as e:
                     rejected += 1
                     if len(errors) < 10:  # Limit error messages
-                        errors.append(f"Log {i}: {str(e)}")
+                        errors.append(f"Log {i}: {e!s}")
                     logger.warning(f"Failed to ingest log {i}: {e}")
 
         logger.info(f"Ingested {accepted} logs from {service_name}, rejected {rejected}")
