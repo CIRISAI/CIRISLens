@@ -68,6 +68,7 @@ jobs:
 
       - name: Generate SBOM
         if: github.event_name != 'pull_request'
+        continue-on-error: true  # SBOM is nice-to-have, don't fail build
         uses: anchore/sbom-action@v0
         with:
           image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
