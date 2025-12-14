@@ -187,6 +187,11 @@ async def run_otlp_collector():
 async def run_status_collector():
     """Background task to collect and store status checks every 60 seconds"""
     logger.info("Status collector started")
+
+    # Service URLs from environment
+    billing_url = os.getenv("BILLING_STATUS_URL", "http://cirisbilling:8000")
+    proxy_url = os.getenv("PROXY_STATUS_URL", "http://cirisproxy:8000")
+
     while True:
         try:
             # Collect status from local providers
@@ -196,10 +201,17 @@ async def run_status_collector():
                 return_exceptions=True
             )
 
+            # Fetch status from other services
+            billing_result, proxy_result = await asyncio.gather(
+                fetch_service_status("billing", billing_url),
+                fetch_service_status("proxy", proxy_url),
+                return_exceptions=True
+            )
+
             # Store results in database
             if db_pool:
                 async with db_pool.acquire() as conn:
-                    # Store PostgreSQL status
+                    # Store CIRISLens local checks
                     if isinstance(pg_status, ProviderStatus):
                         await conn.execute("""
                             INSERT INTO cirislens.status_checks
@@ -208,7 +220,6 @@ async def run_status_collector():
                         """, "cirislens", "postgresql", pg_status.status,
                             pg_status.latency_ms, pg_status.message)
 
-                    # Store Grafana status
                     if isinstance(grafana_status, ProviderStatus):
                         await conn.execute("""
                             INSERT INTO cirislens.status_checks
@@ -216,6 +227,31 @@ async def run_status_collector():
                             VALUES ($1, $2, $3, $4, $5)
                         """, "cirislens", "grafana", grafana_status.status,
                             grafana_status.latency_ms, grafana_status.message)
+
+                    # Store CIRISBilling provider checks
+                    if isinstance(billing_result, tuple):
+                        _name, billing_data = billing_result
+                        if "providers" in billing_data and isinstance(billing_data["providers"], dict):
+                            for provider, pdata in billing_data["providers"].items():
+                                await conn.execute("""
+                                    INSERT INTO cirislens.status_checks
+                                    (service_name, provider_name, status, latency_ms, error_message)
+                                    VALUES ($1, $2, $3, $4, $5)
+                                """, "cirisbilling", provider, pdata.get("status", "unknown"),
+                                    pdata.get("latency_ms"), pdata.get("message"))
+
+                    # Store CIRISProxy provider checks (array format)
+                    if isinstance(proxy_result, tuple):
+                        _name, proxy_data = proxy_result
+                        if "providers" in proxy_data and isinstance(proxy_data["providers"], list):
+                            for pdata in proxy_data["providers"]:
+                                await conn.execute("""
+                                    INSERT INTO cirislens.status_checks
+                                    (service_name, provider_name, status, latency_ms, error_message)
+                                    VALUES ($1, $2, $3, $4, $5)
+                                """, "cirisproxy", pdata.get("provider", "unknown"),
+                                    pdata.get("status", "unknown"),
+                                    pdata.get("latency_ms"), pdata.get("error"))
 
                 logger.debug("Status checks recorded")
 
@@ -562,12 +598,23 @@ async def aggregated_status():  # noqa: PLR0912
         if isinstance(result, tuple) and result[0] == "proxy":
             proxy_data = result[1]
             if "providers" in proxy_data:
-                for provider, pdata in proxy_data["providers"].items():
-                    if provider in ["openrouter", "groq", "together_ai", "openai"]:
-                        llm_providers[provider] = LLMProviderStatus(
-                            status=pdata.get("status", "unknown"),
-                            latency_ms=pdata.get("latency_ms")
-                        )
+                providers = proxy_data["providers"]
+                # Handle both array format (CIRISProxy) and dict format
+                if isinstance(providers, list):
+                    for pdata in providers:
+                        provider = pdata.get("provider", "")
+                        if provider in ["openrouter", "groq", "together", "openai"]:
+                            llm_providers[provider] = LLMProviderStatus(
+                                status=pdata.get("status", "unknown"),
+                                latency_ms=pdata.get("latency_ms")
+                            )
+                else:
+                    for provider, pdata in providers.items():
+                        if provider in ["openrouter", "groq", "together_ai", "openai"]:
+                            llm_providers[provider] = LLMProviderStatus(
+                                status=pdata.get("status", "unknown"),
+                                latency_ms=pdata.get("latency_ms")
+                            )
 
     # Calculate overall status
     all_statuses = [s.status for s in services.values()]
