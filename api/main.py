@@ -529,14 +529,16 @@ async def fetch_service_status(name: str, url: str) -> tuple[str, dict]:
         return name, {"status": "outage", "error": str(e)[:100]}
 
 
-async def check_infrastructure(name: str, url: str, provider: str) -> InfrastructureStatus:
+async def check_infrastructure(
+    name: str, url: str, provider: str, latency_threshold: int = 1000
+) -> InfrastructureStatus:
     """Check infrastructure endpoint availability"""
     start = datetime.utcnow()
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             response = await client.get(url, follow_redirects=True)
             latency = int((datetime.utcnow() - start).total_seconds() * 1000)
-            status = "operational" if response.status_code < 400 and latency < 1000 else "degraded"
+            status = "operational" if response.status_code < 400 and latency < latency_threshold else "degraded"
             return InfrastructureStatus(name=name, status=status, provider=provider, latency_ms=latency)
     except Exception:
         return InfrastructureStatus(name=name, status="outage", provider=provider, latency_ms=None)
@@ -569,7 +571,8 @@ async def aggregated_status():  # noqa: PLR0912
         )
     if ghcr_health_url:
         infra_tasks.append(
-            check_infrastructure("Container Registry", ghcr_health_url, "github")
+            # Higher threshold for registry - only used during deployments
+            check_infrastructure("Container Registry", ghcr_health_url, "github", latency_threshold=3000)
         )
 
     # Get local CIRISLens status
