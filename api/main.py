@@ -184,6 +184,48 @@ async def run_otlp_collector():
         raise
 
 
+async def run_status_collector():
+    """Background task to collect and store status checks every 60 seconds"""
+    logger.info("Status collector started")
+    while True:
+        try:
+            # Collect status from local providers
+            pg_status, grafana_status = await asyncio.gather(
+                check_postgresql(),
+                check_grafana(),
+                return_exceptions=True
+            )
+
+            # Store results in database
+            if db_pool:
+                async with db_pool.acquire() as conn:
+                    # Store PostgreSQL status
+                    if isinstance(pg_status, ProviderStatus):
+                        await conn.execute("""
+                            INSERT INTO cirislens.status_checks
+                            (service_name, provider_name, status, latency_ms, error_message)
+                            VALUES ($1, $2, $3, $4, $5)
+                        """, "cirislens", "postgresql", pg_status.status,
+                            pg_status.latency_ms, pg_status.message)
+
+                    # Store Grafana status
+                    if isinstance(grafana_status, ProviderStatus):
+                        await conn.execute("""
+                            INSERT INTO cirislens.status_checks
+                            (service_name, provider_name, status, latency_ms, error_message)
+                            VALUES ($1, $2, $3, $4, $5)
+                        """, "cirislens", "grafana", grafana_status.status,
+                            grafana_status.latency_ms, grafana_status.message)
+
+                logger.debug("Status checks recorded")
+
+        except Exception as e:
+            logger.error(f"Status collector error: {e}")
+
+        # Wait 60 seconds before next check
+        await asyncio.sleep(60)
+
+
 # Startup and shutdown events
 @app.on_event("startup")
 async def startup():
@@ -208,6 +250,13 @@ async def startup():
                 logger.info("Service logs tables initialized")
             except Exception as e:
                 logger.warning(f"Service logs migration may have already run: {e}")
+            # Create status checks tables
+            try:
+                sql_content = Path("/app/sql/008_status_checks.sql").read_text()
+                await conn.execute(sql_content)
+                logger.info("Status checks tables initialized")
+            except Exception as e:
+                logger.warning(f"Status checks migration may have already run: {e}")
             logger.info("Database tables initialized")
 
         # Initialize log ingest service
@@ -234,6 +283,15 @@ async def startup():
                 else None
             )
             logger.info("OTLP collector task created")
+
+        # Start status collector for availability monitoring
+        task = asyncio.create_task(run_status_collector())
+        task.add_done_callback(
+            lambda t: logger.error(f"Status collector task ended: {t.exception()}")
+            if t.exception()
+            else None
+        )
+        logger.info("Status collector task created")
 
     except Exception as e:
         logger.error(f"Startup error: {e}", exc_info=True)
@@ -266,6 +324,337 @@ async def root():
 async def health():
     """Health check endpoint"""
     return {"status": "healthy", "timestamp": datetime.utcnow().isoformat()}
+
+
+# Status check models
+class ProviderStatus(BaseModel):
+    status: str  # operational, degraded, outage
+    latency_ms: int | None = None
+    last_check: str
+    message: str | None = None
+
+
+class ServiceStatus(BaseModel):
+    service: str
+    status: str
+    timestamp: str
+    version: str
+    providers: dict[str, ProviderStatus]
+
+
+async def check_postgresql() -> ProviderStatus:
+    """Check PostgreSQL connectivity and latency"""
+    start = datetime.utcnow()
+    try:
+        if db_pool:
+            async with db_pool.acquire() as conn:
+                await asyncio.wait_for(conn.fetchval("SELECT 1"), timeout=5.0)
+            latency = int((datetime.utcnow() - start).total_seconds() * 1000)
+            status = "operational" if latency < 1000 else "degraded"
+            return ProviderStatus(
+                status=status,
+                latency_ms=latency,
+                last_check=datetime.utcnow().isoformat() + "Z"
+            )
+        else:
+            return ProviderStatus(
+                status="outage",
+                latency_ms=None,
+                last_check=datetime.utcnow().isoformat() + "Z",
+                message="Database pool not initialized"
+            )
+    except TimeoutError:
+        return ProviderStatus(
+            status="outage",
+            latency_ms=5000,
+            last_check=datetime.utcnow().isoformat() + "Z",
+            message="Connection timeout"
+        )
+    except Exception as e:
+        return ProviderStatus(
+            status="outage",
+            latency_ms=None,
+            last_check=datetime.utcnow().isoformat() + "Z",
+            message=str(e)[:100]
+        )
+
+
+async def check_grafana() -> ProviderStatus:
+    """Check Grafana health endpoint"""
+    grafana_url = os.getenv("GRAFANA_URL", "http://grafana:3000")
+    start = datetime.utcnow()
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            response = await client.get(f"{grafana_url}/api/health")
+            latency = int((datetime.utcnow() - start).total_seconds() * 1000)
+            if response.status_code == 200:
+                status = "operational" if latency < 1000 else "degraded"
+                return ProviderStatus(
+                    status=status,
+                    latency_ms=latency,
+                    last_check=datetime.utcnow().isoformat() + "Z"
+                )
+            else:
+                return ProviderStatus(
+                    status="degraded",
+                    latency_ms=latency,
+                    last_check=datetime.utcnow().isoformat() + "Z",
+                    message=f"HTTP {response.status_code}"
+                )
+    except httpx.TimeoutException:
+        return ProviderStatus(
+            status="outage",
+            latency_ms=5000,
+            last_check=datetime.utcnow().isoformat() + "Z",
+            message="Connection timeout"
+        )
+    except Exception as e:
+        return ProviderStatus(
+            status="outage",
+            latency_ms=None,
+            last_check=datetime.utcnow().isoformat() + "Z",
+            message=str(e)[:100]
+        )
+
+
+@app.get("/v1/status", response_model=ServiceStatus)
+async def service_status():
+    """Public status endpoint for CIRISLens service health"""
+    # Check all providers in parallel
+    pg_status, grafana_status = await asyncio.gather(
+        check_postgresql(),
+        check_grafana()
+    )
+
+    # Determine overall status
+    statuses = [pg_status.status, grafana_status.status]
+    if "outage" in statuses:
+        overall = "outage"
+    elif "degraded" in statuses:
+        overall = "degraded"
+    else:
+        overall = "operational"
+
+    return ServiceStatus(
+        service="cirislens",
+        status=overall,
+        timestamp=datetime.utcnow().isoformat() + "Z",
+        version=app.version,
+        providers={
+            "postgresql": pg_status,
+            "grafana": grafana_status
+        }
+    )
+
+
+# Aggregated status models
+class ServiceSummary(BaseModel):
+    name: str
+    status: str
+    url: str | None = None
+
+
+class InfrastructureStatus(BaseModel):
+    name: str
+    status: str
+    provider: str
+    latency_ms: int | None = None
+
+
+class LLMProviderStatus(BaseModel):
+    status: str
+    latency_ms: int | None = None
+
+
+class AggregatedStatus(BaseModel):
+    status: str
+    timestamp: str
+    last_incident: str | None = None
+    services: dict[str, ServiceSummary]
+    infrastructure: dict[str, InfrastructureStatus]
+    llm_providers: dict[str, LLMProviderStatus]
+
+
+async def fetch_service_status(name: str, url: str) -> tuple[str, dict]:
+    """Fetch status from a CIRIS service"""
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            response = await client.get(f"{url}/v1/status")
+            if response.status_code == 200:
+                data = response.json()
+                return name, data
+            else:
+                return name, {"status": "degraded", "error": f"HTTP {response.status_code}"}
+    except Exception as e:
+        return name, {"status": "outage", "error": str(e)[:100]}
+
+
+async def check_infrastructure(name: str, url: str, provider: str) -> InfrastructureStatus:
+    """Check infrastructure endpoint availability"""
+    start = datetime.utcnow()
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            response = await client.get(url, follow_redirects=True)
+            latency = int((datetime.utcnow() - start).total_seconds() * 1000)
+            status = "operational" if response.status_code < 400 and latency < 1000 else "degraded"
+            return InfrastructureStatus(name=name, status=status, provider=provider, latency_ms=latency)
+    except Exception:
+        return InfrastructureStatus(name=name, status="outage", provider=provider, latency_ms=None)
+
+
+@app.get("/api/v1/status", response_model=AggregatedStatus)
+async def aggregated_status():  # noqa: PLR0912
+    """
+    Public aggregated status endpoint for ciris.ai/status page.
+    Fetches status from all CIRIS services and infrastructure.
+    """
+    # Service URLs from environment
+    billing_url = os.getenv("BILLING_STATUS_URL", "http://cirisbilling:8000")
+    proxy_url = os.getenv("PROXY_STATUS_URL", "http://cirisproxy:8000")
+
+    # Fetch service statuses in parallel
+    service_tasks = [
+        fetch_service_status("billing", billing_url),
+        fetch_service_status("proxy", proxy_url),
+    ]
+
+    # Infrastructure checks
+    infra_tasks = [
+        check_infrastructure("US Region (Chicago)", "https://api.ciris.ai/health", "vultr"),
+        check_infrastructure("Container Registry", "https://ghcr.io/v2/", "github"),
+    ]
+
+    # Get local CIRISLens status
+    lens_status = await service_status()
+
+    # Run all checks in parallel
+    service_results = await asyncio.gather(*service_tasks, return_exceptions=True)
+    infra_results = await asyncio.gather(*infra_tasks, return_exceptions=True)
+
+    # Build services dict
+    services = {
+        "lens": ServiceSummary(
+            name="Observability",
+            status=lens_status.status,
+            url=None  # Local service
+        )
+    }
+
+    for result in service_results:
+        if isinstance(result, tuple):
+            name, data = result
+            services[name] = ServiceSummary(
+                name="Billing & Authentication" if name == "billing" else "LLM Proxy",
+                status=data.get("status", "unknown"),
+                url=f"{billing_url if name == 'billing' else proxy_url}/v1/status"
+            )
+
+    # Build infrastructure dict
+    infrastructure = {}
+    for result in infra_results:
+        if isinstance(result, InfrastructureStatus):
+            key = result.provider
+            infrastructure[key] = result
+
+    # Extract LLM provider status from proxy response
+    llm_providers = {}
+    for result in service_results:
+        if isinstance(result, tuple) and result[0] == "proxy":
+            proxy_data = result[1]
+            if "providers" in proxy_data:
+                for provider, pdata in proxy_data["providers"].items():
+                    if provider in ["openrouter", "groq", "together_ai", "openai"]:
+                        llm_providers[provider] = LLMProviderStatus(
+                            status=pdata.get("status", "unknown"),
+                            latency_ms=pdata.get("latency_ms")
+                        )
+
+    # Calculate overall status
+    all_statuses = [s.status for s in services.values()]
+    all_statuses.extend([i.status for i in infrastructure.values()])
+
+    if all_statuses.count("outage") >= 3:
+        overall = "major_outage"
+    elif "outage" in all_statuses:
+        overall = "partial_outage"
+    elif "degraded" in all_statuses:
+        overall = "degraded"
+    else:
+        overall = "operational"
+
+    return AggregatedStatus(
+        status=overall,
+        timestamp=datetime.utcnow().isoformat() + "Z",
+        last_incident=None,
+        services=services,
+        infrastructure=infrastructure,
+        llm_providers=llm_providers
+    )
+
+
+@app.get("/api/v1/status/history")
+async def status_history(days: int = 30):
+    """
+    Get historical uptime data for status page graphs.
+    Returns daily uptime percentages for the specified number of days.
+    """
+    if days < 1 or days > 365:
+        raise HTTPException(status_code=400, detail="Days must be between 1 and 365")
+
+    try:
+        if not db_pool:
+            raise HTTPException(status_code=503, detail="Database not available")
+
+        async with db_pool.acquire() as conn:
+            # Get daily uptime from continuous aggregate
+            rows = await conn.fetch("""
+                SELECT
+                    day::date as date,
+                    service_name,
+                    provider_name,
+                    COALESCE(uptime_pct, 100) as uptime_pct,
+                    COALESCE(avg_latency_ms, 0) as avg_latency_ms,
+                    COALESCE(outage_count, 0) as outage_count
+                FROM cirislens.status_daily
+                WHERE day >= NOW() - INTERVAL '1 day' * $1
+                ORDER BY day DESC, service_name, provider_name
+            """, days)
+
+            # Group by date
+            history = {}
+            for row in rows:
+                date_str = row["date"].isoformat()
+                if date_str not in history:
+                    history[date_str] = {"date": date_str, "services": {}}
+
+                service = row["service_name"]
+                provider = row["provider_name"]
+                key = f"{service}.{provider}"
+
+                history[date_str]["services"][key] = {
+                    "uptime_pct": float(row["uptime_pct"]),
+                    "avg_latency_ms": int(row["avg_latency_ms"]),
+                    "outage_count": int(row["outage_count"])
+                }
+
+            # Calculate overall uptime per day
+            for _date_str, data in history.items():
+                if data["services"]:
+                    uptimes = [s["uptime_pct"] for s in data["services"].values()]
+                    data["overall_uptime_pct"] = sum(uptimes) / len(uptimes)
+                else:
+                    data["overall_uptime_pct"] = 100.0
+
+            return {
+                "days": days,
+                "history": list(history.values())
+            }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching status history: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch history") from e
 
 
 # Admin interface routes
