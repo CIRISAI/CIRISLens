@@ -497,9 +497,10 @@ class InfrastructureStatus(BaseModel):
     latency_ms: int | None = None
 
 
-class LLMProviderStatus(BaseModel):
+class ProviderDetail(BaseModel):
     status: str
     latency_ms: int | None = None
+    source: str | None = None  # Which service reported this
 
 
 class AggregatedStatus(BaseModel):
@@ -508,7 +509,10 @@ class AggregatedStatus(BaseModel):
     last_incident: str | None = None
     services: dict[str, ServiceSummary]
     infrastructure: dict[str, InfrastructureStatus]
-    llm_providers: dict[str, LLMProviderStatus]
+    llm_providers: dict[str, ProviderDetail]
+    auth_providers: dict[str, ProviderDetail]
+    database_providers: dict[str, ProviderDetail]
+    internal_providers: dict[str, ProviderDetail]
 
 
 async def fetch_service_status(name: str, url: str) -> tuple[str, dict]:
@@ -600,29 +604,63 @@ async def aggregated_status():  # noqa: PLR0912
             key = result.provider
             infrastructure[key] = result
 
-    # Extract LLM provider status from proxy response
-    llm_providers = {}
+    # Extract all provider statuses organized by category
+    llm_providers: dict[str, ProviderDetail] = {}
+    auth_providers: dict[str, ProviderDetail] = {}
+    database_providers: dict[str, ProviderDetail] = {}
+    internal_providers: dict[str, ProviderDetail] = {}
+
+    # Add CIRISLens local providers
+    database_providers["lens.postgresql"] = ProviderDetail(
+        status=lens_status.providers["postgresql"].status,
+        latency_ms=lens_status.providers["postgresql"].latency_ms,
+        source="cirislens"
+    )
+    internal_providers["lens.grafana"] = ProviderDetail(
+        status=lens_status.providers["grafana"].status,
+        latency_ms=lens_status.providers["grafana"].latency_ms,
+        source="cirislens"
+    )
+
+    # Process service results
     for result in service_results:
-        if isinstance(result, tuple) and result[0] == "proxy":
-            proxy_data = result[1]
-            if "providers" in proxy_data:
-                providers = proxy_data["providers"]
-                # Handle both array format (CIRISProxy) and dict format
-                if isinstance(providers, list):
-                    for pdata in providers:
-                        provider = pdata.get("provider", "")
-                        if provider in ["openrouter", "groq", "together", "openai"]:
-                            llm_providers[provider] = LLMProviderStatus(
-                                status=pdata.get("status", "unknown"),
-                                latency_ms=pdata.get("latency_ms")
-                            )
-                else:
-                    for provider, pdata in providers.items():
-                        if provider in ["openrouter", "groq", "together_ai", "openai"]:
-                            llm_providers[provider] = LLMProviderStatus(
-                                status=pdata.get("status", "unknown"),
-                                latency_ms=pdata.get("latency_ms")
-                            )
+        if not isinstance(result, tuple):
+            continue
+
+        service_name, service_data = result
+        if "providers" not in service_data:
+            continue
+
+        providers = service_data["providers"]
+
+        # Handle CIRISBilling (dict format)
+        if service_name == "billing" and isinstance(providers, dict):
+            for provider, pdata in providers.items():
+                detail = ProviderDetail(
+                    status=pdata.get("status", "unknown"),
+                    latency_ms=pdata.get("latency_ms"),
+                    source="cirisbilling"
+                )
+                if provider == "postgresql":
+                    database_providers["billing.postgresql"] = detail
+                elif provider in ["google_oauth", "google_play"]:
+                    auth_providers[provider] = detail
+
+        # Handle CIRISProxy (array format)
+        elif service_name == "proxy" and isinstance(providers, list):
+            for pdata in providers:
+                provider = pdata.get("provider", "")
+                detail = ProviderDetail(
+                    status=pdata.get("status", "unknown"),
+                    latency_ms=pdata.get("latency_ms"),
+                    source="cirisproxy"
+                )
+                if provider in ["openrouter", "groq", "together", "openai"]:
+                    llm_providers[provider] = detail
+                elif provider == "brave":
+                    internal_providers["brave_search"] = detail
+                elif provider == "billing":
+                    internal_providers["proxy.billing"] = detail
 
     # Calculate overall status
     all_statuses = [s.status for s in services.values()]
@@ -643,7 +681,10 @@ async def aggregated_status():  # noqa: PLR0912
         last_incident=None,
         services=services,
         infrastructure=infrastructure,
-        llm_providers=llm_providers
+        llm_providers=llm_providers,
+        auth_providers=auth_providers,
+        database_providers=database_providers,
+        internal_providers=internal_providers
     )
 
 
