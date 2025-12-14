@@ -554,11 +554,19 @@ async def aggregated_status():  # noqa: PLR0912
         fetch_service_status("proxy", proxy_url),
     ]
 
-    # Infrastructure checks
-    infra_tasks = [
-        check_infrastructure("US Region (Chicago)", "https://api.ciris.ai/health", "vultr"),
-        check_infrastructure("Container Registry", "https://ghcr.io/v2/", "github"),
-    ]
+    # Infrastructure checks (URLs configurable via env vars)
+    vultr_health_url = os.getenv("VULTR_HEALTH_URL", "")
+    ghcr_health_url = os.getenv("GHCR_HEALTH_URL", "https://ghcr.io/v2/")
+
+    infra_tasks = []
+    if vultr_health_url:
+        infra_tasks.append(
+            check_infrastructure("US Region (Chicago)", vultr_health_url, "vultr")
+        )
+    if ghcr_health_url:
+        infra_tasks.append(
+            check_infrastructure("Container Registry", ghcr_health_url, "github")
+        )
 
     # Get local CIRISLens status
     lens_status = await service_status()
