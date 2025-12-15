@@ -672,9 +672,25 @@ async def aggregated_status():  # noqa: PLR0912
                 latency_ms=None
             )
         if "proxy" in region_data:
+            # Calculate proxy status based on LLM providers
+            # Only degraded if ALL providers are degraded or worse
+            proxy_status = "operational"
+            proxy_providers = region_data["proxy"].get("providers", [])
+            if isinstance(proxy_providers, list) and proxy_providers:
+                llm_statuses = [
+                    p.get("status", "unknown")
+                    for p in proxy_providers
+                    if p.get("provider") in ["openrouter", "groq", "together", "openai"]
+                ]
+                if llm_statuses:
+                    # Only degraded/outage if ALL LLM providers are degraded or worse
+                    if all(s == "outage" for s in llm_statuses):
+                        proxy_status = "outage"
+                    elif all(s in ["degraded", "outage"] for s in llm_statuses):
+                        proxy_status = "degraded"
             services["proxy"] = ServiceSummary(
                 name="LLM Proxy",
-                status=region_data["proxy"].get("status", "unknown"),
+                status=proxy_status,
                 latency_ms=None
             )
 

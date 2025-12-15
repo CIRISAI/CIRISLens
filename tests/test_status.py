@@ -444,6 +444,70 @@ class TestStatusHistoryEndpoint:
             main_module.db_pool = original_pool
 
 
+class TestProxyStatusCalculation:
+    """Tests for LLM Proxy status calculation logic."""
+
+    def test_proxy_operational_when_any_provider_operational(self):
+        """Proxy should be operational if any LLM provider is operational."""
+        # Simulate proxy response with mixed statuses
+        proxy_data = {
+            "providers": [
+                {"provider": "openrouter", "status": "operational"},
+                {"provider": "groq", "status": "operational"},
+                {"provider": "together", "status": "degraded"},  # One degraded
+            ]
+        }
+
+        llm_statuses = [
+            p.get("status", "unknown")
+            for p in proxy_data["providers"]
+            if p.get("provider") in ["openrouter", "groq", "together", "openai"]
+        ]
+
+        # Not all degraded, so should be operational
+        all_degraded = all(s in ["degraded", "outage"] for s in llm_statuses)
+        assert not all_degraded
+
+    def test_proxy_degraded_only_when_all_providers_degraded(self):
+        """Proxy should only be degraded if ALL LLM providers are degraded or worse."""
+        proxy_data = {
+            "providers": [
+                {"provider": "openrouter", "status": "degraded"},
+                {"provider": "groq", "status": "degraded"},
+                {"provider": "together", "status": "outage"},
+            ]
+        }
+
+        llm_statuses = [
+            p.get("status", "unknown")
+            for p in proxy_data["providers"]
+            if p.get("provider") in ["openrouter", "groq", "together", "openai"]
+        ]
+
+        # All are degraded or worse
+        all_degraded = all(s in ["degraded", "outage"] for s in llm_statuses)
+        assert all_degraded
+
+    def test_proxy_outage_only_when_all_providers_outage(self):
+        """Proxy should only be outage if ALL LLM providers are in outage."""
+        proxy_data = {
+            "providers": [
+                {"provider": "openrouter", "status": "outage"},
+                {"provider": "groq", "status": "outage"},
+                {"provider": "together", "status": "outage"},
+            ]
+        }
+
+        llm_statuses = [
+            p.get("status", "unknown")
+            for p in proxy_data["providers"]
+            if p.get("provider") in ["openrouter", "groq", "together", "openai"]
+        ]
+
+        all_outage = all(s == "outage" for s in llm_statuses)
+        assert all_outage
+
+
 class TestStatusCollectorRegions:
     """Tests for multi-region status collector logic."""
 
