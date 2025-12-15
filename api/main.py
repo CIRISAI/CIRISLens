@@ -73,10 +73,8 @@ sessions = {}
 telemetry_configs = {}
 visibility_configs = {}
 
-# Database configuration
-DATABASE_URL = os.getenv(
-    "DATABASE_URL", "postgresql://user:password@host:5432/dbname"
-)
+# Database configuration - DATABASE_URL env var is required in production
+DATABASE_URL = os.getenv("DATABASE_URL", "")
 db_pool = None
 manager_collector = None
 otlp_collector = None

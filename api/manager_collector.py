@@ -348,9 +348,9 @@ class ManagerCollector:
 
 async def main():
     """Standalone collector service"""
-    database_url = os.getenv(
-        "DATABASE_URL", "postgresql://user:password@host:5432/dbname"
-    )
+    database_url = os.getenv("DATABASE_URL", "")
+    if not database_url:
+        raise ValueError("DATABASE_URL environment variable is required")
 
     # Setup logging
     logging.basicConfig(

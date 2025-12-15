@@ -7,7 +7,7 @@ contactPoints:
   - orgId: 1
     name: ciris-ops
     receivers:
-      # Discord webhook for alerts
+      # Discord webhook for alerts - set via DISCORD_WEBHOOK_URL env var
       - uid: discord-receiver
         type: discord
         settings:

@@ -603,9 +603,9 @@ class OTLPCollector:
 
 async def main():
     """Standalone OTLP collector"""
-    database_url = os.getenv(
-        "DATABASE_URL", "postgresql://user:password@host:5432/dbname"
-    )
+    database_url = os.getenv("DATABASE_URL", "")
+    if not database_url:
+        raise ValueError("DATABASE_URL environment variable is required")
 
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
