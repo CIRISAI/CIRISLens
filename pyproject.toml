@@ -45,7 +45,13 @@ dev = [
     "pytest>=7.4.0",
     "pytest-asyncio>=0.21.0",
     "pytest-cov>=4.1.0",
+    "pytest-mock>=3.12.0",
+    "pytest-timeout>=2.2.0",
+    "pytest-xdist>=3.5.0",
     "httpx>=0.25.0",  # For TestClient
+    "respx>=0.20.0",  # Mock httpx requests
+    "hypothesis>=6.92.0",  # Property-based testing
+    "faker>=22.0.0",  # Realistic test data
     "asyncpg-stubs>=0.29.0",
     "types-aiofiles>=23.2.0",
 ]
