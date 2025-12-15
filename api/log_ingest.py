@@ -8,7 +8,7 @@ import hashlib
 import json
 import logging
 import re
-from datetime import datetime
+from datetime import UTC, datetime
 
 import asyncpg
 
@@ -192,7 +192,7 @@ class LogIngestService:
                     if isinstance(timestamp, str):
                         timestamp = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
                     elif not timestamp:
-                        timestamp = datetime.utcnow()
+                        timestamp = datetime.now(UTC)
 
                     level = log.get("level", "INFO").upper()
                     if level not in ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"):

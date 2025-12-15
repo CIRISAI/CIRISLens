@@ -8,7 +8,7 @@ import json
 import logging
 import os
 import secrets
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -79,6 +79,13 @@ db_pool = None
 manager_collector = None
 otlp_collector = None
 log_ingest_service = None
+
+# SQL Constants
+SQL_INSERT_STATUS_CHECK = """
+    INSERT INTO cirislens.status_checks
+    (service_name, provider_name, region, status, latency_ms, error_message)
+    VALUES ($1, $2, $3, $4, $5, $6)
+"""
 token_manager = TokenManager()
 
 
@@ -144,8 +151,8 @@ def create_session(user: OAuthUser) -> str:
     session_id = secrets.token_urlsafe(32)
     sessions[session_id] = {
         "user": user.dict(),
-        "created_at": datetime.utcnow().isoformat(),
-        "expires_at": (datetime.utcnow() + timedelta(hours=24)).isoformat(),
+        "created_at": datetime.now(UTC).isoformat(),
+        "expires_at": (datetime.now(UTC) + timedelta(hours=24)).isoformat(),
     }
     return session_id
 
@@ -157,7 +164,7 @@ def get_current_user(request: Request) -> dict | None:
         return None
 
     session = sessions[session_id]
-    if datetime.fromisoformat(session["expires_at"]) < datetime.utcnow():
+    if datetime.fromisoformat(session["expires_at"]) < datetime.now(UTC):
         del sessions[session_id]
         return None
 
@@ -233,20 +240,16 @@ async def run_status_collector():  # noqa: PLR0912
                 async with db_pool.acquire() as conn:
                     # Store CIRISLens local checks (global region)
                     if isinstance(pg_status, ProviderStatus):
-                        await conn.execute("""
-                            INSERT INTO cirislens.status_checks
-                            (service_name, provider_name, region, status, latency_ms, error_message)
-                            VALUES ($1, $2, $3, $4, $5, $6)
-                        """, "cirislens", "postgresql", "global", pg_status.status,
-                            pg_status.latency_ms, pg_status.message)
+                        await conn.execute(
+                            SQL_INSERT_STATUS_CHECK, "cirislens", "postgresql", "global",
+                            pg_status.status, pg_status.latency_ms, pg_status.message
+                        )
 
                     if isinstance(grafana_status, ProviderStatus):
-                        await conn.execute("""
-                            INSERT INTO cirislens.status_checks
-                            (service_name, provider_name, region, status, latency_ms, error_message)
-                            VALUES ($1, $2, $3, $4, $5, $6)
-                        """, "cirislens", "grafana", "global", grafana_status.status,
-                            grafana_status.latency_ms, grafana_status.message)
+                        await conn.execute(
+                            SQL_INSERT_STATUS_CHECK, "cirislens", "grafana", "global",
+                            grafana_status.status, grafana_status.latency_ms, grafana_status.message
+                        )
 
                     # Store regional service checks
                     for region, service, result in regional_results:
@@ -256,13 +259,10 @@ async def run_status_collector():  # noqa: PLR0912
                         _name, service_data = result
 
                         # Store overall service status
-                        await conn.execute("""
-                            INSERT INTO cirislens.status_checks
-                            (service_name, provider_name, region, status, latency_ms, error_message)
-                            VALUES ($1, $2, $3, $4, $5, $6)
-                        """, f"ciris{service}", "service", region,
-                            service_data.get("status", "unknown"), None,
-                            service_data.get("error"))
+                        await conn.execute(
+                            SQL_INSERT_STATUS_CHECK, f"ciris{service}", "service", region,
+                            service_data.get("status", "unknown"), None, service_data.get("error")
+                        )
 
                         if "providers" not in service_data:
                             continue
@@ -274,13 +274,10 @@ async def run_status_collector():  # noqa: PLR0912
                             for provider, pdata in providers.items():
                                 # LLM providers are global, others are regional
                                 prov_region = "global" if provider in ["openrouter", "groq", "together", "openai"] else region
-                                await conn.execute("""
-                                    INSERT INTO cirislens.status_checks
-                                    (service_name, provider_name, region, status, latency_ms, error_message)
-                                    VALUES ($1, $2, $3, $4, $5, $6)
-                                """, f"ciris{service}", provider, prov_region,
-                                    pdata.get("status", "unknown"),
-                                    pdata.get("latency_ms"), pdata.get("message"))
+                                await conn.execute(
+                                    SQL_INSERT_STATUS_CHECK, f"ciris{service}", provider, prov_region,
+                                    pdata.get("status", "unknown"), pdata.get("latency_ms"), pdata.get("message")
+                                )
 
                         # Handle array format (CIRISProxy)
                         elif isinstance(providers, list):
@@ -288,13 +285,10 @@ async def run_status_collector():  # noqa: PLR0912
                                 provider = pdata.get("provider", "unknown")
                                 # LLM providers are global, others are regional
                                 prov_region = "global" if provider in ["openrouter", "groq", "together", "openai"] else region
-                                await conn.execute("""
-                                    INSERT INTO cirislens.status_checks
-                                    (service_name, provider_name, region, status, latency_ms, error_message)
-                                    VALUES ($1, $2, $3, $4, $5, $6)
-                                """, f"ciris{service}", provider, prov_region,
-                                    pdata.get("status", "unknown"),
-                                    pdata.get("latency_ms"), pdata.get("error"))
+                                await conn.execute(
+                                    SQL_INSERT_STATUS_CHECK, f"ciris{service}", provider, prov_region,
+                                    pdata.get("status", "unknown"), pdata.get("latency_ms"), pdata.get("error")
+                                )
 
                 logger.debug("Status checks recorded")
 
@@ -402,7 +396,7 @@ async def root():
 @app.get("/health")
 async def health():
     """Health check endpoint"""
-    return {"status": "healthy", "timestamp": datetime.utcnow().isoformat()}
+    return {"status": "healthy", "timestamp": datetime.now(UTC).isoformat()}
 
 
 # Status check models
@@ -423,37 +417,37 @@ class ServiceStatus(BaseModel):
 
 async def check_postgresql() -> ProviderStatus:
     """Check PostgreSQL connectivity and latency"""
-    start = datetime.utcnow()
+    start = datetime.now(UTC)
     try:
         if db_pool:
             async with db_pool.acquire() as conn:
                 await asyncio.wait_for(conn.fetchval("SELECT 1"), timeout=5.0)
-            latency = int((datetime.utcnow() - start).total_seconds() * 1000)
+            latency = int((datetime.now(UTC) - start).total_seconds() * 1000)
             status = "operational" if latency < 1000 else "degraded"
             return ProviderStatus(
                 status=status,
                 latency_ms=latency,
-                last_check=datetime.utcnow().isoformat() + "Z"
+                last_check=datetime.now(UTC).isoformat() + "Z"
             )
         else:
             return ProviderStatus(
                 status="outage",
                 latency_ms=None,
-                last_check=datetime.utcnow().isoformat() + "Z",
+                last_check=datetime.now(UTC).isoformat() + "Z",
                 message="Database pool not initialized"
             )
     except TimeoutError:
         return ProviderStatus(
             status="outage",
             latency_ms=5000,
-            last_check=datetime.utcnow().isoformat() + "Z",
+            last_check=datetime.now(UTC).isoformat() + "Z",
             message="Connection timeout"
         )
     except Exception as e:
         return ProviderStatus(
             status="outage",
             latency_ms=None,
-            last_check=datetime.utcnow().isoformat() + "Z",
+            last_check=datetime.now(UTC).isoformat() + "Z",
             message=str(e)[:100]
         )
 
@@ -461,37 +455,37 @@ async def check_postgresql() -> ProviderStatus:
 async def check_grafana() -> ProviderStatus:
     """Check Grafana health endpoint"""
     grafana_url = os.getenv("GRAFANA_URL", "http://grafana:3000")
-    start = datetime.utcnow()
+    start = datetime.now(UTC)
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             response = await client.get(f"{grafana_url}/api/health")
-            latency = int((datetime.utcnow() - start).total_seconds() * 1000)
+            latency = int((datetime.now(UTC) - start).total_seconds() * 1000)
             if response.status_code == 200:
                 status = "operational" if latency < 1000 else "degraded"
                 return ProviderStatus(
                     status=status,
                     latency_ms=latency,
-                    last_check=datetime.utcnow().isoformat() + "Z"
+                    last_check=datetime.now(UTC).isoformat() + "Z"
                 )
             else:
                 return ProviderStatus(
                     status="degraded",
                     latency_ms=latency,
-                    last_check=datetime.utcnow().isoformat() + "Z",
+                    last_check=datetime.now(UTC).isoformat() + "Z",
                     message=f"HTTP {response.status_code}"
                 )
     except httpx.TimeoutException:
         return ProviderStatus(
             status="outage",
             latency_ms=5000,
-            last_check=datetime.utcnow().isoformat() + "Z",
+            last_check=datetime.now(UTC).isoformat() + "Z",
             message="Connection timeout"
         )
     except Exception as e:
         return ProviderStatus(
             status="outage",
             latency_ms=None,
-            last_check=datetime.utcnow().isoformat() + "Z",
+            last_check=datetime.now(UTC).isoformat() + "Z",
             message=str(e)[:100]
         )
 
@@ -517,7 +511,7 @@ async def service_status():
     return ServiceStatus(
         service="cirislens",
         status=overall,
-        timestamp=datetime.utcnow().isoformat() + "Z",
+        timestamp=datetime.now(UTC).isoformat() + "Z",
         version=app.version,
         providers={
             "postgresql": pg_status,
@@ -585,12 +579,12 @@ async def check_infrastructure(
     name: str, url: str, provider: str, latency_threshold: int = 1000, accept_401: bool = False
 ) -> InfrastructureStatus:
     """Check infrastructure endpoint availability"""
-    start = datetime.utcnow()
+    start = datetime.now(UTC)
     try:
         # Limit redirects to prevent SSRF via open redirect
         async with httpx.AsyncClient(timeout=5.0, max_redirects=3) as client:
             response = await client.get(url, follow_redirects=True)
-            latency = int((datetime.utcnow() - start).total_seconds() * 1000)
+            latency = int((datetime.now(UTC) - start).total_seconds() * 1000)
             # Accept 401 for endpoints that require auth (proves they're responding)
             ok_status = response.status_code < 400 or (accept_401 and response.status_code == 401)
             status = "operational" if ok_status and latency < latency_threshold else "degraded"
@@ -783,7 +777,7 @@ async def aggregated_status():  # noqa: PLR0912
 
     return AggregatedStatus(
         status=overall,
-        timestamp=datetime.utcnow().isoformat() + "Z",
+        timestamp=datetime.now(UTC).isoformat() + "Z",
         last_incident=None,
         regions=regions,
         infrastructure=infrastructure,
@@ -1552,7 +1546,10 @@ async def oauth_callback(code: str, state: str | None = None):
 
     session_id = create_session(user)
     response = RedirectResponse(url="/lens/admin/", status_code=302)
-    response.set_cookie(key="session_id", value=session_id, httponly=True, samesite="lax")
+    response.set_cookie(
+        key="session_id", value=session_id, httponly=True,
+        samesite="lax", secure=IS_PRODUCTION
+    )
     return response
 
 
@@ -1623,7 +1620,7 @@ async def update_telemetry_config(
     agent_id: str, config: TelemetryConfig, user: dict = Depends(require_auth)
 ):
     """Update telemetry configuration for an agent"""
-    config.last_updated = datetime.utcnow().isoformat()
+    config.last_updated = datetime.now(UTC).isoformat()
     config.updated_by = user["email"]
     telemetry_configs[agent_id] = config.dict()
     return {"status": "updated", "config": config}
@@ -1636,7 +1633,7 @@ async def patch_telemetry_config(
     """Partially update telemetry configuration"""
     config = telemetry_configs.get(agent_id, {"agent_id": agent_id})
     config.update(updates)
-    config["last_updated"] = datetime.utcnow().isoformat()
+    config["last_updated"] = datetime.now(UTC).isoformat()
     config["updated_by"] = user["email"]
     telemetry_configs[agent_id] = config
     return {"status": "updated", "config": config}
@@ -1656,7 +1653,7 @@ async def update_visibility_config(
     agent_id: str, config: VisibilityConfig, user: dict = Depends(require_auth)
 ):
     """Update visibility configuration for an agent"""
-    config.last_updated = datetime.utcnow().isoformat()
+    config.last_updated = datetime.now(UTC).isoformat()
     config.updated_by = user["email"]
     config.redact_pii = True  # Always enforce PII redaction
     visibility_configs[agent_id] = config.dict()
@@ -1670,7 +1667,7 @@ async def patch_visibility_config(
     """Partially update visibility configuration"""
     config = visibility_configs.get(agent_id, {"agent_id": agent_id})
     config.update(updates)
-    config["last_updated"] = datetime.utcnow().isoformat()
+    config["last_updated"] = datetime.now(UTC).isoformat()
     config["updated_by"] = user["email"]
     config["redact_pii"] = True  # Always enforce PII redaction
     visibility_configs[agent_id] = config
