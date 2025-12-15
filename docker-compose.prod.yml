@@ -11,6 +11,7 @@ services:
 
   # API connects to production network
   cirislens-api:
+    image: ghcr.io/cirisai/cirislens:latest
     networks:
       - ciris-network
       - cirislens-internal
@@ -22,6 +23,9 @@ services:
       - OAUTH_CALLBACK_URL=https://agents.ciris.ai/lens/admin/auth/callback
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    # Override volumes - use SQL from image, not host mount
+    volumes:
+      - cirislens_sessions:/app/sessions
     deploy:
       resources:
         limits:
