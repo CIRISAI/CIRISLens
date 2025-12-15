@@ -525,8 +525,11 @@ async def fetch_service_status(name: str, url: str) -> tuple[str, dict]:
                 return name, data
             else:
                 return name, {"status": "degraded", "error": f"HTTP {response.status_code}"}
-    except Exception as e:
-        return name, {"status": "outage", "error": str(e)[:100]}
+    except httpx.TimeoutException:
+        return name, {"status": "outage", "error": "Timeout"}
+    except Exception:
+        # Don't leak internal error details
+        return name, {"status": "outage", "error": "Connection failed"}
 
 
 async def check_infrastructure(
@@ -535,7 +538,8 @@ async def check_infrastructure(
     """Check infrastructure endpoint availability"""
     start = datetime.utcnow()
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        # Limit redirects to prevent SSRF via open redirect
+        async with httpx.AsyncClient(timeout=5.0, max_redirects=3) as client:
             response = await client.get(url, follow_redirects=True)
             latency = int((datetime.utcnow() - start).total_seconds() * 1000)
             # Accept 401 for endpoints that require auth (proves they're responding)
