@@ -4,12 +4,10 @@ Unit tests for CIRISLens API routes in main.py
 Tests session management, authentication, and core API endpoints.
 """
 
-import asyncio
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastapi.testclient import TestClient
 from httpx import ASGITransport, AsyncClient
 
 
@@ -33,7 +31,7 @@ class TestSessionManagement:
 
     def test_create_session_returns_token(self):
         """Test that create_session returns a session token."""
-        from api.main import create_session, sessions, OAuthUser
+        from api.main import OAuthUser, create_session, sessions
 
         user = OAuthUser(
             email="test@ciris.ai",
@@ -54,7 +52,7 @@ class TestSessionManagement:
 
     def test_create_session_sets_expiry(self):
         """Test that sessions have proper expiry time."""
-        from api.main import create_session, sessions, OAuthUser
+        from api.main import OAuthUser, create_session, sessions
 
         user = OAuthUser(
             email="test@ciris.ai",
@@ -96,7 +94,7 @@ class TestSessionManagement:
 
     def test_get_current_user_returns_user_for_valid_session(self):
         """Test get_current_user returns user dict for valid session."""
-        from api.main import get_current_user, create_session, sessions, OAuthUser
+        from api.main import OAuthUser, create_session, get_current_user, sessions
 
         user = OAuthUser(
             email="valid@ciris.ai",
@@ -142,8 +140,9 @@ class TestRequireAuth:
 
     def test_require_auth_raises_401_without_session(self):
         """Test that require_auth raises HTTPException when not authenticated."""
-        from api.main import require_auth
         from fastapi import HTTPException
+
+        from api.main import require_auth
 
         mock_request = MagicMock()
         mock_request.cookies.get.return_value = None
@@ -156,7 +155,7 @@ class TestRequireAuth:
 
     def test_require_auth_returns_user_when_authenticated(self):
         """Test that require_auth returns user when authenticated."""
-        from api.main import require_auth, create_session, sessions, OAuthUser
+        from api.main import OAuthUser, create_session, require_auth, sessions
 
         user = OAuthUser(
             email="auth@ciris.ai",
@@ -255,7 +254,7 @@ class TestCheckPostgresql:
         import api.main as main_module
 
         mock_conn = AsyncMock()
-        mock_conn.fetchval.side_effect = asyncio.TimeoutError()
+        mock_conn.fetchval.side_effect = TimeoutError()
 
         mock_pool = MagicMock()
         mock_pool.acquire.return_value.__aenter__ = AsyncMock(return_value=mock_conn)
@@ -319,8 +318,8 @@ class TestCheckGrafana:
     @pytest.mark.asyncio
     async def test_check_grafana_returns_degraded_on_non_200(self):
         """Test that check_grafana returns degraded on non-200 status."""
+
         import api.main as main_module
-        import httpx
 
         mock_response = MagicMock()
         mock_response.status_code = 503
@@ -339,8 +338,9 @@ class TestCheckGrafana:
     @pytest.mark.asyncio
     async def test_check_grafana_handles_timeout(self):
         """Test that check_grafana handles timeout exceptions."""
-        import api.main as main_module
         import httpx
+
+        import api.main as main_module
 
         with patch("api.main.httpx.AsyncClient") as mock_client_class:
             mock_client = AsyncMock()
@@ -400,8 +400,9 @@ class TestFetchServiceStatus:
     @pytest.mark.asyncio
     async def test_fetch_service_status_timeout(self):
         """Test fetch with timeout."""
-        import api.main as main_module
         import httpx
+
+        import api.main as main_module
 
         with patch("api.main.httpx.AsyncClient") as mock_client_class:
             mock_client = AsyncMock()
@@ -571,8 +572,9 @@ class TestOAuthUserModel:
 
     def test_oauth_user_email_validation(self):
         """Test OAuthUser email validation."""
-        from api.main import OAuthUser
         from pydantic import ValidationError
+
+        from api.main import OAuthUser
 
         with pytest.raises(ValidationError):
             OAuthUser(email="not-an-email", name="Test")

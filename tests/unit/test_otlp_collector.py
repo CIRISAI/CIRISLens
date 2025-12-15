@@ -5,7 +5,6 @@ Tests agent discovery, OTLP data collection, and signal processing.
 """
 
 import os
-from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -208,6 +207,7 @@ class TestCollectorLifecycle:
     async def test_stop_cancels_tasks(self):
         """Test that stop() cancels all running tasks."""
         import asyncio
+
         from api.otlp_collector import OTLPCollector
 
         collector = OTLPCollector("postgresql://test@localhost/testdb")

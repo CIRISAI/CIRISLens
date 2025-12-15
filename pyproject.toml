@@ -107,8 +107,11 @@ ignore = [
     "PLR2004",  # Magic values
     "S311",     # Random for non-crypto (fine in tests)
     "S105",     # Hardcoded test passwords
+    "S106",     # Hardcoded test password arguments
     "TCH003",   # Type checking imports
     "PTH100",   # Path methods
+    "PTH109",   # os.getcwd() vs Path.cwd()
+    "PTH118",   # os.path.join vs Path /
     "PTH120",   # Path methods
     "C401",     # Generator vs comprehension style
     "PLC0415",  # Import not at top level (fine in tests for lazy imports)

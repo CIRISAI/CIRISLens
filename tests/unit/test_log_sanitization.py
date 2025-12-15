@@ -9,14 +9,13 @@ import hashlib
 import sys
 from pathlib import Path
 
-import pytest
-from hypothesis import given, settings, assume
+from hypothesis import assume, given, settings
 from hypothesis import strategies as st
 
 # Add api to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "api"))
 
-from log_ingest import sanitize_message, hash_user_id, REDACT_PATTERNS
+from log_ingest import REDACT_PATTERNS, hash_user_id, sanitize_message
 
 
 class TestSanitizeMessage:
