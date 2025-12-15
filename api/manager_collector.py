@@ -15,6 +15,9 @@ from asyncpg import Pool
 
 logger = logging.getLogger(__name__)
 
+# SSL verification - enabled by default, can be disabled for dev with self-signed certs
+SSL_VERIFY = os.getenv("SSL_VERIFY", "true").lower() != "false"
+
 
 class ManagerCollector:
     def __init__(self, database_url: str, pool: Pool | None = None):
@@ -133,8 +136,8 @@ class ManagerCollector:
         if auth_token:
             headers["Authorization"] = f"Bearer {auth_token}"
 
-        # Disable SSL verification for internal services (agents.ciris.ai is behind Cloudflare)
-        async with httpx.AsyncClient(timeout=10.0, verify=False) as client:
+        # SSL verification configurable via SSL_VERIFY env var (default: true)
+        async with httpx.AsyncClient(timeout=10.0, verify=SSL_VERIFY) as client:
             # Collect manager status
             try:
                 status_response = await client.get(f"{manager_url}/status", headers=headers)

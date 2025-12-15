@@ -42,6 +42,9 @@ from urllib.request import Request, urlopen
 
 __version__ = "1.0.0"
 
+# Default CIRISLens log ingestion endpoint
+DEFAULT_ENDPOINT = "https://agents.ciris.ai/lens/api/v1/logs/ingest"
+
 
 class LogShipper:
     """
@@ -55,7 +58,7 @@ class LogShipper:
         self,
         service_name: str,
         token: str,
-        endpoint: str = "https://agents.ciris.ai/lens/api/v1/logs/ingest",
+        endpoint: str = DEFAULT_ENDPOINT,
         batch_size: int = 100,
         flush_interval: float = 5.0,
         server_id: str | None = None,
@@ -348,7 +351,7 @@ class LogShipperHandler(logging.Handler):
 def setup_logging(
     service_name: str,
     token: str,
-    endpoint: str = "https://agents.ciris.ai/lens/api/v1/logs/ingest",
+    endpoint: str = DEFAULT_ENDPOINT,
     min_level: int = logging.INFO,
     also_console: bool = True,
     **shipper_kwargs,
@@ -432,9 +435,7 @@ def from_env(service_name: str | None = None) -> LogShipper:
     """
     name = service_name or os.environ.get("CIRISLENS_SERVICE_NAME")
     token = os.environ.get("CIRISLENS_TOKEN")
-    endpoint = os.environ.get(
-        "CIRISLENS_ENDPOINT", "https://agents.ciris.ai/lens/api/v1/logs/ingest"
-    )
+    endpoint = os.environ.get("CIRISLENS_ENDPOINT", DEFAULT_ENDPOINT)
 
     if not name:
         raise ValueError("service_name required or set CIRISLENS_SERVICE_NAME")

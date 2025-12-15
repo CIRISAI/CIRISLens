@@ -30,7 +30,7 @@ import argparse
 import json
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -40,6 +40,7 @@ import requests
 SONAR_TOKEN_FILE = Path.home() / ".sonartoken"
 SONAR_API_BASE = "https://sonarcloud.io/api"
 PROJECT_KEY = "CIRISAI_CIRISLens"
+UTC_OFFSET = "+00:00"
 
 
 class SonarClient:
@@ -197,8 +198,8 @@ class SonarClient:
 def get_recent_prs(limit: int = 2) -> list[tuple[str, str]]:
     """Get recent open PRs from GitHub."""
     try:
-        result = subprocess.run(
-            ["gh", "pr", "list", "--limit", str(limit), "--json", "number,headRefName"],
+        result = subprocess.run(  # noqa: S603 - hardcoded gh CLI command
+            ["gh", "pr", "list", "--limit", str(limit), "--json", "number,headRefName"],  # noqa: S607
             capture_output=True,
             text=True,
             check=True,
@@ -212,8 +213,8 @@ def get_recent_prs(limit: int = 2) -> list[tuple[str, str]]:
 def format_time_ago(iso_timestamp: str) -> str:
     """Format ISO timestamp as 'X minutes ago' or 'X hours ago'."""
     try:
-        dt = datetime.fromisoformat(iso_timestamp.replace("Z", "+00:00"))
-        now = datetime.now(timezone.utc)
+        dt = datetime.fromisoformat(iso_timestamp.replace("Z", UTC_OFFSET))
+        now = datetime.now(UTC)
         delta = now - dt
 
         seconds = int(delta.total_seconds())
@@ -261,7 +262,7 @@ def format_quality_gate_summary(qg_status: dict[str, Any], label: str, timestamp
 def format_hotspot(hotspot: dict[str, Any]) -> str:
     """Format a security hotspot for display."""
     file_path = hotspot["component"].split(":")[-1]
-    created = datetime.fromisoformat(hotspot["creationDate"].replace("Z", "+00:00"))
+    created = datetime.fromisoformat(hotspot["creationDate"].replace("Z", UTC_OFFSET))
     created_str = created.strftime("%Y-%m-%d")
 
     return (
@@ -276,7 +277,7 @@ def format_hotspot(hotspot: dict[str, Any]) -> str:
 def format_issue(issue: dict[str, Any]) -> str:
     """Format an issue for display."""
     file_path = issue["component"].split(":")[-1]
-    created = datetime.fromisoformat(issue["creationDate"].replace("Z", "+00:00"))
+    created = datetime.fromisoformat(issue["creationDate"].replace("Z", UTC_OFFSET))
     created_str = created.strftime("%Y-%m-%d")
 
     return (
@@ -287,7 +288,7 @@ def format_issue(issue: dict[str, Any]) -> str:
     )
 
 
-def main():
+def main():  # noqa: PLR0912, PLR0915
     parser = argparse.ArgumentParser(description="SonarCloud Tool for CIRISLens")
     subparsers = parser.add_subparsers(dest="command", help="Commands")
 
@@ -500,8 +501,8 @@ def main():
             for m in component.get("measures", []):
                 if "value" in m:
                     measures[m["metric"]] = m["value"]
-                elif "periods" in m and m["periods"]:
-                    measures[m["metric"]] = m["periods"][0]["value"]
+                elif periods := m.get("periods"):
+                    measures[m["metric"]] = periods[0]["value"]
 
             print(f"\nCoverage Metrics for {PROJECT_KEY}")
             print("=" * 50)

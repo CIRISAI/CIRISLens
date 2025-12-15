@@ -86,6 +86,11 @@ SQL_INSERT_STATUS_CHECK = """
     (service_name, provider_name, region, status, latency_ms, error_message)
     VALUES ($1, $2, $3, $4, $5, $6)
 """
+
+# Error message constants
+ERR_DATABASE_NOT_AVAILABLE = "Database not available"
+ERR_LOG_INGEST_NOT_AVAILABLE = "Log ingestion service not available"
+
 token_manager = TokenManager()
 
 
@@ -810,7 +815,7 @@ async def status_history(days: int = 30, region: str | None = None):  # noqa: PL
 
     try:
         if not db_pool:
-            raise HTTPException(status_code=503, detail="Database not available")
+            raise HTTPException(status_code=503, detail=ERR_DATABASE_NOT_AVAILABLE)
 
         async with db_pool.acquire() as conn:
             # Get daily uptime from continuous aggregate
@@ -1712,7 +1717,7 @@ async def get_managers(user: dict = Depends(require_auth)):
 async def add_manager(config: ManagerConfig, user: dict = Depends(require_auth)):
     """Add a new manager to monitor"""
     if not db_pool:
-        raise HTTPException(status_code=503, detail="Database not available")
+        raise HTTPException(status_code=503, detail=ERR_DATABASE_NOT_AVAILABLE)
 
     try:
         # Add to database and start collection
@@ -1740,7 +1745,7 @@ async def update_manager(
 ):
     """Update a manager configuration"""
     if not db_pool:
-        raise HTTPException(status_code=503, detail="Database not available")
+        raise HTTPException(status_code=503, detail=ERR_DATABASE_NOT_AVAILABLE)
 
     async with db_pool.acquire() as conn:
         # Build update query dynamically based on provided fields
@@ -1958,7 +1963,7 @@ async def ingest_logs(request: Request):
           -d '{"timestamp":"2025-12-11T12:00:00Z","level":"INFO","event":"request_completed","message":"OK"}'
     """
     if not log_ingest_service:
-        raise HTTPException(status_code=503, detail="Log ingestion service not available")
+        raise HTTPException(status_code=503, detail=ERR_LOG_INGEST_NOT_AVAILABLE)
 
     # Extract bearer token
     auth_header = request.headers.get("Authorization", "")
@@ -2003,7 +2008,7 @@ async def ingest_logs(request: Request):
 async def get_service_tokens(user: dict = Depends(require_auth)):
     """Get all service tokens (without actual token values)."""
     if not log_ingest_service:
-        raise HTTPException(status_code=503, detail="Log ingestion service not available")
+        raise HTTPException(status_code=503, detail=ERR_LOG_INGEST_NOT_AVAILABLE)
 
     tokens = await log_ingest_service.get_tokens()
     return {"tokens": tokens}
@@ -2016,7 +2021,7 @@ async def create_service_token(config: ServiceTokenCreate, user: dict = Depends(
     Returns the raw token - this is the only time it will be shown!
     """
     if not log_ingest_service:
-        raise HTTPException(status_code=503, detail="Log ingestion service not available")
+        raise HTTPException(status_code=503, detail=ERR_LOG_INGEST_NOT_AVAILABLE)
 
     raw_token = await log_ingest_service.create_token(
         service_name=config.service_name, description=config.description, created_by=user["email"]
@@ -2034,7 +2039,7 @@ async def create_service_token(config: ServiceTokenCreate, user: dict = Depends(
 async def revoke_service_token(service_name: str, user: dict = Depends(require_auth)):
     """Revoke a service token."""
     if not log_ingest_service:
-        raise HTTPException(status_code=503, detail="Log ingestion service not available")
+        raise HTTPException(status_code=503, detail=ERR_LOG_INGEST_NOT_AVAILABLE)
 
     success = await log_ingest_service.revoke_token(service_name)
 
@@ -2053,7 +2058,7 @@ async def get_service_logs(
 ):
     """Get recent service logs with optional filtering."""
     if not db_pool:
-        raise HTTPException(status_code=503, detail="Database not available")
+        raise HTTPException(status_code=503, detail=ERR_DATABASE_NOT_AVAILABLE)
 
     async with db_pool.acquire() as conn:
         query = """
