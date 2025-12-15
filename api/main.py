@@ -530,7 +530,7 @@ async def fetch_service_status(name: str, url: str) -> tuple[str, dict]:
 
 
 async def check_infrastructure(
-    name: str, url: str, provider: str, latency_threshold: int = 1000
+    name: str, url: str, provider: str, latency_threshold: int = 1000, accept_401: bool = False
 ) -> InfrastructureStatus:
     """Check infrastructure endpoint availability"""
     start = datetime.utcnow()
@@ -538,7 +538,9 @@ async def check_infrastructure(
         async with httpx.AsyncClient(timeout=5.0) as client:
             response = await client.get(url, follow_redirects=True)
             latency = int((datetime.utcnow() - start).total_seconds() * 1000)
-            status = "operational" if response.status_code < 400 and latency < latency_threshold else "degraded"
+            # Accept 401 for endpoints that require auth (proves they're responding)
+            ok_status = response.status_code < 400 or (accept_401 and response.status_code == 401)
+            status = "operational" if ok_status and latency < latency_threshold else "degraded"
             return InfrastructureStatus(name=name, status=status, provider=provider, latency_ms=latency)
     except Exception:
         return InfrastructureStatus(name=name, status="outage", provider=provider, latency_ms=None)
@@ -571,8 +573,11 @@ async def aggregated_status():  # noqa: PLR0912
         )
     if ghcr_health_url:
         infra_tasks.append(
-            # Higher threshold for registry - only used during deployments
-            check_infrastructure("Container Registry", ghcr_health_url, "github", latency_threshold=3000)
+            # Higher threshold for registry, accept 401 (auth required = responding)
+            check_infrastructure(
+                "Container Registry", ghcr_health_url, "github",
+                latency_threshold=3000, accept_401=True
+            )
         )
 
     # Get local CIRISLens status
