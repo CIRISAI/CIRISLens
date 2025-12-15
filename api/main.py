@@ -317,6 +317,13 @@ async def startup():
 
         # Initialize tables
         async with db_pool.acquire() as conn:
+            # Create manager tables (required for manager collector)
+            try:
+                sql_content = Path("/app/sql/manager_tables.sql").read_text()
+                await conn.execute(sql_content)
+                logger.info("Manager tables initialized")
+            except Exception as e:
+                logger.warning(f"Manager tables migration may have already run: {e}")
             # Create OTLP tables only if OTLP collection is enabled
             if os.getenv("OTLP_COLLECTION_ENABLED", "true").lower() == "true":
                 sql_content = Path("/app/sql/otlp_tables.sql").read_text()

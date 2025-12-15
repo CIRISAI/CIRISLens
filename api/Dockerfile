@@ -14,8 +14,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy dependency files
-COPY requirements.txt pyproject.toml* ./
+# Copy dependency files (context is repo root)
+COPY api/requirements.txt api/pyproject.toml* ./
 
 # Create virtual environment and install dependencies
 RUN python -m venv /opt/venv
@@ -54,11 +54,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Copy virtual environment from builder
 COPY --from=builder /opt/venv /opt/venv
 
-# Copy application code
-COPY . .
+# Copy application code (context is repo root)
+COPY api/ .
 
-# Create sql directory (migrations are mounted at runtime via volumes)
-RUN mkdir -p /app/sql
+# Copy SQL migrations
+COPY sql/ /app/sql/
 
 # Create non-root user for security
 RUN useradd --create-home --shell /bin/bash --uid 1000 cirislens && \
