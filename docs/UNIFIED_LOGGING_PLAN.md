@@ -662,7 +662,6 @@ AWS S3 bucket: ciris-billing-archive/
 
 ## References
 
-- [CIRISLens CLAUDE.md](/path/to/CIRISLens/CLAUDE.md)
-- [CIRISProxy Logging Plan](/tmp/proxy_logging)
+- [CIRISLens CLAUDE.md](../CLAUDE.md)
 - [Grafana Loki Documentation](https://grafana.com/docs/loki/latest/)
 - [TimescaleDB Compression](https://docs.timescale.com/use-timescale/latest/compression/)
