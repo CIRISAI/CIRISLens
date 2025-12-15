@@ -19,6 +19,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, EmailStr
 
+# Import Covenant API router
+from covenant_api import router as covenant_router
 from log_ingest import LogIngestService
 from manager_collector import ManagerCollector
 from otlp_collector import OTLPCollector
@@ -57,6 +59,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# Include Covenant API router for CIRIS Covenant 1.0b compliance
+app.include_router(covenant_router)
+
 
 # Configuration from environment
 OAUTH_CLIENT_ID = os.getenv("OAUTH_CLIENT_ID", "mock-client-id")

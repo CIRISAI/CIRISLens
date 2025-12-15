@@ -139,6 +139,10 @@ ignore = [
 "sdk/logshipper.py" = [
     "S310",      # URL open - SDK only connects to HTTPS endpoints
 ]
+"api/covenant_api.py" = [
+    "TCH003",    # UUID needed at runtime for FastAPI path parameters
+    "S608",      # SQL query building uses parameterized values, not string interpolation
+]
 
 [tool.ruff.lint.isort]
 known-first-party = ["api", "sdk"]
