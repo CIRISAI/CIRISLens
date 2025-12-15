@@ -192,72 +192,109 @@ async def run_otlp_collector():
         raise
 
 
-async def run_status_collector():
+async def run_status_collector():  # noqa: PLR0912
     """Background task to collect and store status checks every 60 seconds"""
     logger.info("Status collector started")
 
-    # Service URLs from environment
-    billing_url = os.getenv("BILLING_STATUS_URL", "http://cirisbilling:8000")
-    proxy_url = os.getenv("PROXY_STATUS_URL", "http://cirisproxy:8000")
+    # Multi-region service URLs from environment
+    regions = {
+        "us": {
+            "billing": os.getenv("US_BILLING_URL", ""),
+            "proxy": os.getenv("US_PROXY_URL", ""),
+        },
+        "eu": {
+            "billing": os.getenv("EU_BILLING_URL", ""),
+            "proxy": os.getenv("EU_PROXY_URL", ""),
+        },
+    }
 
     while True:
         try:
-            # Collect status from local providers
+            # Collect status from local CIRISLens providers (global)
             pg_status, grafana_status = await asyncio.gather(
                 check_postgresql(),
                 check_grafana(),
                 return_exceptions=True
             )
 
-            # Fetch status from other services
-            billing_result, proxy_result = await asyncio.gather(
-                fetch_service_status("billing", billing_url),
-                fetch_service_status("proxy", proxy_url),
-                return_exceptions=True
-            )
+            # Collect status from all regional services
+            regional_tasks = []
+            for region, services in regions.items():
+                for service, url in services.items():
+                    if url:
+                        regional_tasks.append((region, service, fetch_service_status(service, url)))
+
+            # Gather all regional results
+            regional_results = []
+            for region, service, task in regional_tasks:
+                result = await task
+                regional_results.append((region, service, result))
 
             # Store results in database
             if db_pool:
                 async with db_pool.acquire() as conn:
-                    # Store CIRISLens local checks
+                    # Store CIRISLens local checks (global region)
                     if isinstance(pg_status, ProviderStatus):
                         await conn.execute("""
                             INSERT INTO cirislens.status_checks
-                            (service_name, provider_name, status, latency_ms, error_message)
-                            VALUES ($1, $2, $3, $4, $5)
-                        """, "cirislens", "postgresql", pg_status.status,
+                            (service_name, provider_name, region, status, latency_ms, error_message)
+                            VALUES ($1, $2, $3, $4, $5, $6)
+                        """, "cirislens", "postgresql", "global", pg_status.status,
                             pg_status.latency_ms, pg_status.message)
 
                     if isinstance(grafana_status, ProviderStatus):
                         await conn.execute("""
                             INSERT INTO cirislens.status_checks
-                            (service_name, provider_name, status, latency_ms, error_message)
-                            VALUES ($1, $2, $3, $4, $5)
-                        """, "cirislens", "grafana", grafana_status.status,
+                            (service_name, provider_name, region, status, latency_ms, error_message)
+                            VALUES ($1, $2, $3, $4, $5, $6)
+                        """, "cirislens", "grafana", "global", grafana_status.status,
                             grafana_status.latency_ms, grafana_status.message)
 
-                    # Store CIRISBilling provider checks
-                    if isinstance(billing_result, tuple):
-                        _name, billing_data = billing_result
-                        if "providers" in billing_data and isinstance(billing_data["providers"], dict):
-                            for provider, pdata in billing_data["providers"].items():
+                    # Store regional service checks
+                    for region, service, result in regional_results:
+                        if not isinstance(result, tuple):
+                            continue
+
+                        _name, service_data = result
+
+                        # Store overall service status
+                        await conn.execute("""
+                            INSERT INTO cirislens.status_checks
+                            (service_name, provider_name, region, status, latency_ms, error_message)
+                            VALUES ($1, $2, $3, $4, $5, $6)
+                        """, f"ciris{service}", "service", region,
+                            service_data.get("status", "unknown"), None,
+                            service_data.get("error"))
+
+                        if "providers" not in service_data:
+                            continue
+
+                        providers = service_data["providers"]
+
+                        # Handle dict format (CIRISBilling)
+                        if isinstance(providers, dict):
+                            for provider, pdata in providers.items():
+                                # LLM providers are global, others are regional
+                                prov_region = "global" if provider in ["openrouter", "groq", "together", "openai"] else region
                                 await conn.execute("""
                                     INSERT INTO cirislens.status_checks
-                                    (service_name, provider_name, status, latency_ms, error_message)
-                                    VALUES ($1, $2, $3, $4, $5)
-                                """, "cirisbilling", provider, pdata.get("status", "unknown"),
+                                    (service_name, provider_name, region, status, latency_ms, error_message)
+                                    VALUES ($1, $2, $3, $4, $5, $6)
+                                """, f"ciris{service}", provider, prov_region,
+                                    pdata.get("status", "unknown"),
                                     pdata.get("latency_ms"), pdata.get("message"))
 
-                    # Store CIRISProxy provider checks (array format)
-                    if isinstance(proxy_result, tuple):
-                        _name, proxy_data = proxy_result
-                        if "providers" in proxy_data and isinstance(proxy_data["providers"], list):
-                            for pdata in proxy_data["providers"]:
+                        # Handle array format (CIRISProxy)
+                        elif isinstance(providers, list):
+                            for pdata in providers:
+                                provider = pdata.get("provider", "unknown")
+                                # LLM providers are global, others are regional
+                                prov_region = "global" if provider in ["openrouter", "groq", "together", "openai"] else region
                                 await conn.execute("""
                                     INSERT INTO cirislens.status_checks
-                                    (service_name, provider_name, status, latency_ms, error_message)
-                                    VALUES ($1, $2, $3, $4, $5)
-                                """, "cirisproxy", pdata.get("provider", "unknown"),
+                                    (service_name, provider_name, region, status, latency_ms, error_message)
+                                    VALUES ($1, $2, $3, $4, $5, $6)
+                                """, f"ciris{service}", provider, prov_region,
                                     pdata.get("status", "unknown"),
                                     pdata.get("latency_ms"), pdata.get("error"))
 
@@ -495,7 +532,13 @@ async def service_status():
 class ServiceSummary(BaseModel):
     name: str
     status: str
-    url: str | None = None
+    latency_ms: int | None = None
+
+
+class RegionStatus(BaseModel):
+    name: str
+    status: str
+    services: dict[str, ServiceSummary]
 
 
 class InfrastructureStatus(BaseModel):
@@ -515,7 +558,7 @@ class AggregatedStatus(BaseModel):
     status: str
     timestamp: str
     last_incident: str | None = None
-    services: dict[str, ServiceSummary]
+    regions: dict[str, RegionStatus]
     infrastructure: dict[str, InfrastructureStatus]
     llm_providers: dict[str, ProviderDetail]
     auth_providers: dict[str, ProviderDetail]
@@ -562,75 +605,111 @@ async def check_infrastructure(
 async def aggregated_status():  # noqa: PLR0912
     """
     Public aggregated status endpoint for ciris.ai/status page.
-    Fetches status from all CIRIS services and infrastructure.
+    Fetches status from all CIRIS services across all regions.
     """
-    # Service URLs from environment
-    billing_url = os.getenv("BILLING_STATUS_URL", "http://cirisbilling:8000")
-    proxy_url = os.getenv("PROXY_STATUS_URL", "http://cirisproxy:8000")
+    # Multi-region service URLs from environment
+    region_configs = {
+        "us": {
+            "name": "US (Chicago)",
+            "billing": os.getenv("US_BILLING_URL", ""),
+            "proxy": os.getenv("US_PROXY_URL", ""),
+            "health": os.getenv("VULTR_HEALTH_URL", ""),
+        },
+        "eu": {
+            "name": "EU (Germany)",
+            "billing": os.getenv("EU_BILLING_URL", ""),
+            "proxy": os.getenv("EU_PROXY_URL", ""),
+            "health": os.getenv("HETZNER_HEALTH_URL", ""),
+        },
+    }
 
-    # Fetch service statuses in parallel
-    service_tasks = [
-        fetch_service_status("billing", billing_url),
-        fetch_service_status("proxy", proxy_url),
-    ]
-
-    # Infrastructure checks (URLs configurable via env vars)
-    vultr_health_url = os.getenv("VULTR_HEALTH_URL", "")
+    # Infrastructure checks
     ghcr_health_url = os.getenv("GHCR_HEALTH_URL", "https://ghcr.io/v2/")
 
+    # Fetch all regional service statuses in parallel
+    regional_tasks = []
+    for region, config in region_configs.items():
+        if config["billing"]:
+            regional_tasks.append((region, "billing", fetch_service_status("billing", config["billing"])))
+        if config["proxy"]:
+            regional_tasks.append((region, "proxy", fetch_service_status("proxy", config["proxy"])))
+
+    # Gather regional results
+    regional_results: dict[str, dict[str, Any]] = {"us": {}, "eu": {}}
+    for region, service, task in regional_tasks:
+        result = await task
+        if isinstance(result, tuple):
+            regional_results[region][service] = result[1]
+
+    # Infrastructure checks
     infra_tasks = []
-    if vultr_health_url:
-        infra_tasks.append(
-            check_infrastructure("US Region (Chicago)", vultr_health_url, "vultr")
-        )
+    for region, config in region_configs.items():
+        if config["health"]:
+            provider = "vultr" if region == "us" else "hetzner"
+            infra_tasks.append(
+                check_infrastructure(config["name"], config["health"], provider)
+            )
     if ghcr_health_url:
         infra_tasks.append(
-            # Higher threshold for registry, accept 401 (auth required = responding)
             check_infrastructure(
                 "Container Registry", ghcr_health_url, "github",
                 latency_threshold=3000, accept_401=True
             )
         )
 
-    # Get local CIRISLens status
-    lens_status = await service_status()
-
-    # Run all checks in parallel
-    service_results = await asyncio.gather(*service_tasks, return_exceptions=True)
     infra_results = await asyncio.gather(*infra_tasks, return_exceptions=True)
 
-    # Build services dict
-    services = {
-        "lens": ServiceSummary(
-            name="Observability",
-            status=lens_status.status,
-            url=None  # Local service
-        )
-    }
+    # Build regions dict
+    regions: dict[str, RegionStatus] = {}
+    for region, config in region_configs.items():
+        services: dict[str, ServiceSummary] = {}
+        region_data = regional_results.get(region, {})
 
-    for result in service_results:
-        if isinstance(result, tuple):
-            name, data = result
-            services[name] = ServiceSummary(
-                name="Billing & Authentication" if name == "billing" else "LLM Proxy",
-                status=data.get("status", "unknown"),
-                url=f"{billing_url if name == 'billing' else proxy_url}/v1/status"
+        if "billing" in region_data:
+            services["billing"] = ServiceSummary(
+                name="Billing & Authentication",
+                status=region_data["billing"].get("status", "unknown"),
+                latency_ms=None
             )
+        if "proxy" in region_data:
+            services["proxy"] = ServiceSummary(
+                name="LLM Proxy",
+                status=region_data["proxy"].get("status", "unknown"),
+                latency_ms=None
+            )
+
+        # Calculate region status
+        if services:
+            statuses = [s.status for s in services.values()]
+            if "outage" in statuses:
+                region_status = "outage"
+            elif "degraded" in statuses:
+                region_status = "degraded"
+            else:
+                region_status = "operational"
+        else:
+            region_status = "unknown"
+
+        regions[region] = RegionStatus(
+            name=config["name"],
+            status=region_status,
+            services=services
+        )
 
     # Build infrastructure dict
     infrastructure = {}
     for result in infra_results:
         if isinstance(result, InfrastructureStatus):
-            key = result.provider
-            infrastructure[key] = result
+            infrastructure[result.provider] = result
 
-    # Extract all provider statuses organized by category
+    # Extract provider statuses (from first available region)
     llm_providers: dict[str, ProviderDetail] = {}
     auth_providers: dict[str, ProviderDetail] = {}
     database_providers: dict[str, ProviderDetail] = {}
     internal_providers: dict[str, ProviderDetail] = {}
 
-    # Add CIRISLens local providers
+    # Get local CIRISLens status
+    lens_status = await service_status()
     database_providers["lens.postgresql"] = ProviderDetail(
         status=lens_status.providers["postgresql"].status,
         latency_ms=lens_status.providers["postgresql"].latency_ms,
@@ -642,48 +721,41 @@ async def aggregated_status():  # noqa: PLR0912
         source="cirislens"
     )
 
-    # Process service results
-    for result in service_results:
-        if not isinstance(result, tuple):
-            continue
+    # Process regional service data for providers (use first available region)
+    for region, region_data in regional_results.items():
+        # CIRISBilling providers
+        if "billing" in region_data and "providers" in region_data["billing"]:
+            providers = region_data["billing"]["providers"]
+            if isinstance(providers, dict):
+                for provider, pdata in providers.items():
+                    detail = ProviderDetail(
+                        status=pdata.get("status", "unknown"),
+                        latency_ms=pdata.get("latency_ms"),
+                        source=f"cirisbilling.{region}"
+                    )
+                    if provider == "postgresql" and f"{region}.postgresql" not in database_providers:
+                        database_providers[f"{region}.postgresql"] = detail
+                    elif provider in ["google_oauth", "google_play"] and provider not in auth_providers:
+                        auth_providers[provider] = detail
 
-        service_name, service_data = result
-        if "providers" not in service_data:
-            continue
-
-        providers = service_data["providers"]
-
-        # Handle CIRISBilling (dict format)
-        if service_name == "billing" and isinstance(providers, dict):
-            for provider, pdata in providers.items():
-                detail = ProviderDetail(
-                    status=pdata.get("status", "unknown"),
-                    latency_ms=pdata.get("latency_ms"),
-                    source="cirisbilling"
-                )
-                if provider == "postgresql":
-                    database_providers["billing.postgresql"] = detail
-                elif provider in ["google_oauth", "google_play"]:
-                    auth_providers[provider] = detail
-
-        # Handle CIRISProxy (array format)
-        elif service_name == "proxy" and isinstance(providers, list):
-            for pdata in providers:
-                provider = pdata.get("provider", "")
-                detail = ProviderDetail(
-                    status=pdata.get("status", "unknown"),
-                    latency_ms=pdata.get("latency_ms"),
-                    source="cirisproxy"
-                )
-                if provider in ["openrouter", "groq", "together", "openai"]:
-                    llm_providers[provider] = detail
-                elif provider == "brave":
-                    internal_providers["brave_search"] = detail
-                elif provider == "billing":
-                    internal_providers["proxy.billing"] = detail
+        # CIRISProxy providers
+        if "proxy" in region_data and "providers" in region_data["proxy"]:
+            providers = region_data["proxy"]["providers"]
+            if isinstance(providers, list):
+                for pdata in providers:
+                    provider = pdata.get("provider", "")
+                    detail = ProviderDetail(
+                        status=pdata.get("status", "unknown"),
+                        latency_ms=pdata.get("latency_ms"),
+                        source=f"cirisproxy.{region}"
+                    )
+                    if provider in ["openrouter", "groq", "together", "openai"] and provider not in llm_providers:
+                        llm_providers[provider] = detail
+                    elif provider == "brave" and "brave_search" not in internal_providers:
+                        internal_providers["brave_search"] = detail
 
     # Calculate overall status
-    all_statuses = [s.status for s in services.values()]
+    all_statuses = [r.status for r in regions.values() if r.status != "unknown"]
     all_statuses.extend([i.status for i in infrastructure.values()])
 
     if all_statuses.count("outage") >= 3:
@@ -699,7 +771,7 @@ async def aggregated_status():  # noqa: PLR0912
         status=overall,
         timestamp=datetime.utcnow().isoformat() + "Z",
         last_incident=None,
-        services=services,
+        regions=regions,
         infrastructure=infrastructure,
         llm_providers=llm_providers,
         auth_providers=auth_providers,
@@ -709,13 +781,24 @@ async def aggregated_status():  # noqa: PLR0912
 
 
 @app.get("/api/v1/status/history")
-async def status_history(days: int = 30):
+async def status_history(days: int = 30, region: str | None = None):  # noqa: PLR0912
     """
     Get historical uptime data for status page graphs.
     Returns daily uptime percentages for the specified number of days.
+
+    Query parameters:
+    - days: Number of days of history (1-365, default 30)
+    - region: Filter by region ('us', 'eu', 'global', or omit for all)
     """
     if days < 1 or days > 365:
         raise HTTPException(status_code=400, detail="Days must be between 1 and 365")
+
+    valid_regions = {"us", "eu", "global"}
+    if region and region not in valid_regions:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid region. Must be one of: {', '.join(valid_regions)}"
+        )
 
     try:
         if not db_pool:
@@ -723,38 +806,76 @@ async def status_history(days: int = 30):
 
         async with db_pool.acquire() as conn:
             # Get daily uptime from continuous aggregate
-            rows = await conn.fetch("""
-                SELECT
-                    day::date as date,
-                    service_name,
-                    provider_name,
-                    COALESCE(uptime_pct, 100) as uptime_pct,
-                    COALESCE(avg_latency_ms, 0) as avg_latency_ms,
-                    COALESCE(outage_count, 0) as outage_count
-                FROM cirislens.status_daily
-                WHERE day >= NOW() - INTERVAL '1 day' * $1
-                ORDER BY day DESC, service_name, provider_name
-            """, days)
+            if region:
+                rows = await conn.fetch("""
+                    SELECT
+                        day::date as date,
+                        region,
+                        service_name,
+                        provider_name,
+                        COALESCE(uptime_pct, 100) as uptime_pct,
+                        COALESCE(avg_latency_ms, 0) as avg_latency_ms,
+                        COALESCE(outage_count, 0) as outage_count
+                    FROM cirislens.status_daily
+                    WHERE day >= NOW() - INTERVAL '1 day' * $1
+                      AND region = $2
+                    ORDER BY day DESC, service_name, provider_name
+                """, days, region)
+            else:
+                rows = await conn.fetch("""
+                    SELECT
+                        day::date as date,
+                        region,
+                        service_name,
+                        provider_name,
+                        COALESCE(uptime_pct, 100) as uptime_pct,
+                        COALESCE(avg_latency_ms, 0) as avg_latency_ms,
+                        COALESCE(outage_count, 0) as outage_count
+                    FROM cirislens.status_daily
+                    WHERE day >= NOW() - INTERVAL '1 day' * $1
+                    ORDER BY day DESC, region, service_name, provider_name
+                """, days)
 
-            # Group by date
+            # Group by date (and optionally region)
             history = {}
             for row in rows:
                 date_str = row["date"].isoformat()
+                row_region = row["region"]
+
                 if date_str not in history:
-                    history[date_str] = {"date": date_str, "services": {}}
+                    history[date_str] = {"date": date_str, "regions": {}, "services": {}}
+
+                # Initialize region if needed
+                if row_region not in history[date_str]["regions"]:
+                    history[date_str]["regions"][row_region] = {"services": {}}
 
                 service = row["service_name"]
                 provider = row["provider_name"]
                 key = f"{service}.{provider}"
 
-                history[date_str]["services"][key] = {
+                service_data = {
                     "uptime_pct": float(row["uptime_pct"]),
                     "avg_latency_ms": int(row["avg_latency_ms"]),
                     "outage_count": int(row["outage_count"])
                 }
 
-            # Calculate overall uptime per day
+                # Add to region-specific services
+                history[date_str]["regions"][row_region]["services"][key] = service_data
+
+                # Also add to flat services dict with region prefix for backwards compat
+                history[date_str]["services"][f"{row_region}.{key}"] = service_data
+
+            # Calculate overall uptime per day and per region
             for _date_str, data in history.items():
+                # Per-region uptime
+                for _region_name, region_data in data["regions"].items():
+                    if region_data["services"]:
+                        uptimes = [s["uptime_pct"] for s in region_data["services"].values()]
+                        region_data["uptime_pct"] = sum(uptimes) / len(uptimes)
+                    else:
+                        region_data["uptime_pct"] = 100.0
+
+                # Overall uptime across all regions
                 if data["services"]:
                     uptimes = [s["uptime_pct"] for s in data["services"].values()]
                     data["overall_uptime_pct"] = sum(uptimes) / len(uptimes)
@@ -763,6 +884,7 @@ async def status_history(days: int = 30):
 
             return {
                 "days": days,
+                "region": region,
                 "history": list(history.values())
             }
 
