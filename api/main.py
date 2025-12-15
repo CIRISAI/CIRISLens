@@ -42,9 +42,17 @@ app = FastAPI(
 )
 
 # CORS configuration
+CORS_ORIGINS = [
+    "http://localhost:8080",
+    "http://localhost:3000",
+    "https://agents.ciris.ai",
+    "https://ciris.ai",
+    "https://www.ciris.ai",
+    "https://lens.ciris-services-1.ai",
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:8080", "http://localhost:3000", "https://agents.ciris.ai"],
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
