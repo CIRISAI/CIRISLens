@@ -115,6 +115,7 @@ ignore = [
     "PTH120",   # Path methods
     "C401",     # Generator vs comprehension style
     "PLC0415",  # Import not at top level (fine in tests for lazy imports)
+    "SIM117",   # Nested with statements (pytest.raises pattern)
 ]
 # FastAPI route handlers require auth user arg even if not used (dependency injection pattern)
 "api/main.py" = [
