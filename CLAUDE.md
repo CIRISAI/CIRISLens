@@ -318,6 +318,80 @@ SELECT compress_chunk(c) FROM show_chunks('cirislens.agent_metrics', older_than 
 - **Sanitize data in collector, not dashboards**
 - **Use read-only datasources where possible**
 
+## CIRIS Covenant 1.0b Compliance Infrastructure
+
+CIRISLens provides the observability infrastructure required by the CIRIS Covenant for transparency, accountability, and audit trails.
+
+### Covenant API Endpoints
+
+```
+POST   /api/v1/covenant/wbd/deferrals          # Record WBD event
+GET    /api/v1/covenant/wbd/deferrals          # List WBD events
+PUT    /api/v1/covenant/wbd/deferrals/{id}/resolve
+
+POST   /api/v1/covenant/pdma/events            # Record PDMA decision
+GET    /api/v1/covenant/pdma/events
+PUT    /api/v1/covenant/pdma/events/{id}/outcomes
+
+POST   /api/v1/covenant/creator-ledger         # Log creation (tamper-evident)
+GET    /api/v1/covenant/creator-ledger
+
+POST   /api/v1/covenant/sunset-ledger          # Initiate decommissioning
+GET    /api/v1/covenant/sunset-ledger
+PUT    /api/v1/covenant/sunset-ledger/{id}/progress
+
+GET    /api/v1/covenant/compliance/status      # Agent compliance status
+GET    /api/v1/covenant/compliance/summary     # Aggregate compliance
+```
+
+### Covenant Database Tables
+
+| Table | Purpose | Covenant Reference |
+|-------|---------|-------------------|
+| `wbd_deferrals` | Wisdom-Based Deferral tracking | Section II, Ch 3 |
+| `pdma_events` | PDMA decision rationale chains | Section II, Ch 2 |
+| `creator_ledger` | Tamper-evident creation accountability | Section VI, Ch 3 |
+| `sunset_ledger` | Decommissioning protocol tracking | Section VIII, Ch 4 |
+
+### Agent Covenant Fields
+
+The `cirislens.agents` table includes:
+- `sentience_probability` (0.0-1.0)
+- `autonomy_level` (1-5)
+- `stewardship_tier` (1-5)
+- `covenant_version` (e.g., "1.0b")
+- `pdma_enabled`, `wbd_enabled` (boolean)
+- `total_pdma_events`, `total_wbd_deferrals` (counters)
+
+### Migration
+
+Run `sql/010_covenant_compliance.sql` to create Covenant tables.
+
+## CIRISProxy Integration
+
+CIRISProxy sends `llm_error` events with these fields (stored in `service_logs.attributes`):
+
+| Field | Example |
+|-------|---------|
+| `provider` | `"groq"`, `"together"`, `"openrouter"`, `"openai"` |
+| `actual_model` | `"openrouter/meta-llama/llama-4-maverick"` |
+| `api_base` | `"https://..."` |
+
+Debug query for LLM errors by provider:
+```sql
+SELECT provider, COUNT(*) as errors, MAX(error) as last_error
+FROM cirislens.service_logs
+WHERE event = 'llm_error' AND timestamp > NOW() - INTERVAL '1 hour'
+GROUP BY provider ORDER BY errors DESC;
+```
+
+## Test Coverage
+
+- **325 tests** passing
+- **75% coverage** (target: 70%)
+- Run tests: `pytest tests/ -x -q`
+- Run with coverage: `pytest tests/ --cov=api --cov=sdk`
+
 ## Future Enhancements
 
 Potential additions (not yet implemented):
@@ -326,3 +400,4 @@ Potential additions (not yet implemented):
 - Grafana Faro for frontend monitoring
 - Custom Grafana plugin for CIRIS topology visualization
 - ML-based anomaly detection on metrics
+- Covenant compliance Grafana dashboard
