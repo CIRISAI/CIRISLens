@@ -308,3 +308,104 @@ shipper.shutdown()
 
 - Reduce `batch_size` to flush more frequently
 - Check network connectivity to CIRISLens
+- Reduce `max_buffer_bytes` if buffering during outages
+
+---
+
+## Resilience Features (v1.1.0+)
+
+The LogShipper now includes circuit breaker and exponential backoff patterns to prevent bandwidth waste when CIRISLens is unavailable.
+
+### Circuit Breaker
+
+When CIRISLens becomes unavailable, the circuit breaker:
+1. Opens after 5 consecutive failures (configurable)
+2. Blocks all shipping attempts while open (saves bandwidth)
+3. Transitions to half-open after 5 minutes to test recovery
+4. Closes again on successful delivery
+
+### Exponential Backoff
+
+Between failures, the shipper backs off exponentially:
+- 1s → 2s → 4s → 8s → ... → 5 minutes max
+
+### Buffer Limits
+
+Logs are buffered during outages with configurable limits:
+- `max_buffer_bytes`: Maximum buffer size (default 100MB)
+- `max_buffer_items`: Maximum log count (default 100,000)
+- Oldest logs are dropped when limits are exceeded
+
+### Configuration
+
+```python
+from logshipper import LogShipper
+
+shipper = LogShipper(
+    service_name="myservice",
+    token=os.environ["CIRISLENS_TOKEN"],
+
+    # Circuit breaker settings
+    circuit_failure_threshold=5,    # Open after 5 failures
+    circuit_reset_timeout=300.0,    # Try again after 5 minutes
+
+    # Backoff settings
+    backoff_initial=1.0,            # Start at 1 second
+    backoff_max=300.0,              # Max 5 minutes between attempts
+
+    # Buffer limits
+    max_buffer_bytes=100*1024*1024, # 100MB buffer limit
+    max_buffer_items=100_000,       # Or 100k log entries
+
+    # Callbacks for monitoring
+    on_circuit_open=lambda: print("Circuit opened - shipping paused"),
+    on_circuit_close=lambda: print("Circuit closed - shipping resumed"),
+)
+```
+
+### Monitoring Circuit State
+
+```python
+# Check if shipper is healthy
+if shipper.is_healthy:
+    print("Shipping normally")
+else:
+    print(f"Circuit is {shipper.circuit_state}")
+
+# Get detailed stats
+stats = shipper.get_stats()
+print(f"Circuit: {stats['circuit_state']}")
+print(f"Sent: {stats['sent_count']}, Errors: {stats['error_count']}")
+print(f"Dropped: {stats['dropped_count']}")
+print(f"Buffer: {stats['buffer_size']} items, {stats['buffer_bytes']} bytes")
+print(f"Blocked by circuit: {stats.get('blocked_by_circuit', 0)}")
+```
+
+### Using the Resilience Module Directly
+
+For custom HTTP clients, use the standalone resilience patterns:
+
+```python
+from sdk.resilience import ResilientClient, ResilientClientConfig
+
+client = ResilientClient(
+    name="my-api-client",
+    config=ResilientClientConfig(
+        circuit_breaker=CircuitBreakerConfig(failure_threshold=3),
+        backoff=BackoffConfig(initial_delay=0.5, max_delay=60.0),
+    ),
+)
+
+def call_api():
+    if not client.should_attempt():
+        return None  # Circuit is open
+
+    try:
+        result = requests.post(url, data)
+        client.record_success()
+        return result
+    except Exception as e:
+        client.record_failure(str(e))
+        time.sleep(client.get_backoff_delay())
+        raise
+```

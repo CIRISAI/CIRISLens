@@ -2,6 +2,7 @@
 CIRISLens LogShipper - Drop-in log shipping for CIRIS services.
 
 Copy this file to your project and configure it to send logs to CIRISLens.
+Includes circuit breaker and exponential backoff for endpoint resilience.
 
 Usage:
     from logshipper import LogShipper, setup_logging
@@ -26,6 +27,17 @@ Usage:
     )
     shipper.info("Payment processed", event="payment_completed", user_id="u123")
     shipper.flush()  # Send buffered logs
+
+    # Option 3: With custom resilience settings
+    shipper = LogShipper(
+        service_name="cirisbilling",
+        token="svc_xxx",
+        circuit_failure_threshold=3,    # Open circuit after 3 failures
+        circuit_reset_timeout=120.0,    # Try again after 2 minutes
+        backoff_initial=2.0,            # Start with 2s backoff
+        backoff_max=600.0,              # Max 10 minute backoff
+        max_buffer_bytes=50*1024*1024,  # 50MB buffer limit
+    )
 """
 
 import atexit
@@ -34,13 +46,28 @@ import logging
 import os
 import queue
 import socket
+import sys
 import threading
 import time
 from datetime import UTC, datetime
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-__version__ = "1.0.0"
+# Try to import resilience module (may not be available if logshipper.py is copied standalone)
+try:
+    from .resilience import (
+        BackoffConfig,
+        CircuitBreakerConfig,
+        CircuitState,
+        ResilientClient,
+        ResilientClientConfig,
+    )
+
+    RESILIENCE_AVAILABLE = True
+except ImportError:
+    RESILIENCE_AVAILABLE = False
+
+__version__ = "1.1.0"
 
 # Default CIRISLens log ingestion endpoint
 DEFAULT_ENDPOINT = "https://agents.ciris.ai/lens/api/v1/logs/ingest"
@@ -51,7 +78,8 @@ class LogShipper:
     Batched log shipper for CIRISLens.
 
     Buffers logs and sends them in batches to reduce network overhead.
-    Thread-safe and handles failures gracefully.
+    Thread-safe and handles failures gracefully with circuit breaker
+    and exponential backoff.
     """
 
     def __init__(
@@ -64,6 +92,15 @@ class LogShipper:
         server_id: str | None = None,
         max_retries: int = 3,
         timeout: float = 10.0,
+        # Resilience settings
+        circuit_failure_threshold: int = 5,
+        circuit_reset_timeout: float = 300.0,
+        backoff_initial: float = 1.0,
+        backoff_max: float = 300.0,
+        max_buffer_bytes: int = 100 * 1024 * 1024,  # 100MB
+        max_buffer_items: int = 100_000,
+        on_circuit_open: "Callable[[], None] | None" = None,
+        on_circuit_close: "Callable[[], None] | None" = None,
     ):
         """
         Initialize the LogShipper.
@@ -77,6 +114,14 @@ class LogShipper:
             server_id: Optional server identifier (defaults to hostname)
             max_retries: Number of retry attempts on failure
             timeout: HTTP request timeout in seconds
+            circuit_failure_threshold: Failures before opening circuit breaker
+            circuit_reset_timeout: Seconds before attempting reconnection
+            backoff_initial: Initial backoff delay in seconds
+            backoff_max: Maximum backoff delay in seconds
+            max_buffer_bytes: Maximum buffer size in bytes before dropping logs
+            max_buffer_items: Maximum number of log items in buffer
+            on_circuit_open: Callback when circuit breaker opens
+            on_circuit_close: Callback when circuit breaker closes
         """
         self.service_name = service_name
         self.token = token
@@ -86,16 +131,46 @@ class LogShipper:
         self.server_id = server_id or socket.gethostname()
         self.max_retries = max_retries
         self.timeout = timeout
+        self.max_buffer_bytes = max_buffer_bytes
+        self.max_buffer_items = max_buffer_items
 
         self._buffer: queue.Queue = queue.Queue()
+        self._buffer_bytes = 0
         self._lock = threading.Lock()
         self._shutdown = threading.Event()
         self._flush_thread: threading.Thread | None = None
+        self._next_attempt_time: float = 0  # For backoff timing
 
         # Stats
         self._sent_count = 0
         self._error_count = 0
+        self._dropped_count = 0
         self._last_error: str | None = None
+
+        # Initialize resilience client if available
+        self._resilient: ResilientClient | None = None
+        if RESILIENCE_AVAILABLE:
+            config = ResilientClientConfig(
+                circuit_breaker=CircuitBreakerConfig(
+                    failure_threshold=circuit_failure_threshold,
+                    reset_timeout=circuit_reset_timeout,
+                ),
+                backoff=BackoffConfig(
+                    initial_delay=backoff_initial,
+                    max_delay=backoff_max,
+                ),
+            )
+            self._resilient = ResilientClient(
+                name=f"logshipper-{service_name}",
+                config=config,
+                on_circuit_open=on_circuit_open,
+                on_circuit_close=on_circuit_close,
+            )
+        else:
+            # Fallback: simple exponential backoff state
+            self._backoff_attempt = 0
+            self._backoff_initial = backoff_initial
+            self._backoff_max = backoff_max
 
         # Start background flush thread
         self._start_flush_thread()
@@ -147,6 +222,19 @@ class LogShipper:
         if attributes:
             entry["attributes"] = attributes
 
+        # Estimate entry size
+        entry_bytes = len(json.dumps(entry))
+
+        # Check buffer limits
+        with self._lock:
+            if self._buffer.qsize() >= self.max_buffer_items:
+                self._dropped_count += 1
+                return  # Drop this log
+            if self._buffer_bytes + entry_bytes > self.max_buffer_bytes:
+                self._dropped_count += 1
+                return  # Drop this log
+            self._buffer_bytes += entry_bytes
+
         self._buffer.put(entry)
 
         # Auto-flush if buffer is full
@@ -180,12 +268,24 @@ class LogShipper:
         Returns:
             True if successful, False otherwise.
         """
+        # Check if we should skip due to circuit breaker or backoff
+        if self._resilient:
+            if not self._resilient.should_attempt():
+                return False  # Circuit is open, skip this flush
+        else:
+            # Fallback: check backoff timing
+            if time.time() < self._next_attempt_time:
+                return False
+
         logs = []
+        logs_bytes = 0
 
         # Drain the buffer
         while True:
             try:
-                logs.append(self._buffer.get_nowait())
+                log = self._buffer.get_nowait()
+                logs.append(log)
+                logs_bytes += len(json.dumps(log))
             except queue.Empty:
                 break
 
@@ -197,16 +297,24 @@ class LogShipper:
 
         if not success:
             # Re-queue failed logs (at the front)
+            requeued_bytes = 0
             for log in reversed(logs):
                 try:
+                    log_bytes = len(json.dumps(log))
                     self._buffer.put_nowait(log)
+                    requeued_bytes += log_bytes
                 except queue.Full:
-                    break  # Drop oldest logs if buffer is full
+                    with self._lock:
+                        self._dropped_count += 1
+        else:
+            # Update buffer bytes on success
+            with self._lock:
+                self._buffer_bytes = max(0, self._buffer_bytes - logs_bytes)
 
         return success
 
     def _send_logs(self, logs: list) -> bool:
-        """Send logs to CIRISLens with retry logic."""
+        """Send logs to CIRISLens with retry logic and resilience."""
         payload = "\n".join(json.dumps(log) for log in logs)
 
         for attempt in range(self.max_retries):
@@ -225,42 +333,99 @@ class LogShipper:
                     if response.status == 200:
                         with self._lock:
                             self._sent_count += len(logs)
+
+                        # Record success with resilience client
+                        if self._resilient:
+                            self._resilient.record_success()
+                        else:
+                            self._backoff_attempt = 0
+                            self._next_attempt_time = 0
+
                         return True
 
             except HTTPError as e:
+                error_msg = f"HTTP {e.code}: {e.reason}"
                 with self._lock:
-                    self._last_error = f"HTTP {e.code}: {e.reason}"
+                    self._last_error = error_msg
                     self._error_count += 1
 
                 # Don't retry on auth errors
                 if e.code in (401, 403):
+                    self._record_failure(error_msg)
                     break
 
             except URLError as e:
+                error_msg = str(e.reason)
                 with self._lock:
-                    self._last_error = str(e.reason)
+                    self._last_error = error_msg
                     self._error_count += 1
 
             except Exception as e:
+                error_msg = str(e)
                 with self._lock:
-                    self._last_error = str(e)
+                    self._last_error = error_msg
                     self._error_count += 1
 
-            # Exponential backoff
+            # Exponential backoff between retries
             if attempt < self.max_retries - 1:
-                time.sleep(2**attempt)
+                time.sleep(min(2**attempt, 10))  # Cap retry backoff at 10s
 
+        # All retries failed - record failure for circuit breaker
+        self._record_failure(self._last_error)
         return False
 
+    def _record_failure(self, error: str | None):
+        """Record a failure with the resilience client."""
+        if self._resilient:
+            self._resilient.record_failure(error)
+            self._next_attempt_time = time.time() + self._resilient.get_backoff_delay()
+        else:
+            # Fallback: simple exponential backoff
+            delay = min(
+                self._backoff_initial * (2**self._backoff_attempt),
+                self._backoff_max,
+            )
+            self._backoff_attempt += 1
+            self._next_attempt_time = time.time() + delay
+
     def get_stats(self) -> dict:
-        """Get shipping statistics."""
+        """Get shipping statistics including resilience metrics."""
         with self._lock:
-            return {
+            stats = {
                 "sent_count": self._sent_count,
                 "error_count": self._error_count,
+                "dropped_count": self._dropped_count,
                 "buffer_size": self._buffer.qsize(),
+                "buffer_bytes": self._buffer_bytes,
                 "last_error": self._last_error,
             }
+
+        # Add resilience metrics
+        if self._resilient:
+            resilience = self._resilient.get_metrics()
+            stats["circuit_state"] = resilience["circuit"]["state"]
+            stats["circuit_failure_count"] = resilience["circuit"]["failure_count"]
+            stats["backoff_delay"] = resilience["backoff"]["current_delay"]
+            stats["blocked_by_circuit"] = resilience["totals"]["blocked_by_circuit"]
+        else:
+            stats["circuit_state"] = "n/a"
+            stats["backoff_delay"] = max(0, self._next_attempt_time - time.time())
+
+        return stats
+
+    @property
+    def circuit_state(self) -> str:
+        """Get current circuit breaker state."""
+        if self._resilient:
+            return self._resilient.circuit_state.value
+        return "n/a"
+
+    @property
+    def is_healthy(self) -> bool:
+        """Check if shipper is in healthy state (circuit closed)."""
+        if self._resilient:
+            return self._resilient.is_healthy
+        return self._next_attempt_time <= time.time()
 
     def shutdown(self):
         """Gracefully shutdown the shipper."""
