@@ -1055,8 +1055,8 @@ def verify_trace_signature(
     import json
 
     try:
-        from nacl.signing import VerifyKey
         from nacl.exceptions import BadSignatureError
+        from nacl.signing import VerifyKey
     except ImportError:
         logger.error("PyNaCl not installed - cannot verify signatures")
         return False, "Signature verification unavailable"

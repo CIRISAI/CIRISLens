@@ -148,6 +148,12 @@ ignore = [
 "api/covenant_api.py" = [
     "TCH003",    # UUID needed at runtime for FastAPI path parameters
     "S608",      # SQL query building uses parameterized values, not string interpolation
+    "PLC0415",   # Inline imports to avoid circular dependencies and for optional deps (nacl)
+    "PLW0602",   # Global cache access pattern
+    "PLW0603",   # Global cache/scheduler management
+    "PLR0912",   # Complex metadata extraction from traces
+    "PLR0915",   # Complex metadata extraction from traces
+    "F401",      # Some imports used dynamically
 ]
 
 [tool.ruff.lint.isort]
