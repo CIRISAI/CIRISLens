@@ -1619,3 +1619,297 @@ async def list_traces(
         ]
 
         return {"traces": traces, "count": len(traces)}
+
+
+# =============================================================================
+# Coherence Ratchet Detection API
+# Reference: FSD/coherence_ratchet_detection.md
+# =============================================================================
+
+
+class CoherenceRatchetAlertResponse(BaseModel):
+    """Response model for Coherence Ratchet alerts."""
+
+    alert_id: str
+    alert_type: str
+    severity: str
+    detection_mechanism: str
+    agent_id_hash: str | None
+    domain: str | None
+    metric: str
+    value: float | None
+    baseline: float | None
+    deviation: str | None
+    timestamp: datetime
+    evidence_traces: list[str]
+    recommended_action: str | None
+    acknowledged: bool
+    resolved: bool
+
+
+class RunDetectionResponse(BaseModel):
+    """Response for running detection manually."""
+
+    alerts_found: int
+    alerts: list[dict[str, Any]]
+
+
+class AcknowledgeAlertRequest(BaseModel):
+    """Request to acknowledge an alert."""
+
+    acknowledged_by: str
+
+
+class ResolveAlertRequest(BaseModel):
+    """Request to resolve an alert."""
+
+    resolved_by: str
+    resolution_notes: str | None = None
+
+
+# Singleton scheduler instance (initialized in main.py)
+_scheduler: Any = None
+
+
+def get_scheduler() -> Any:
+    """Get the scheduler instance."""
+    return _scheduler
+
+
+def set_scheduler(scheduler: Any) -> None:
+    """Set the scheduler instance (called from main.py)."""
+    global _scheduler
+    _scheduler = scheduler
+
+
+@router.get("/coherence-ratchet/alerts")
+async def list_coherence_ratchet_alerts(
+    hours: int = 24,
+    severity: str | None = None,
+    detection_mechanism: str | None = None,
+    unacknowledged_only: bool = False,
+    limit: int = 100,
+) -> dict[str, Any]:
+    """
+    List Coherence Ratchet anomaly alerts.
+
+    Args:
+        hours: How many hours back to look (default 24)
+        severity: Filter by severity (warning, critical)
+        detection_mechanism: Filter by detection type
+        unacknowledged_only: Only show unacknowledged alerts
+        limit: Maximum alerts to return (default 100, max 1000)
+    """
+    db_pool = get_db_pool()
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    query = """
+        SELECT alert_id, alert_type, severity, detection_mechanism,
+               agent_id_hash, domain, metric, value, baseline, deviation,
+               timestamp, evidence_traces, recommended_action,
+               acknowledged, acknowledged_at, acknowledged_by,
+               resolved, resolved_at, resolved_by, resolution_notes
+        FROM cirislens.coherence_ratchet_alerts
+        WHERE timestamp > NOW() - $1::interval
+    """
+    params: list[Any] = [f"{hours} hours"]
+    param_idx = 2
+
+    if severity:
+        query += f" AND severity = ${param_idx}"
+        params.append(severity)
+        param_idx += 1
+
+    if detection_mechanism:
+        query += f" AND detection_mechanism = ${param_idx}"
+        params.append(detection_mechanism)
+        param_idx += 1
+
+    if unacknowledged_only:
+        query += " AND acknowledged = FALSE"
+
+    query += f" ORDER BY timestamp DESC LIMIT ${param_idx}"
+    params.append(min(limit, 1000))
+
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch(query, *params)
+
+        alerts = [
+            {
+                "alert_id": str(row["alert_id"]),
+                "alert_type": row["alert_type"],
+                "severity": row["severity"],
+                "detection_mechanism": row["detection_mechanism"],
+                "agent_id_hash": row["agent_id_hash"],
+                "domain": row["domain"],
+                "metric": row["metric"],
+                "value": float(row["value"]) if row["value"] else None,
+                "baseline": float(row["baseline"]) if row["baseline"] else None,
+                "deviation": row["deviation"],
+                "timestamp": row["timestamp"].isoformat() if row["timestamp"] else None,
+                "evidence_traces": row["evidence_traces"] or [],
+                "recommended_action": row["recommended_action"],
+                "acknowledged": row["acknowledged"],
+                "acknowledged_at": row["acknowledged_at"].isoformat() if row["acknowledged_at"] else None,
+                "acknowledged_by": row["acknowledged_by"],
+                "resolved": row["resolved"],
+                "resolved_at": row["resolved_at"].isoformat() if row["resolved_at"] else None,
+                "resolved_by": row["resolved_by"],
+                "resolution_notes": row["resolution_notes"],
+            }
+            for row in rows
+        ]
+
+        return {"alerts": alerts, "count": len(alerts)}
+
+
+@router.post("/coherence-ratchet/run")
+async def run_coherence_ratchet_detection() -> RunDetectionResponse:
+    """
+    Manually trigger all Coherence Ratchet detection mechanisms.
+
+    This runs all Phase 1 detections immediately and returns any anomalies found.
+    """
+    scheduler = get_scheduler()
+    if scheduler is None:
+        # Fall back to direct analyzer if scheduler not initialized
+        db_pool = get_db_pool()
+        if db_pool is None:
+            raise HTTPException(status_code=503, detail="Database not available")
+
+        from api.analysis.coherence_ratchet import CoherenceRatchetAnalyzer
+
+        analyzer = CoherenceRatchetAnalyzer(db_pool)
+        alerts = await analyzer.run_all_detections()
+    else:
+        alerts = await scheduler.run_all_now()
+
+    return RunDetectionResponse(
+        alerts_found=len(alerts),
+        alerts=[a.to_dict() for a in alerts],
+    )
+
+
+@router.put("/coherence-ratchet/alerts/{alert_id}/acknowledge")
+async def acknowledge_alert(
+    alert_id: str,
+    request: AcknowledgeAlertRequest,
+) -> dict[str, Any]:
+    """
+    Acknowledge a Coherence Ratchet alert.
+
+    Acknowledging indicates that a human has reviewed the alert.
+    """
+    db_pool = get_db_pool()
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    query = """
+        UPDATE cirislens.coherence_ratchet_alerts
+        SET acknowledged = TRUE,
+            acknowledged_at = NOW(),
+            acknowledged_by = $2
+        WHERE alert_id = $1::uuid
+        RETURNING alert_id;
+    """
+
+    async with db_pool.acquire() as conn:
+        result = await conn.fetchval(query, alert_id, request.acknowledged_by)
+        if result is None:
+            raise HTTPException(status_code=404, detail="Alert not found")
+
+        return {"status": "acknowledged", "alert_id": alert_id}
+
+
+@router.put("/coherence-ratchet/alerts/{alert_id}/resolve")
+async def resolve_alert(
+    alert_id: str,
+    request: ResolveAlertRequest,
+) -> dict[str, Any]:
+    """
+    Resolve a Coherence Ratchet alert.
+
+    Resolution indicates the anomaly has been investigated and addressed.
+    """
+    db_pool = get_db_pool()
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    query = """
+        UPDATE cirislens.coherence_ratchet_alerts
+        SET resolved = TRUE,
+            resolved_at = NOW(),
+            resolved_by = $2,
+            resolution_notes = $3
+        WHERE alert_id = $1::uuid
+        RETURNING alert_id;
+    """
+
+    async with db_pool.acquire() as conn:
+        result = await conn.fetchval(
+            query, alert_id, request.resolved_by, request.resolution_notes
+        )
+        if result is None:
+            raise HTTPException(status_code=404, detail="Alert not found")
+
+        return {"status": "resolved", "alert_id": alert_id}
+
+
+@router.get("/coherence-ratchet/stats")
+async def get_coherence_ratchet_stats(hours: int = 168) -> dict[str, Any]:
+    """
+    Get Coherence Ratchet detection statistics.
+
+    Args:
+        hours: Time window to analyze (default 168 = 7 days)
+    """
+    db_pool = get_db_pool()
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    query = """
+        SELECT
+            COUNT(*) as total_alerts,
+            COUNT(*) FILTER (WHERE severity = 'critical') as critical_alerts,
+            COUNT(*) FILTER (WHERE severity = 'warning') as warning_alerts,
+            COUNT(*) FILTER (WHERE acknowledged = FALSE) as unacknowledged_alerts,
+            COUNT(*) FILTER (WHERE resolved = TRUE) as resolved_alerts,
+            COUNT(DISTINCT agent_id_hash) as affected_agents,
+            detection_mechanism,
+            COUNT(*) as mechanism_count
+        FROM cirislens.coherence_ratchet_alerts
+        WHERE timestamp > NOW() - $1::interval
+        GROUP BY detection_mechanism
+        ORDER BY mechanism_count DESC;
+    """
+
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch(query, f"{hours} hours")
+
+        if not rows:
+            return {
+                "total_alerts": 0,
+                "critical_alerts": 0,
+                "warning_alerts": 0,
+                "unacknowledged_alerts": 0,
+                "resolved_alerts": 0,
+                "affected_agents": 0,
+                "by_mechanism": {},
+                "hours_analyzed": hours,
+            }
+
+        # Aggregate totals from first row (all have same totals due to GROUP BY)
+        first = rows[0]
+        by_mechanism = {row["detection_mechanism"]: row["mechanism_count"] for row in rows}
+
+        return {
+            "total_alerts": first["total_alerts"],
+            "critical_alerts": first["critical_alerts"],
+            "warning_alerts": first["warning_alerts"],
+            "unacknowledged_alerts": first["unacknowledged_alerts"],
+            "resolved_alerts": first["resolved_alerts"],
+            "affected_agents": first["affected_agents"],
+            "by_mechanism": by_mechanism,
+            "hours_analyzed": hours,
+        }

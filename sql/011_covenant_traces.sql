@@ -338,7 +338,61 @@ GRANT ALL PRIVILEGES ON cirislens.covenant_trace_metrics TO cirislens;
 GRANT SELECT ON cirislens.covenant_traces_hourly TO cirislens;
 
 -- ============================================================================
--- SECTION 9: Verification
+-- SECTION 9: Coherence Ratchet Alerts
+-- Reference: FSD/coherence_ratchet_detection.md
+-- ============================================================================
+
+-- Persisted anomaly alerts from detection mechanisms
+CREATE TABLE IF NOT EXISTS cirislens.coherence_ratchet_alerts (
+    alert_id UUID PRIMARY KEY,
+    alert_type VARCHAR(50) DEFAULT 'coherence_ratchet_anomaly',
+    severity VARCHAR(20) NOT NULL,              -- warning, critical
+    detection_mechanism VARCHAR(50) NOT NULL,   -- cross_agent_divergence, etc.
+
+    -- Target
+    agent_id_hash VARCHAR(64),
+    domain VARCHAR(100),
+
+    -- Anomaly details
+    metric VARCHAR(100) NOT NULL,
+    value NUMERIC(10,4),
+    baseline NUMERIC(10,4),
+    deviation VARCHAR(100),
+
+    -- Evidence
+    evidence_traces TEXT[],
+    recommended_action TEXT,
+
+    -- Lifecycle
+    timestamp TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    acknowledged BOOLEAN DEFAULT FALSE,
+    acknowledged_at TIMESTAMP WITH TIME ZONE,
+    acknowledged_by VARCHAR(255),
+    resolved BOOLEAN DEFAULT FALSE,
+    resolved_at TIMESTAMP WITH TIME ZONE,
+    resolved_by VARCHAR(255),
+    resolution_notes TEXT,
+
+    CONSTRAINT valid_severity CHECK (severity IN ('warning', 'critical')),
+    CONSTRAINT valid_mechanism CHECK (detection_mechanism IN (
+        'cross_agent_divergence', 'intra_agent_consistency',
+        'hash_chain', 'temporal_drift', 'conscience_override'
+    ))
+);
+
+-- Indexes for alert queries
+CREATE INDEX IF NOT EXISTS idx_alerts_timestamp ON cirislens.coherence_ratchet_alerts(timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_alerts_severity ON cirislens.coherence_ratchet_alerts(severity, timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_alerts_agent ON cirislens.coherence_ratchet_alerts(agent_id_hash, timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_alerts_mechanism ON cirislens.coherence_ratchet_alerts(detection_mechanism, timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_alerts_unacknowledged ON cirislens.coherence_ratchet_alerts(acknowledged, timestamp DESC)
+    WHERE acknowledged = FALSE;
+
+-- Grant permissions
+GRANT ALL PRIVILEGES ON cirislens.coherence_ratchet_alerts TO cirislens;
+
+-- ============================================================================
+-- SECTION 10: Verification
 -- ============================================================================
 
 DO $$
@@ -348,11 +402,14 @@ BEGIN
     SELECT COUNT(*) INTO table_count
     FROM information_schema.tables
     WHERE table_schema = 'cirislens'
-    AND table_name IN ('covenant_public_keys', 'covenant_traces', 'covenant_trace_batches', 'covenant_trace_metrics');
+    AND table_name IN (
+        'covenant_public_keys', 'covenant_traces', 'covenant_trace_batches',
+        'covenant_trace_metrics', 'coherence_ratchet_alerts'
+    );
 
     RAISE NOTICE 'Covenant Traces Migration Complete:';
     RAISE NOTICE '  - New tables created: %', table_count;
-    RAISE NOTICE '  - Tables: covenant_public_keys, covenant_traces, covenant_trace_batches, covenant_trace_metrics';
+    RAISE NOTICE '  - Tables: covenant_public_keys, covenant_traces, covenant_trace_batches, covenant_trace_metrics, coherence_ratchet_alerts';
     RAISE NOTICE '  - Hypertables enabled with 7-day chunks';
     RAISE NOTICE '  - Retention: 90 days detail, 1 year aggregates';
     RAISE NOTICE '  - Compression: after 7 days';

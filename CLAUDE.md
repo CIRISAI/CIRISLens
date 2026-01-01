@@ -385,12 +385,111 @@ WHERE event = 'llm_error' AND timestamp > NOW() - INTERVAL '1 hour'
 GROUP BY provider ORDER BY errors DESC;
 ```
 
+## Coherence Ratchet Detection System
+
+The Coherence Ratchet is CIRISLens's anomaly detection system for identifying potentially misaligned agent behavior through statistical analysis of reasoning traces.
+
+### What It Does
+
+Analyzes Ed25519-signed reasoning traces from CIRIS agents to detect:
+- **Cross-agent divergence**: Agents whose DMA scores differ significantly from peers in the same domain
+- **Intra-agent inconsistency**: Agents contradicting their own prior reasoning patterns
+- **Hash chain breaks**: Gaps or tampering in the audit trail
+- **Temporal drift**: Sudden changes in agent behavior over time
+- **Conscience override patterns**: Elevated rates of ethical faculty interventions
+
+**Important**: Detection is triage, not verdict. Anomalies warrant human investigation but don't prove misalignment.
+
+### API Endpoints
+
+```
+GET    /api/v1/covenant/coherence-ratchet/alerts     # List anomaly alerts
+POST   /api/v1/covenant/coherence-ratchet/run        # Trigger detection manually
+PUT    /api/v1/covenant/coherence-ratchet/alerts/{id}/acknowledge
+PUT    /api/v1/covenant/coherence-ratchet/alerts/{id}/resolve
+GET    /api/v1/covenant/coherence-ratchet/stats      # Detection statistics
+```
+
+### Detection Thresholds
+
+| Metric | Warning | Critical |
+|--------|---------|----------|
+| Cross-agent divergence (z-score) | > 2σ | > 3σ |
+| Daily score drift | > 15% | > 25% |
+| Conscience override rate | > 2x domain avg | > 3x domain avg |
+| Hash chain gaps | - | Any gap |
+
+### Database Tables
+
+| Table | Purpose |
+|-------|---------|
+| `covenant_traces` | Stores signed reasoning traces with denormalized DMA scores |
+| `coherence_ratchet_alerts` | Persisted anomaly alerts with lifecycle tracking |
+| `covenant_public_keys` | Ed25519 public keys for signature verification |
+
+### Grafana Dashboard
+
+The "Coherence Ratchet Detection" dashboard (`dashboards/coherence_ratchet.json`) provides:
+- Alert overview (warning/critical counts, hash chain breaks)
+- Cross-agent divergence time series with threshold lines
+- Temporal drift analysis with significant change highlighting
+- Conscience override rates by agent/domain
+- Recent anomaly alerts table
+
+### Running Detection Manually
+
+```bash
+# Via API
+curl -X POST https://agents.ciris.ai/lens/api/v1/covenant/coherence-ratchet/run
+
+# The scheduler runs automatically:
+# - Cross-agent divergence: daily
+# - Temporal drift: daily
+# - Hash chain verification: hourly
+# - Conscience overrides: daily
+# - Intra-agent consistency: daily
+```
+
+### Migration
+
+Run `sql/011_covenant_traces.sql` to create Coherence Ratchet tables.
+
+### FSD Documentation
+
+- [Trace Format Specification](FSD/trace_format_specification.md) - Canonical trace structure
+- [Coherence Ratchet Detection](FSD/coherence_ratchet_detection.md) - Detection mechanisms
+
 ## Test Coverage
 
-- **325 tests** passing
+- **374 tests** passing (325 + 49 coherence ratchet tests)
 - **75% coverage** (target: 70%)
 - Run tests: `pytest tests/ -x -q`
 - Run with coverage: `pytest tests/ --cov=api --cov=sdk`
+
+## CI/CD Pipeline
+
+### Build Workflow (`.github/workflows/build.yml`)
+- Runs on push to main and PRs
+- Executes tests with coverage
+- Performs SonarCloud analysis
+
+### Docker Publish (`.github/workflows/docker-publish.yml`)
+- Builds multi-arch images (amd64/arm64)
+- Publishes to `ghcr.io/cirisai/cirislens`
+- Tags: `latest`, `v*` versions, commit SHA
+
+### Building Locally
+
+```bash
+# Build production image
+docker build -t cirislens-api:dev -f api/Dockerfile --target production .
+
+# Build with development tools
+docker build -t cirislens-api:dev-tools -f api/Dockerfile --target development .
+
+# Run locally
+docker run -p 8000:8000 cirislens-api:dev
+```
 
 ## Future Enhancements
 
@@ -399,5 +498,4 @@ Potential additions (not yet implemented):
 - Grafana k6 for load testing
 - Grafana Faro for frontend monitoring
 - Custom Grafana plugin for CIRIS topology visualization
-- ML-based anomaly detection on metrics
-- Covenant compliance Grafana dashboard
+- Phase 2 Coherence Ratchet: Semantic embedding analysis, rationale-outcome correlation

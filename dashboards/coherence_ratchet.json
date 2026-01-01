@@ -1,0 +1,684 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": "-- Grafana --",
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "gnetId": null,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "id": 100,
+      "panels": [],
+      "title": "Alert Overview",
+      "type": "row"
+    },
+    {
+      "datasource": {"type": "grafana-postgresql-datasource", "uid": "CIRISLens-PostgreSQL"},
+      "description": "Active warning-level alerts for coherence anomalies",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1 },
+              { "color": "orange", "value": 5 }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 1 },
+      "id": 1,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": {"type": "grafana-postgresql-datasource", "uid": "CIRISLens-PostgreSQL"},
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH anomaly_detection AS (\n  SELECT\n    agent_id_hash,\n    csdma_plausibility_score,\n    dsdma_domain_alignment,\n    coherence_level,\n    -- Calculate z-scores for anomaly detection\n    ABS(csdma_plausibility_score - AVG(csdma_plausibility_score) OVER (PARTITION BY agent_id_hash)) /\n      NULLIF(STDDEV(csdma_plausibility_score) OVER (PARTITION BY agent_id_hash), 0) AS csdma_zscore,\n    ABS(dsdma_domain_alignment - AVG(dsdma_domain_alignment) OVER (PARTITION BY agent_id_hash)) /\n      NULLIF(STDDEV(dsdma_domain_alignment) OVER (PARTITION BY agent_id_hash), 0) AS dsdma_zscore,\n    ABS(coherence_level - AVG(coherence_level) OVER (PARTITION BY agent_id_hash)) /\n      NULLIF(STDDEV(coherence_level) OVER (PARTITION BY agent_id_hash), 0) AS coherence_zscore\n  FROM cirislens.covenant_traces\n  WHERE timestamp BETWEEN $__timeFrom() AND $__timeTo()\n    AND signature_verified = TRUE\n)\nSELECT COUNT(*) as value\nFROM anomaly_detection\nWHERE (csdma_zscore > 2 AND csdma_zscore <= 3)\n   OR (dsdma_zscore > 2 AND dsdma_zscore <= 3)\n   OR (coherence_zscore > 2 AND coherence_zscore <= 3)",
+          "refId": "A"
+        }
+      ],
+      "title": "Warning Alerts",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "grafana-postgresql-datasource", "uid": "CIRISLens-PostgreSQL"},
+      "description": "Active critical-level alerts (z-score > 3)",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 1 },
+              { "color": "red", "value": 3 }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 1 },
+      "id": 2,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": {"type": "grafana-postgresql-datasource", "uid": "CIRISLens-PostgreSQL"},
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH anomaly_detection AS (\n  SELECT\n    agent_id_hash,\n    csdma_plausibility_score,\n    dsdma_domain_alignment,\n    coherence_level,\n    ABS(csdma_plausibility_score - AVG(csdma_plausibility_score) OVER (PARTITION BY agent_id_hash)) /\n      NULLIF(STDDEV(csdma_plausibility_score) OVER (PARTITION BY agent_id_hash), 0) AS csdma_zscore,\n    ABS(dsdma_domain_alignment - AVG(dsdma_domain_alignment) OVER (PARTITION BY agent_id_hash)) /\n      NULLIF(STDDEV(dsdma_domain_alignment) OVER (PARTITION BY agent_id_hash), 0) AS dsdma_zscore,\n    ABS(coherence_level - AVG(coherence_level) OVER (PARTITION BY agent_id_hash)) /\n      NULLIF(STDDEV(coherence_level) OVER (PARTITION BY agent_id_hash), 0) AS coherence_zscore\n  FROM cirislens.covenant_traces\n  WHERE timestamp BETWEEN $__timeFrom() AND $__timeTo()\n    AND signature_verified = TRUE\n)\nSELECT COUNT(*) as value\nFROM anomaly_detection\nWHERE csdma_zscore > 3 OR dsdma_zscore > 3 OR coherence_zscore > 3",
+          "refId": "A"
+        }
+      ],
+      "title": "Critical Alerts",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "grafana-postgresql-datasource", "uid": "CIRISLens-PostgreSQL"},
+      "description": "Number of agents with hash chain integrity breaks (should always be 0)",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [
+            {
+              "options": { "0": { "color": "green", "index": 0, "text": "All Clear" } },
+              "type": "value"
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 1 },
+      "id": 3,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": {"type": "grafana-postgresql-datasource", "uid": "CIRISLens-PostgreSQL"},
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH chain_check AS (\n  SELECT\n    agent_id_hash,\n    audit_sequence_number,\n    audit_entry_hash,\n    LAG(audit_entry_hash) OVER (PARTITION BY agent_id_hash ORDER BY audit_sequence_number) as prev_hash,\n    LAG(audit_sequence_number) OVER (PARTITION BY agent_id_hash ORDER BY audit_sequence_number) as prev_seq\n  FROM cirislens.covenant_traces\n  WHERE timestamp BETWEEN $__timeFrom() AND $__timeTo()\n    AND audit_sequence_number IS NOT NULL\n)\nSELECT COUNT(DISTINCT agent_id_hash) as value\nFROM chain_check\nWHERE prev_seq IS NOT NULL\n  AND audit_sequence_number != prev_seq + 1",
+          "refId": "A"
+        }
+      ],
+      "title": "Hash Chain Breaks",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "grafana-postgresql-datasource", "uid": "CIRISLens-PostgreSQL"},
+      "description": "Total agents being monitored in the selected time range",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "blue", "value": null }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 1 },
+      "id": 4,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": {"type": "grafana-postgresql-datasource", "uid": "CIRISLens-PostgreSQL"},
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT COUNT(DISTINCT agent_id_hash) as value\nFROM cirislens.covenant_traces\nWHERE timestamp BETWEEN $__timeFrom() AND $__timeTo()\n  AND signature_verified = TRUE",
+          "refId": "A"
+        }
+      ],
+      "title": "Agents Monitored",
+      "type": "stat"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 5 },
+      "id": 101,
+      "panels": [],
+      "title": "Cross-Agent Divergence Analysis",
+      "type": "row"
+    },
+    {
+      "datasource": {"type": "grafana-postgresql-datasource", "uid": "CIRISLens-PostgreSQL"},
+      "description": "Z-scores for CSDMA plausibility, DSDMA alignment, and coherence level by agent. Values > 2 indicate warning, > 3 indicate critical anomaly.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisLabel": "Z-Score",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": { "type": "linear" },
+            "showPoints": "auto",
+            "spanNulls": true,
+            "stacking": { "group": "A", "mode": "none" },
+            "thresholdsStyle": { "mode": "line+area" }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 2 },
+              { "color": "red", "value": 3 }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 6 },
+      "id": 5,
+      "options": {
+        "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "right" },
+        "tooltip": { "mode": "multi" }
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": {"type": "grafana-postgresql-datasource", "uid": "CIRISLens-PostgreSQL"},
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH agent_stats AS (\n  SELECT\n    agent_id_hash,\n    AVG(csdma_plausibility_score) as avg_csdma,\n    STDDEV(csdma_plausibility_score) as std_csdma,\n    AVG(dsdma_domain_alignment) as avg_dsdma,\n    STDDEV(dsdma_domain_alignment) as std_dsdma,\n    AVG(coherence_level) as avg_coherence,\n    STDDEV(coherence_level) as std_coherence\n  FROM cirislens.covenant_traces\n  WHERE timestamp BETWEEN $__timeFrom() AND $__timeTo()\n    AND signature_verified = TRUE\n  GROUP BY agent_id_hash\n),\nzscores AS (\n  SELECT\n    time_bucket('15 minutes', t.timestamp) AS time,\n    t.agent_id_hash || ' (CSDMA)' AS metric,\n    AVG(ABS(t.csdma_plausibility_score - s.avg_csdma) / NULLIF(s.std_csdma, 0)) as value\n  FROM cirislens.covenant_traces t\n  JOIN agent_stats s ON t.agent_id_hash = s.agent_id_hash\n  WHERE t.timestamp BETWEEN $__timeFrom() AND $__timeTo()\n    AND t.signature_verified = TRUE\n  GROUP BY 1, 2\n)\nSELECT time, metric, value FROM zscores WHERE value IS NOT NULL ORDER BY time",
+          "refId": "CSDMA"
+        },
+        {
+          "datasource": {"type": "grafana-postgresql-datasource", "uid": "CIRISLens-PostgreSQL"},
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH agent_stats AS (\n  SELECT\n    agent_id_hash,\n    AVG(dsdma_domain_alignment) as avg_dsdma,\n    STDDEV(dsdma_domain_alignment) as std_dsdma\n  FROM cirislens.covenant_traces\n  WHERE timestamp BETWEEN $__timeFrom() AND $__timeTo()\n    AND signature_verified = TRUE\n  GROUP BY agent_id_hash\n),\nzscores AS (\n  SELECT\n    time_bucket('15 minutes', t.timestamp) AS time,\n    t.agent_id_hash || ' (DSDMA)' AS metric,\n    AVG(ABS(t.dsdma_domain_alignment - s.avg_dsdma) / NULLIF(s.std_dsdma, 0)) as value\n  FROM cirislens.covenant_traces t\n  JOIN agent_stats s ON t.agent_id_hash = s.agent_id_hash\n  WHERE t.timestamp BETWEEN $__timeFrom() AND $__timeTo()\n    AND t.signature_verified = TRUE\n  GROUP BY 1, 2\n)\nSELECT time, metric, value FROM zscores WHERE value IS NOT NULL ORDER BY time",
+          "refId": "DSDMA"
+        },
+        {
+          "datasource": {"type": "grafana-postgresql-datasource", "uid": "CIRISLens-PostgreSQL"},
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH agent_stats AS (\n  SELECT\n    agent_id_hash,\n    AVG(coherence_level) as avg_coherence,\n    STDDEV(coherence_level) as std_coherence\n  FROM cirislens.covenant_traces\n  WHERE timestamp BETWEEN $__timeFrom() AND $__timeTo()\n    AND signature_verified = TRUE\n  GROUP BY agent_id_hash\n),\nzscores AS (\n  SELECT\n    time_bucket('15 minutes', t.timestamp) AS time,\n    t.agent_id_hash || ' (Coherence)' AS metric,\n    AVG(ABS(t.coherence_level - s.avg_coherence) / NULLIF(s.std_coherence, 0)) as value\n  FROM cirislens.covenant_traces t\n  JOIN agent_stats s ON t.agent_id_hash = s.agent_id_hash\n  WHERE t.timestamp BETWEEN $__timeFrom() AND $__timeTo()\n    AND t.signature_verified = TRUE\n  GROUP BY 1, 2\n)\nSELECT time, metric, value FROM zscores WHERE value IS NOT NULL ORDER BY time",
+          "refId": "Coherence"
+        }
+      ],
+      "title": "Cross-Agent Divergence (Z-Scores)",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 15 },
+      "id": 102,
+      "panels": [],
+      "title": "Temporal Drift Analysis",
+      "type": "row"
+    },
+    {
+      "datasource": {"type": "grafana-postgresql-datasource", "uid": "CIRISLens-PostgreSQL"},
+      "description": "Daily coherence and plausibility scores by agent. Days with >15% change from the previous day are highlighted.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisLabel": "Score",
+            "axisPlacement": "auto",
+            "axisSoftMax": 1,
+            "axisSoftMin": 0,
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 15,
+            "gradientMode": "opacity",
+            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 6,
+            "scaleDistribution": { "type": "linear" },
+            "showPoints": "always",
+            "spanNulls": false,
+            "stacking": { "group": "A", "mode": "none" },
+            "thresholdsStyle": { "mode": "off" }
+          },
+          "mappings": [],
+          "max": 1,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "yellow", "value": 0.5 },
+              { "color": "green", "value": 0.7 }
+            ]
+          },
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 16 },
+      "id": 6,
+      "options": {
+        "legend": { "calcs": ["mean", "last"], "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": {"type": "grafana-postgresql-datasource", "uid": "CIRISLens-PostgreSQL"},
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH daily_scores AS (\n  SELECT\n    time_bucket('1 day', timestamp) AS time,\n    agent_id_hash || ' Coherence' AS metric,\n    AVG(coherence_level) as value,\n    LAG(AVG(coherence_level)) OVER (PARTITION BY agent_id_hash ORDER BY time_bucket('1 day', timestamp)) as prev_value\n  FROM cirislens.covenant_traces\n  WHERE timestamp BETWEEN $__timeFrom() AND $__timeTo()\n    AND signature_verified = TRUE\n    AND coherence_level IS NOT NULL\n  GROUP BY time_bucket('1 day', timestamp), agent_id_hash\n)\nSELECT time, metric, value\nFROM daily_scores\nWHERE value IS NOT NULL\nORDER BY time",
+          "refId": "Coherence"
+        },
+        {
+          "datasource": {"type": "grafana-postgresql-datasource", "uid": "CIRISLens-PostgreSQL"},
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH daily_scores AS (\n  SELECT\n    time_bucket('1 day', timestamp) AS time,\n    agent_id_hash || ' Plausibility' AS metric,\n    AVG(csdma_plausibility_score) as value\n  FROM cirislens.covenant_traces\n  WHERE timestamp BETWEEN $__timeFrom() AND $__timeTo()\n    AND signature_verified = TRUE\n    AND csdma_plausibility_score IS NOT NULL\n  GROUP BY time_bucket('1 day', timestamp), agent_id_hash\n)\nSELECT time, metric, value\nFROM daily_scores\nWHERE value IS NOT NULL\nORDER BY time",
+          "refId": "Plausibility"
+        }
+      ],
+      "title": "Daily Coherence & Plausibility Scores",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "grafana-postgresql-datasource", "uid": "CIRISLens-PostgreSQL"},
+      "description": "Days where scores changed by more than 15% from the previous day (potential drift indicators)",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "custom": {
+            "align": "auto",
+            "displayMode": "auto",
+            "filterable": true
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Drift %" },
+            "properties": [
+              { "id": "custom.displayMode", "value": "color-background-solid" },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    { "color": "green", "value": null },
+                    { "color": "yellow", "value": 15 },
+                    { "color": "red", "value": 25 }
+                  ]
+                }
+              },
+              { "id": "unit", "value": "percent" }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Date" },
+            "properties": [{ "id": "custom.width", "value": 120 }]
+          }
+        ]
+      },
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 16 },
+      "id": 7,
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": { "show": false, "reducer": ["sum"], "fields": "" },
+        "sortBy": [{ "desc": true, "displayName": "Drift %" }]
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": {"type": "grafana-postgresql-datasource", "uid": "CIRISLens-PostgreSQL"},
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH daily_scores AS (\n  SELECT\n    time_bucket('1 day', timestamp) AS day,\n    agent_id_hash,\n    AVG(coherence_level) as avg_coherence,\n    AVG(csdma_plausibility_score) as avg_plausibility\n  FROM cirislens.covenant_traces\n  WHERE timestamp BETWEEN $__timeFrom() AND $__timeTo()\n    AND signature_verified = TRUE\n  GROUP BY time_bucket('1 day', timestamp), agent_id_hash\n),\nwith_drift AS (\n  SELECT\n    day,\n    agent_id_hash,\n    avg_coherence,\n    avg_plausibility,\n    LAG(avg_coherence) OVER (PARTITION BY agent_id_hash ORDER BY day) as prev_coherence,\n    LAG(avg_plausibility) OVER (PARTITION BY agent_id_hash ORDER BY day) as prev_plausibility\n  FROM daily_scores\n)\nSELECT\n  day::date AS \"Date\",\n  LEFT(agent_id_hash, 12) || '...' AS \"Agent\",\n  ROUND(avg_coherence::numeric * 100, 1) AS \"Coherence %\",\n  ROUND(avg_plausibility::numeric * 100, 1) AS \"Plausibility %\",\n  ROUND(GREATEST(\n    ABS(avg_coherence - prev_coherence) / NULLIF(prev_coherence, 0) * 100,\n    ABS(avg_plausibility - prev_plausibility) / NULLIF(prev_plausibility, 0) * 100\n  )::numeric, 1) AS \"Drift %\"\nFROM with_drift\nWHERE prev_coherence IS NOT NULL\n  AND (\n    ABS(avg_coherence - prev_coherence) / NULLIF(prev_coherence, 0) > 0.15\n    OR ABS(avg_plausibility - prev_plausibility) / NULLIF(prev_plausibility, 0) > 0.15\n  )\nORDER BY \"Drift %\" DESC\nLIMIT 50",
+          "refId": "A"
+        }
+      ],
+      "title": "Significant Drift Events (>15% Change)",
+      "type": "table"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 25 },
+      "id": 103,
+      "panels": [],
+      "title": "Conscience Override Analysis",
+      "type": "row"
+    },
+    {
+      "datasource": {"type": "grafana-postgresql-datasource", "uid": "CIRISLens-PostgreSQL"},
+      "description": "Rate of conscience overrides by agent and domain compared to the domain average baseline",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [],
+          "max": 1,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 0.1 },
+              { "color": "orange", "value": 0.2 },
+              { "color": "red", "value": 0.3 }
+            ]
+          },
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 26 },
+      "id": 8,
+      "options": {
+        "displayMode": "gradient",
+        "minVizHeight": 10,
+        "minVizWidth": 0,
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": true
+        },
+        "showUnfilled": true,
+        "text": {}
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": {"type": "grafana-postgresql-datasource", "uid": "CIRISLens-PostgreSQL"},
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH override_rates AS (\n  SELECT\n    COALESCE(dsdma_domain, 'Unknown') as domain,\n    LEFT(agent_id_hash, 8) || '...' as agent,\n    COUNT(*) FILTER (WHERE action_was_overridden = TRUE)::float / NULLIF(COUNT(*), 0) as override_rate\n  FROM cirislens.covenant_traces\n  WHERE timestamp BETWEEN $__timeFrom() AND $__timeTo()\n    AND signature_verified = TRUE\n  GROUP BY dsdma_domain, agent_id_hash\n)\nSELECT\n  domain || ' / ' || agent as metric,\n  override_rate as value\nFROM override_rates\nWHERE override_rate > 0\nORDER BY override_rate DESC\nLIMIT 20",
+          "refId": "A"
+        }
+      ],
+      "title": "Conscience Override Rate by Agent/Domain",
+      "type": "bargauge"
+    },
+    {
+      "datasource": {"type": "grafana-postgresql-datasource", "uid": "CIRISLens-PostgreSQL"},
+      "description": "Domain-level average override rates as baseline comparison",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [],
+          "max": 1,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 0.1 },
+              { "color": "orange", "value": 0.2 },
+              { "color": "red", "value": 0.3 }
+            ]
+          },
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 26 },
+      "id": 9,
+      "options": {
+        "displayMode": "lcd",
+        "minVizHeight": 10,
+        "minVizWidth": 0,
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": true
+        },
+        "showUnfilled": true,
+        "text": {}
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": {"type": "grafana-postgresql-datasource", "uid": "CIRISLens-PostgreSQL"},
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  COALESCE(dsdma_domain, 'Unknown') as metric,\n  COUNT(*) FILTER (WHERE action_was_overridden = TRUE)::float / NULLIF(COUNT(*), 0) as value\nFROM cirislens.covenant_traces\nWHERE timestamp BETWEEN $__timeFrom() AND $__timeTo()\n  AND signature_verified = TRUE\nGROUP BY dsdma_domain\nORDER BY value DESC",
+          "refId": "A"
+        }
+      ],
+      "title": "Domain Average Override Rates (Baseline)",
+      "type": "bargauge"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 34 },
+      "id": 104,
+      "panels": [],
+      "title": "Recent Anomaly Alerts",
+      "type": "row"
+    },
+    {
+      "datasource": {"type": "grafana-postgresql-datasource", "uid": "CIRISLens-PostgreSQL"},
+      "description": "Recent traces flagged as anomalies by the Coherence Ratchet detection system",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "custom": {
+            "align": "auto",
+            "displayMode": "auto",
+            "filterable": true
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "text", "value": null }]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Severity" },
+            "properties": [
+              { "id": "custom.displayMode", "value": "color-background-solid" },
+              {
+                "id": "mappings",
+                "value": [
+                  { "options": { "WARNING": { "color": "yellow", "index": 0 } }, "type": "value" },
+                  { "options": { "CRITICAL": { "color": "red", "index": 1 } }, "type": "value" }
+                ]
+              },
+              { "id": "custom.width", "value": 90 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Deviation" },
+            "properties": [
+              { "id": "unit", "value": "short" },
+              { "id": "decimals", "value": 2 },
+              { "id": "custom.displayMode", "value": "color-text" },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    { "color": "green", "value": null },
+                    { "color": "yellow", "value": 2 },
+                    { "color": "red", "value": 3 }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Agent" },
+            "properties": [{ "id": "custom.width", "value": 130 }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Mechanism" },
+            "properties": [{ "id": "custom.width", "value": 150 }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Timestamp" },
+            "properties": [{ "id": "custom.width", "value": 180 }]
+          }
+        ]
+      },
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 35 },
+      "id": 10,
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": { "show": false, "reducer": ["sum"], "fields": "" },
+        "sortBy": [{ "desc": true, "displayName": "Timestamp" }]
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": {"type": "grafana-postgresql-datasource", "uid": "CIRISLens-PostgreSQL"},
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH agent_stats AS (\n  SELECT\n    agent_id_hash,\n    AVG(csdma_plausibility_score) as avg_csdma,\n    STDDEV(csdma_plausibility_score) as std_csdma,\n    AVG(dsdma_domain_alignment) as avg_dsdma,\n    STDDEV(dsdma_domain_alignment) as std_dsdma,\n    AVG(coherence_level) as avg_coherence,\n    STDDEV(coherence_level) as std_coherence\n  FROM cirislens.covenant_traces\n  WHERE timestamp BETWEEN $__timeFrom() AND $__timeTo()\n    AND signature_verified = TRUE\n  GROUP BY agent_id_hash\n),\nanomalies AS (\n  SELECT\n    t.timestamp,\n    LEFT(t.agent_id_hash, 12) || '...' as agent_id_hash,\n    CASE\n      WHEN ABS(t.csdma_plausibility_score - s.avg_csdma) / NULLIF(s.std_csdma, 0) > 3 THEN 'CSDMA Plausibility'\n      WHEN ABS(t.dsdma_domain_alignment - s.avg_dsdma) / NULLIF(s.std_dsdma, 0) > 3 THEN 'DSDMA Alignment'\n      WHEN ABS(t.coherence_level - s.avg_coherence) / NULLIF(s.std_coherence, 0) > 3 THEN 'Coherence Level'\n      WHEN ABS(t.csdma_plausibility_score - s.avg_csdma) / NULLIF(s.std_csdma, 0) > 2 THEN 'CSDMA Plausibility'\n      WHEN ABS(t.dsdma_domain_alignment - s.avg_dsdma) / NULLIF(s.std_dsdma, 0) > 2 THEN 'DSDMA Alignment'\n      WHEN ABS(t.coherence_level - s.avg_coherence) / NULLIF(s.std_coherence, 0) > 2 THEN 'Coherence Level'\n      ELSE NULL\n    END as detection_mechanism,\n    CASE\n      WHEN GREATEST(\n        ABS(t.csdma_plausibility_score - s.avg_csdma) / NULLIF(s.std_csdma, 0),\n        ABS(t.dsdma_domain_alignment - s.avg_dsdma) / NULLIF(s.std_dsdma, 0),\n        ABS(t.coherence_level - s.avg_coherence) / NULLIF(s.std_coherence, 0)\n      ) > 3 THEN 'CRITICAL'\n      WHEN GREATEST(\n        ABS(t.csdma_plausibility_score - s.avg_csdma) / NULLIF(s.std_csdma, 0),\n        ABS(t.dsdma_domain_alignment - s.avg_dsdma) / NULLIF(s.std_dsdma, 0),\n        ABS(t.coherence_level - s.avg_coherence) / NULLIF(s.std_coherence, 0)\n      ) > 2 THEN 'WARNING'\n      ELSE NULL\n    END as severity,\n    GREATEST(\n      ABS(t.csdma_plausibility_score - s.avg_csdma) / NULLIF(s.std_csdma, 0),\n      ABS(t.dsdma_domain_alignment - s.avg_dsdma) / NULLIF(s.std_dsdma, 0),\n      ABS(t.coherence_level - s.avg_coherence) / NULLIF(s.std_coherence, 0)\n    ) as deviation,\n    t.trace_id,\n    t.selected_action,\n    t.action_was_overridden\n  FROM cirislens.covenant_traces t\n  JOIN agent_stats s ON t.agent_id_hash = s.agent_id_hash\n  WHERE t.timestamp BETWEEN $__timeFrom() AND $__timeTo()\n    AND t.signature_verified = TRUE\n)\nSELECT\n  timestamp AS \"Timestamp\",\n  agent_id_hash AS \"Agent\",\n  detection_mechanism AS \"Mechanism\",\n  severity AS \"Severity\",\n  ROUND(deviation::numeric, 2) AS \"Deviation\",\n  LEFT(trace_id, 20) || '...' AS \"Trace ID\",\n  selected_action AS \"Action\",\n  CASE WHEN action_was_overridden THEN 'Yes' ELSE 'No' END AS \"Override\"\nFROM anomalies\nWHERE severity IS NOT NULL\nORDER BY timestamp DESC\nLIMIT 100",
+          "refId": "A"
+        }
+      ],
+      "title": "Recent Anomaly Alerts",
+      "type": "table"
+    }
+  ],
+  "refresh": "1m",
+  "schemaVersion": 30,
+  "style": "dark",
+  "tags": ["coherence-ratchet", "covenant", "anomaly-detection", "ciris"],
+  "templating": {
+    "list": [
+      {
+        "current": {},
+        "datasource": {"type": "grafana-postgresql-datasource", "uid": "CIRISLens-PostgreSQL"},
+        "definition": "SELECT DISTINCT agent_id_hash FROM cirislens.covenant_traces WHERE timestamp > NOW() - INTERVAL '7 days' ORDER BY agent_id_hash",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Agent",
+        "multi": true,
+        "name": "agent",
+        "options": [],
+        "query": "SELECT DISTINCT agent_id_hash FROM cirislens.covenant_traces WHERE timestamp > NOW() - INTERVAL '7 days' ORDER BY agent_id_hash",
+        "refresh": 2,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {},
+        "datasource": {"type": "grafana-postgresql-datasource", "uid": "CIRISLens-PostgreSQL"},
+        "definition": "SELECT DISTINCT dsdma_domain FROM cirislens.covenant_traces WHERE timestamp > NOW() - INTERVAL '7 days' AND dsdma_domain IS NOT NULL ORDER BY dsdma_domain",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Domain",
+        "multi": true,
+        "name": "domain",
+        "options": [],
+        "query": "SELECT DISTINCT dsdma_domain FROM cirislens.covenant_traces WHERE timestamp > NOW() - INTERVAL '7 days' AND dsdma_domain IS NOT NULL ORDER BY dsdma_domain",
+        "refresh": 2,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 1,
+        "type": "query"
+      }
+    ]
+  },
+  "time": { "from": "now-24h", "to": "now" },
+  "timepicker": {
+    "refresh_intervals": ["5s", "10s", "30s", "1m", "5m", "15m", "30m", "1h", "2h", "1d"]
+  },
+  "timezone": "browser",
+  "title": "Coherence Ratchet Detection",
+  "uid": "coherence-ratchet",
+  "version": 1
+}
