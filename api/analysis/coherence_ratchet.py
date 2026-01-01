@@ -789,7 +789,7 @@ class CoherenceRatchetAnalyzer:
         Returns:
             List of (index, value, z_score) tuples for outliers
         """
-        mean, std, z_scores = CoherenceRatchetAnalyzer.calculate_z_scores(values)
+        _mean, _std, z_scores = CoherenceRatchetAnalyzer.calculate_z_scores(values)
         if not z_scores:
             return []
 

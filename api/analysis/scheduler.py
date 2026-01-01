@@ -7,13 +7,14 @@ Runs detection queries periodically and stores alerts.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from datetime import datetime, timedelta
 from typing import Any
 
 from api.analysis.coherence_ratchet import (
-    AnomalyAlert,
     AlertSeverity,
+    AnomalyAlert,
     CoherenceRatchetAnalyzer,
 )
 
@@ -77,10 +78,8 @@ class CoherenceRatchetScheduler:
         self._running = False
         if self._task:
             self._task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._task
-            except asyncio.CancelledError:
-                pass
         logger.info("Coherence Ratchet scheduler stopped")
 
     async def _run_loop(self) -> None:
