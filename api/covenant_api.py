@@ -941,3 +941,681 @@ async def get_compliance_summary() -> dict[str, Any]:
             "active_sunset_protocols": active_sunsets or 0,
             "generated_at": datetime.now(UTC).isoformat(),
         }
+
+
+# =============================================================================
+# Pydantic Models - Covenant Traces (H3ERE Pipeline)
+# Reference: FSD/covenant_events_receiver.md
+# =============================================================================
+
+
+class TraceComponent(BaseModel):
+    """Individual trace component (one of 6 types)."""
+
+    component_type: str  # observation, context, rationale, conscience, action
+    event_type: str  # THOUGHT_START, SNAPSHOT_AND_CONTEXT, etc.
+    timestamp: str  # ISO timestamp
+    data: dict[str, Any]
+
+
+class CovenantTrace(BaseModel):
+    """Complete signed reasoning trace from an agent."""
+
+    trace_id: str
+    thought_id: str | None = None
+    task_id: str | None = None
+    agent_id_hash: str | None = None
+    started_at: str | None = None
+    completed_at: str | None = None
+    components: list[TraceComponent]
+    signature: str  # Base64-encoded Ed25519 signature
+    signature_key_id: str  # e.g., "wa-2025-06-14-ROOT00"
+
+
+class CovenantTraceEvent(BaseModel):
+    """Wrapper for a trace event."""
+
+    event_type: str = "complete_trace"
+    trace: CovenantTrace
+
+
+class CovenantEventsRequest(BaseModel):
+    """Batch of covenant trace events."""
+
+    events: list[CovenantTraceEvent]
+    batch_timestamp: datetime
+    consent_timestamp: datetime
+
+
+class CovenantEventsResponse(BaseModel):
+    """Response for trace ingestion."""
+
+    status: str
+    received: int
+    accepted: int
+    rejected: int
+    rejected_traces: list[str] | None = None
+    errors: list[str] | None = None
+
+
+# =============================================================================
+# Helper Functions - Signature Verification
+# =============================================================================
+
+
+# Cache for public keys (loaded from database)
+_public_keys_cache: dict[str, bytes] = {}
+_public_keys_loaded: bool = False
+
+
+async def load_public_keys() -> dict[str, bytes]:
+    """Load Ed25519 public keys from database."""
+    global _public_keys_cache, _public_keys_loaded
+
+    if _public_keys_loaded:
+        return _public_keys_cache
+
+    db_pool = get_db_pool()
+    if db_pool is None:
+        return {}
+
+    try:
+        async with db_pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT key_id, public_key_base64
+                FROM cirislens.covenant_public_keys
+                WHERE revoked_at IS NULL
+                AND (expires_at IS NULL OR expires_at > NOW())
+                """
+            )
+            import base64
+
+            for row in rows:
+                _public_keys_cache[row["key_id"]] = base64.b64decode(
+                    row["public_key_base64"]
+                )
+            _public_keys_loaded = True
+            logger.info("Loaded %d covenant public keys", len(_public_keys_cache))
+    except Exception as e:
+        logger.warning("Failed to load public keys: %s", e)
+
+    return _public_keys_cache
+
+
+def verify_trace_signature(
+    trace: CovenantTrace, public_keys: dict[str, bytes]
+) -> tuple[bool, str | None]:
+    """
+    Verify Ed25519 signature on a trace.
+
+    Returns (is_valid, error_message).
+    """
+    import base64
+    import json
+
+    try:
+        from nacl.signing import VerifyKey
+        from nacl.exceptions import BadSignatureError
+    except ImportError:
+        logger.error("PyNaCl not installed - cannot verify signatures")
+        return False, "Signature verification unavailable"
+
+    # Check if we have the signer's key
+    if trace.signer_key_id not in public_keys:
+        return False, f"Unknown signer key: {trace.signer_key_id}"
+
+    try:
+        # Decode signature
+        signature = base64.b64decode(trace.signature)
+
+        # Get verify key
+        verify_key = VerifyKey(public_keys[trace.signer_key_id])
+
+        # Construct canonical message (JSON of components, sorted keys)
+        message = json.dumps(
+            [c.model_dump() for c in trace.components], sort_keys=True
+        ).encode()
+
+        # Verify signature
+        verify_key.verify(message, signature)
+        return True, None
+
+    except BadSignatureError:
+        return False, "Invalid signature"
+    except Exception as e:
+        return False, f"Verification error: {str(e)[:100]}"
+
+
+def extract_trace_metadata(trace: CovenantTrace) -> dict[str, Any]:
+    """Extract denormalized fields from trace components for database storage."""
+    metadata: dict[str, Any] = {
+        # Trace-level fields
+        "thought_id": trace.thought_id,
+        "task_id": trace.task_id,
+        "agent_id_hash": trace.agent_id_hash or "unknown",
+        "started_at": trace.started_at,
+        "completed_at": trace.completed_at,
+        # Classification
+        "trace_type": None,
+        "cognitive_state": None,
+        "thought_type": None,
+        "thought_depth": None,
+        "agent_name": None,
+        # DMA scores
+        "csdma_plausibility_score": None,
+        "dsdma_domain_alignment": None,
+        "dsdma_domain": None,
+        "pdma_stakeholders": None,
+        "pdma_conflicts": None,
+        # Action selection
+        "action_rationale": None,
+        "selected_action": None,
+        "action_success": None,
+        "processing_ms": None,
+        # Conscience - overall
+        "conscience_passed": None,
+        "action_was_overridden": None,
+        # Epistemic data
+        "entropy_level": None,
+        "coherence_level": None,
+        "uncertainty_acknowledged": None,
+        "reasoning_transparency": None,
+        # Conscience - bypass guardrails
+        "updated_status_detected": None,
+        "thought_depth_triggered": None,
+        # Conscience - ethical faculties
+        "entropy_passed": None,
+        "coherence_passed": None,
+        "optimization_veto_passed": None,
+        "epistemic_humility_passed": None,
+        # Audit trail
+        "audit_entry_id": None,
+        "audit_sequence_number": None,
+        "audit_entry_hash": None,
+        "audit_signature": None,
+        # Resource usage
+        "tokens_input": None,
+        "tokens_output": None,
+        "tokens_total": None,
+        "cost_cents": None,
+        "carbon_grams": None,
+        "energy_mwh": None,
+        "llm_calls": None,
+        "models_used": None,
+        # Components as dicts (for JSONB storage)
+        "thought_start": None,
+        "snapshot_and_context": None,
+        "dma_results": None,
+        "aspdma_result": None,
+        "conscience_result": None,
+        "action_result": None,
+    }
+
+    # Extract trace type from task_id if present
+    if trace.task_id:
+        task_id_upper = trace.task_id.upper()
+        if "VERIFY_IDENTITY" in task_id_upper:
+            metadata["trace_type"] = "VERIFY_IDENTITY"
+        elif "VALIDATE_INTEGRITY" in task_id_upper:
+            metadata["trace_type"] = "VALIDATE_INTEGRITY"
+        elif "EVALUATE_RESILIENCE" in task_id_upper:
+            metadata["trace_type"] = "EVALUATE_RESILIENCE"
+        elif "ACCEPT_INCOMPLETENESS" in task_id_upper:
+            metadata["trace_type"] = "ACCEPT_INCOMPLETENESS"
+        elif "EXPRESS_GRATITUDE" in task_id_upper:
+            metadata["trace_type"] = "EXPRESS_GRATITUDE"
+
+    for component in trace.components:
+        event_type = component.event_type
+        data = component.data
+
+        if event_type == "THOUGHT_START":
+            metadata["thought_start"] = data
+            metadata["thought_type"] = data.get("thought_type")
+            metadata["thought_depth"] = data.get("thought_depth")
+            # Fallback trace type detection from task_description
+            if not metadata["trace_type"]:
+                task_desc = data.get("task_description", "")
+                if "VERIFY" in task_desc.upper() or "identity" in task_desc.lower():
+                    metadata["trace_type"] = "VERIFY_IDENTITY"
+                elif "VALIDATE" in task_desc.upper() or "integrity" in task_desc.lower():
+                    metadata["trace_type"] = "VALIDATE_INTEGRITY"
+                elif "RESILIENCE" in task_desc.upper():
+                    metadata["trace_type"] = "EVALUATE_RESILIENCE"
+                elif "INCOMPLETENESS" in task_desc.upper():
+                    metadata["trace_type"] = "ACCEPT_INCOMPLETENESS"
+                elif "GRATITUDE" in task_desc.upper():
+                    metadata["trace_type"] = "EXPRESS_GRATITUDE"
+
+        elif event_type == "SNAPSHOT_AND_CONTEXT":
+            metadata["snapshot_and_context"] = data
+            metadata["cognitive_state"] = data.get("cognitive_state")
+            # Extract agent name from system_snapshot
+            sys_snapshot = data.get("system_snapshot", {})
+            agent_identity = sys_snapshot.get("agent_identity", {})
+            metadata["agent_name"] = agent_identity.get("agent_id")
+
+        elif event_type == "DMA_RESULTS":
+            metadata["dma_results"] = data
+            # Extract CSDMA (Common Sense DMA)
+            csdma = data.get("csdma", {})
+            metadata["csdma_plausibility_score"] = csdma.get("plausibility_score")
+            # Extract DSDMA (Domain-Specific DMA)
+            dsdma = data.get("dsdma", {})
+            metadata["dsdma_domain_alignment"] = dsdma.get("domain_alignment")
+            metadata["dsdma_domain"] = dsdma.get("domain")
+            # Extract PDMA (Principled DMA)
+            pdma = data.get("pdma", {})
+            metadata["pdma_stakeholders"] = pdma.get("stakeholders")
+            metadata["pdma_conflicts"] = pdma.get("conflicts")
+
+        elif event_type == "ASPDMA_RESULT":
+            metadata["aspdma_result"] = data
+            metadata["action_rationale"] = data.get("action_rationale")
+            # Extract action type (may have "HandlerActionType." prefix)
+            selected = data.get("selected_action", "")
+            if selected and "." in selected:
+                selected = selected.split(".")[-1]
+            metadata["selected_action"] = selected
+
+        elif event_type == "CONSCIENCE_RESULT":
+            metadata["conscience_result"] = data
+            # Overall conscience result
+            metadata["conscience_passed"] = data.get("conscience_passed")
+            metadata["action_was_overridden"] = data.get("action_was_overridden")
+            # Epistemic data
+            epistemic = data.get("epistemic_data", {})
+            metadata["entropy_level"] = epistemic.get("entropy_level")
+            metadata["coherence_level"] = epistemic.get("coherence_level")
+            metadata["uncertainty_acknowledged"] = epistemic.get("uncertainty_acknowledged")
+            metadata["reasoning_transparency"] = epistemic.get("reasoning_transparency")
+            # Bypass guardrails
+            metadata["updated_status_detected"] = data.get("updated_status_detected")
+            metadata["thought_depth_triggered"] = data.get("thought_depth_triggered")
+            # Ethical faculties (may be null if skipped)
+            metadata["entropy_passed"] = data.get("entropy_passed")
+            metadata["coherence_passed"] = data.get("coherence_passed")
+            metadata["optimization_veto_passed"] = data.get("optimization_veto_passed")
+            metadata["epistemic_humility_passed"] = data.get("epistemic_humility_passed")
+
+        elif event_type == "ACTION_RESULT":
+            metadata["action_result"] = data
+            # If not already set from ASPDMA
+            if not metadata["selected_action"]:
+                metadata["selected_action"] = data.get("action_executed")
+            metadata["action_success"] = data.get("execution_success")
+            metadata["processing_ms"] = data.get("execution_time_ms")
+            # Audit trail
+            metadata["audit_entry_id"] = data.get("audit_entry_id")
+            metadata["audit_sequence_number"] = data.get("audit_sequence_number")
+            metadata["audit_entry_hash"] = data.get("audit_entry_hash")
+            metadata["audit_signature"] = data.get("audit_signature")
+            # Resource usage
+            metadata["tokens_input"] = data.get("tokens_input")
+            metadata["tokens_output"] = data.get("tokens_output")
+            metadata["tokens_total"] = data.get("tokens_total")
+            metadata["cost_cents"] = data.get("cost_cents")
+            metadata["carbon_grams"] = data.get("carbon_grams")
+            metadata["energy_mwh"] = data.get("energy_mwh")
+            metadata["llm_calls"] = data.get("llm_calls")
+            metadata["models_used"] = data.get("models_used")
+
+    return metadata
+
+
+# =============================================================================
+# API Endpoint - Covenant Events Receiver
+# Reference: FSD/covenant_events_receiver.md
+# =============================================================================
+
+
+@router.post("/events", response_model=CovenantEventsResponse)
+async def receive_covenant_events(
+    request: CovenantEventsRequest,
+) -> dict[str, Any]:
+    """
+    Receive Ed25519-signed reasoning traces from CIRIS agents.
+
+    This endpoint implements the Coherence Ratchet receiver, accepting
+    immutable records of agent decision-making for transparency and
+    alignment validation.
+
+    Reference: Covenant Section IV - Ethical Integrity Surveillance
+    """
+    import base64
+    import json
+
+    db_pool = get_db_pool()
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    # Load public keys
+    public_keys = await load_public_keys()
+    if not public_keys:
+        logger.warning("No public keys loaded - traces will be stored unverified")
+
+    accepted = 0
+    rejected = 0
+    rejected_traces: list[str] = []
+    errors: list[str] = []
+
+    async with db_pool.acquire() as conn:
+        for event in request.events:
+            trace = event.trace
+
+            # Verify signature
+            is_valid, error = verify_trace_signature(trace, public_keys)
+
+            if not is_valid and public_keys:
+                rejected += 1
+                rejected_traces.append(trace.trace_id)
+                if error:
+                    errors.append(f"{trace.trace_id}: {error}")
+                continue
+
+            # Extract metadata from components
+            metadata = extract_trace_metadata(trace)
+
+            try:
+                # Store trace with all extracted metadata
+                await conn.execute(
+                    """
+                    INSERT INTO cirislens.covenant_traces (
+                        trace_id, thought_id, task_id,
+                        agent_id_hash, agent_name,
+                        trace_type, cognitive_state, thought_type, thought_depth,
+                        started_at, completed_at,
+                        thought_start, snapshot_and_context, dma_results,
+                        aspdma_result, conscience_result, action_result,
+                        csdma_plausibility_score, dsdma_domain_alignment, dsdma_domain,
+                        pdma_stakeholders, pdma_conflicts,
+                        action_rationale,
+                        conscience_passed, action_was_overridden,
+                        entropy_level, coherence_level, uncertainty_acknowledged, reasoning_transparency,
+                        updated_status_detected, thought_depth_triggered,
+                        entropy_passed, coherence_passed,
+                        optimization_veto_passed, epistemic_humility_passed,
+                        selected_action, action_success, processing_ms,
+                        audit_entry_id, audit_sequence_number, audit_entry_hash, audit_signature,
+                        tokens_input, tokens_output, tokens_total,
+                        cost_cents, carbon_grams, energy_mwh,
+                        llm_calls, models_used,
+                        signature, signer_key_id, signature_verified,
+                        consent_timestamp, timestamp
+                    ) VALUES (
+                        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+                        $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
+                        $21, $22, $23, $24, $25, $26, $27, $28, $29, $30,
+                        $31, $32, $33, $34, $35, $36, $37, $38, $39, $40,
+                        $41, $42, $43, $44, $45, $46, $47, $48, $49, $50,
+                        $51, $52, $53, $54, $55
+                    )
+                    ON CONFLICT (trace_id) DO NOTHING
+                    """,
+                    trace.trace_id,                              # $1
+                    metadata["thought_id"],                      # $2
+                    metadata["task_id"],                         # $3
+                    metadata["agent_id_hash"],                   # $4
+                    metadata["agent_name"],                      # $5
+                    metadata["trace_type"],                      # $6
+                    metadata["cognitive_state"],                 # $7
+                    metadata["thought_type"],                    # $8
+                    metadata["thought_depth"],                   # $9
+                    metadata["started_at"],                      # $10
+                    metadata["completed_at"],                    # $11
+                    json.dumps(metadata["thought_start"]),       # $12
+                    json.dumps(metadata["snapshot_and_context"]),# $13
+                    json.dumps(metadata["dma_results"]),         # $14
+                    json.dumps(metadata["aspdma_result"]),       # $15
+                    json.dumps(metadata["conscience_result"]),   # $16
+                    json.dumps(metadata["action_result"]),       # $17
+                    metadata["csdma_plausibility_score"],        # $18
+                    metadata["dsdma_domain_alignment"],          # $19
+                    metadata["dsdma_domain"],                    # $20
+                    metadata["pdma_stakeholders"],               # $21
+                    metadata["pdma_conflicts"],                  # $22
+                    metadata["action_rationale"],                # $23
+                    metadata["conscience_passed"],               # $24
+                    metadata["action_was_overridden"],           # $25
+                    metadata["entropy_level"],                   # $26
+                    metadata["coherence_level"],                 # $27
+                    metadata["uncertainty_acknowledged"],        # $28
+                    metadata["reasoning_transparency"],          # $29
+                    metadata["updated_status_detected"],         # $30
+                    metadata["thought_depth_triggered"],         # $31
+                    metadata["entropy_passed"],                  # $32
+                    metadata["coherence_passed"],                # $33
+                    metadata["optimization_veto_passed"],        # $34
+                    metadata["epistemic_humility_passed"],       # $35
+                    metadata["selected_action"],                 # $36
+                    metadata["action_success"],                  # $37
+                    metadata["processing_ms"],                   # $38
+                    metadata["audit_entry_id"],                  # $39
+                    metadata["audit_sequence_number"],           # $40
+                    metadata["audit_entry_hash"],                # $41
+                    metadata["audit_signature"],                 # $42
+                    metadata["tokens_input"],                    # $43
+                    metadata["tokens_output"],                   # $44
+                    metadata["tokens_total"],                    # $45
+                    metadata["cost_cents"],                      # $46
+                    metadata["carbon_grams"],                    # $47
+                    metadata["energy_mwh"],                      # $48
+                    metadata["llm_calls"],                       # $49
+                    metadata["models_used"],                     # $50
+                    trace.signature,                             # $51
+                    trace.signature_key_id,                      # $52
+                    is_valid,                                    # $53
+                    request.consent_timestamp,                   # $54
+                    request.batch_timestamp,                     # $55
+                )
+                accepted += 1
+
+            except Exception as e:
+                logger.error("Failed to store trace %s: %s", trace.trace_id, e)
+                rejected += 1
+                rejected_traces.append(trace.trace_id)
+                errors.append(f"{trace.trace_id}: Storage error")
+
+        # Record batch metadata
+        await conn.execute(
+            """
+            INSERT INTO cirislens.covenant_trace_batches (
+                batch_timestamp, consent_timestamp,
+                traces_received, traces_accepted, traces_rejected,
+                rejection_reasons
+            ) VALUES ($1, $2, $3, $4, $5, $6)
+            """,
+            request.batch_timestamp,
+            request.consent_timestamp,
+            len(request.events),
+            accepted,
+            rejected,
+            json.dumps(errors) if errors else None,
+        )
+
+    logger.info(
+        "Covenant events batch: received=%d accepted=%d rejected=%d",
+        len(request.events),
+        accepted,
+        rejected,
+    )
+
+    response: dict[str, Any] = {
+        "status": "ok" if rejected == 0 else "partial",
+        "received": len(request.events),
+        "accepted": accepted,
+        "rejected": rejected,
+    }
+
+    if rejected_traces:
+        response["rejected_traces"] = rejected_traces
+    if errors:
+        response["errors"] = errors
+
+    return response
+
+
+# =============================================================================
+# API Endpoint - Public Key Management
+# =============================================================================
+
+
+class PublicKeyCreate(BaseModel):
+    """Register a new public key for signature verification."""
+
+    key_id: str
+    public_key_base64: str
+    description: str | None = None
+
+
+@router.post("/public-keys")
+async def register_public_key(
+    key: PublicKeyCreate,
+) -> dict[str, Any]:
+    """
+    Register a public key for trace signature verification.
+
+    This is typically called once during initial setup with the
+    root public key from seed/root_pub.json.
+    """
+    db_pool = get_db_pool()
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    # Validate the key is valid base64 and correct length for Ed25519
+    import base64
+
+    try:
+        key_bytes = base64.b64decode(key.public_key_base64)
+        if len(key_bytes) != 32:
+            raise HTTPException(
+                status_code=400, detail="Invalid Ed25519 public key length"
+            )
+    except Exception as e:
+        raise HTTPException(
+            status_code=400, detail=f"Invalid base64 encoding: {e}"
+        ) from e
+
+    async with db_pool.acquire() as conn:
+        try:
+            await conn.execute(
+                """
+                INSERT INTO cirislens.covenant_public_keys (
+                    key_id, public_key_base64, description
+                ) VALUES ($1, $2, $3)
+                ON CONFLICT (key_id) DO UPDATE
+                SET public_key_base64 = $2, description = $3
+                """,
+                key.key_id,
+                key.public_key_base64,
+                key.description,
+            )
+        except Exception as e:
+            logger.error("Failed to register public key: %s", e)
+            raise HTTPException(status_code=500, detail="Failed to register key") from e
+
+    # Invalidate cache
+    global _public_keys_loaded
+    _public_keys_loaded = False
+
+    logger.info("Registered public key: %s", key.key_id)
+
+    return {"status": "registered", "key_id": key.key_id}
+
+
+@router.get("/public-keys")
+async def list_public_keys() -> dict[str, Any]:
+    """List registered public keys (without the actual key values)."""
+    db_pool = get_db_pool()
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT key_id, algorithm, description, created_at, expires_at, revoked_at
+            FROM cirislens.covenant_public_keys
+            ORDER BY created_at DESC
+            """
+        )
+
+        keys = [
+            {
+                "key_id": row["key_id"],
+                "algorithm": row["algorithm"],
+                "description": row["description"],
+                "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+                "expires_at": row["expires_at"].isoformat() if row["expires_at"] else None,
+                "revoked": row["revoked_at"] is not None,
+            }
+            for row in rows
+        ]
+
+        return {"keys": keys, "count": len(keys)}
+
+
+# =============================================================================
+# API Endpoint - Trace Queries
+# =============================================================================
+
+
+@router.get("/traces")
+async def list_traces(
+    agent_id: str | None = None,
+    trace_type: str | None = None,
+    limit: int = 100,
+) -> dict[str, Any]:
+    """List recent covenant traces with optional filtering."""
+    db_pool = get_db_pool()
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    query = """
+        SELECT trace_id, agent_id_hash, trace_type, cognitive_state,
+               selected_action, action_success, signature_verified,
+               entropy_passed, coherence_passed, optimization_veto_passed,
+               epistemic_humility_passed, timestamp
+        FROM cirislens.covenant_traces
+        WHERE 1=1
+    """
+    params: list[Any] = []
+    param_idx = 1
+
+    if agent_id:
+        query += f" AND agent_id_hash = ${param_idx}"
+        params.append(agent_id)
+        param_idx += 1
+
+    if trace_type:
+        query += f" AND trace_type = ${param_idx}"
+        params.append(trace_type)
+        param_idx += 1
+
+    query += f" ORDER BY timestamp DESC LIMIT ${param_idx}"
+    params.append(min(limit, 1000))
+
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch(query, *params)
+
+        traces = [
+            {
+                "trace_id": row["trace_id"],
+                "agent_id_hash": row["agent_id_hash"],
+                "trace_type": row["trace_type"],
+                "cognitive_state": row["cognitive_state"],
+                "selected_action": row["selected_action"],
+                "action_success": row["action_success"],
+                "signature_verified": row["signature_verified"],
+                "conscience": {
+                    "entropy_passed": row["entropy_passed"],
+                    "coherence_passed": row["coherence_passed"],
+                    "optimization_veto_passed": row["optimization_veto_passed"],
+                    "epistemic_humility_passed": row["epistemic_humility_passed"],
+                },
+                "timestamp": row["timestamp"].isoformat() if row["timestamp"] else None,
+            }
+            for row in rows
+        ]
+
+        return {"traces": traces, "count": len(traces)}
