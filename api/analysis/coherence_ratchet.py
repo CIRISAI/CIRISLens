@@ -9,15 +9,13 @@ Detection is triage, not verdict - anomalies warrant human investigation.
 
 from __future__ import annotations
 
-import hashlib
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime
 from enum import Enum
 from typing import Any
 
 import numpy as np
-from scipy import stats
 
 
 class AlertSeverity(Enum):
@@ -249,10 +247,10 @@ class CoherenceRatchetAnalyzer:
                             metric=metric_name,
                             value=float(value),
                             baseline=float(baseline),
-                            deviation=f"{z_score:.1f}σ",
+                            deviation=f"{z_score:.1f} sigma",
                             evidence_traces=row["recent_traces"] or [],
                             recommended_action=(
-                                f"Agent shows {z_score:.1f}σ divergence in {metric_name}. "
+                                f"Agent shows {z_score:.1f} sigma divergence in {metric_name}. "
                                 f"Review traces to determine if behavior is legitimate."
                             ),
                         )
@@ -333,7 +331,7 @@ class CoherenceRatchetAnalyzer:
                         metric="action_variance",
                         value=float(row["std_plausibility"] or 0),
                         baseline=0.0,
-                        deviation=f"{row['distinct_actions']} actions, σ={row['std_plausibility']:.2f}",
+                        deviation=f"{row['distinct_actions']} actions, std={row['std_plausibility']:.2f}",
                         evidence_traces=row["recent_traces"] or [],
                         recommended_action=(
                             f"Agent uses {row['distinct_actions']} different actions "
@@ -796,7 +794,7 @@ class CoherenceRatchetAnalyzer:
             return []
 
         outliers = []
-        for i, (value, z) in enumerate(zip(values, z_scores)):
+        for i, (value, z) in enumerate(zip(values, z_scores, strict=True)):
             if abs(z) > threshold:
                 outliers.append((i, value, z))
 
