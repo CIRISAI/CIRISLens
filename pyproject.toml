@@ -142,8 +142,15 @@ ignore = [
 "api/token_manager.py" = [
     "PLR0912",   # Complex token management function
 ]
+"api/log_ingest.py" = [
+    "PLC0415",   # Inline secrets import for secure token generation
+]
 "sdk/logshipper.py" = [
     "S310",      # URL open - SDK only connects to HTTPS endpoints
+]
+"sdk/resilience.py" = [
+    "PLC0415",   # Inline random import for optional jitter
+    "S311",      # Random for jitter is not cryptographic
 ]
 "api/covenant_api.py" = [
     "TCH003",    # UUID needed at runtime for FastAPI path parameters

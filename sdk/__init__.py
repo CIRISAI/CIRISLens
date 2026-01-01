@@ -41,20 +41,18 @@ from .resilience import (
 )
 
 __all__ = [
-    # LogShipper
-    "LogShipper",
-    "LogShipperHandler",
-    "setup_logging",
-    "from_env",
     "DEFAULT_ENDPOINT",
-    # Resilience
+    "BackoffConfig",
     "CircuitBreaker",
     "CircuitBreakerConfig",
     "CircuitState",
     "ExponentialBackoff",
-    "BackoffConfig",
+    "LogShipper",
+    "LogShipperHandler",
     "ResilientClient",
     "ResilientClientConfig",
+    "from_env",
+    "setup_logging",
 ]
 
 __version__ = "1.1.0"

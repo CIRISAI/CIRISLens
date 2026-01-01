@@ -46,9 +46,9 @@ import logging
 import os
 import queue
 import socket
-import sys
 import threading
 import time
+from collections.abc import Callable
 from datetime import UTC, datetime
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -58,7 +58,6 @@ try:
     from .resilience import (
         BackoffConfig,
         CircuitBreakerConfig,
-        CircuitState,
         ResilientClient,
         ResilientClientConfig,
     )
@@ -99,8 +98,8 @@ class LogShipper:
         backoff_max: float = 300.0,
         max_buffer_bytes: int = 100 * 1024 * 1024,  # 100MB
         max_buffer_items: int = 100_000,
-        on_circuit_open: "Callable[[], None] | None" = None,
-        on_circuit_close: "Callable[[], None] | None" = None,
+        on_circuit_open: Callable[[], None] | None = None,
+        on_circuit_close: Callable[[], None] | None = None,
     ):
         """
         Initialize the LogShipper.
@@ -272,10 +271,9 @@ class LogShipper:
         if self._resilient:
             if not self._resilient.should_attempt():
                 return False  # Circuit is open, skip this flush
-        else:
+        elif time.time() < self._next_attempt_time:
             # Fallback: check backoff timing
-            if time.time() < self._next_attempt_time:
-                return False
+            return False
 
         logs = []
         logs_bytes = 0

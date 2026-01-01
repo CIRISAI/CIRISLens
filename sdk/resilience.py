@@ -25,9 +25,9 @@ Usage:
 import logging
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Callable
 
 __version__ = "1.0.0"
 
@@ -118,9 +118,8 @@ class CircuitBreaker:
     def state(self) -> CircuitState:
         """Get current circuit state, checking for timeout transitions."""
         with self._lock:
-            if self._state == CircuitState.OPEN:
-                if self._should_attempt_reset():
-                    self._transition_to(CircuitState.HALF_OPEN)
+            if self._state == CircuitState.OPEN and self._should_attempt_reset():
+                self._transition_to(CircuitState.HALF_OPEN)
             return self._state
 
     def _should_attempt_reset(self) -> bool:
@@ -176,7 +175,7 @@ class CircuitBreaker:
                 if self._success_count >= self.config.success_threshold:
                     self._transition_to(CircuitState.CLOSED)
 
-    def record_failure(self, error: str | None = None):
+    def record_failure(self, _error: str | None = None):
         """Record a failed request."""
         with self._lock:
             self._failure_count += 1
@@ -327,7 +326,7 @@ class ResilientClient:
         # Register callbacks
         if on_circuit_open or on_circuit_close:
 
-            def state_callback(old: CircuitState, new: CircuitState):
+            def state_callback(_old: CircuitState, new: CircuitState):
                 if new == CircuitState.OPEN and on_circuit_open:
                     on_circuit_open()
                 elif new == CircuitState.CLOSED and on_circuit_close:
@@ -336,7 +335,7 @@ class ResilientClient:
             self._circuit.on_state_change(state_callback)
 
         # Track circuit state changes for metrics
-        def metrics_callback(old: CircuitState, new: CircuitState):
+        def metrics_callback(_old: CircuitState, new: CircuitState):
             with self._lock:
                 if new == CircuitState.OPEN:
                     self._metrics.circuit_opens += 1
