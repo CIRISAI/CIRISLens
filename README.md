@@ -118,6 +118,22 @@ CIRISLens collects from CIRIS agents v1.4.5+ with full OTLP support:
 - **Compression**: 90% space savings on data older than 7 days
 - **Retention**: Automatic cleanup via TimescaleDB background jobs
 
+## Coherence Ratchet
+
+CIRISLens includes the Coherence Ratchet anomaly detection system for identifying potentially misaligned agent behavior through statistical analysis of Ed25519-signed reasoning traces.
+
+### Detection Mechanisms
+
+| Mechanism | Purpose | Documentation |
+|-----------|---------|---------------|
+| Cross-Agent Divergence | Detect agents whose scores differ from peers | [docs/coherence-ratchet/cross-agent-divergence.md](docs/coherence-ratchet/cross-agent-divergence.md) |
+| Intra-Agent Consistency | Detect self-contradictory reasoning | [docs/coherence-ratchet/intra-agent-consistency.md](docs/coherence-ratchet/intra-agent-consistency.md) |
+| Hash Chain Verification | Verify audit trail integrity | [docs/coherence-ratchet/hash-chain-verification.md](docs/coherence-ratchet/hash-chain-verification.md) |
+| Temporal Drift | Track behavioral changes over time | [docs/coherence-ratchet/temporal-drift.md](docs/coherence-ratchet/temporal-drift.md) |
+| Conscience Override | Monitor ethical intervention rates | [docs/coherence-ratchet/conscience-override.md](docs/coherence-ratchet/conscience-override.md) |
+
+See the [Coherence Ratchet Overview](docs/coherence-ratchet/README.md) for complete documentation.
+
 ## Support
 
 - Issues: https://github.com/CIRISAI/CIRISLens/issues
