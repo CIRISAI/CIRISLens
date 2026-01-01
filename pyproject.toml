@@ -110,6 +110,7 @@ ignore = [
 "tests/**/*.py" = [
     "S101",     # Assert usage fine in tests
     "ARG001",   # Unused arguments
+    "ARG002",   # Unused method arguments (mocker fixtures)
     "PLR2004",  # Magic values
     "S311",     # Random for non-crypto (fine in tests)
     "S105",     # Hardcoded test passwords
@@ -122,6 +123,13 @@ ignore = [
     "C401",     # Generator vs comprehension style
     "PLC0415",  # Import not at top level (fine in tests for lazy imports)
     "SIM117",   # Nested with statements (pytest.raises pattern)
+    "F401",     # Unused imports (test fixtures/setup)
+    "F841",     # Unused variables (test assertions)
+    "RUF001",   # Unicode characters in test strings (sigma symbols)
+    "RUF002",   # Unicode in docstrings
+    "RUF003",   # Unicode in comments
+    "RUF012",   # Mutable class attrs (test mock handlers)
+    "RUF059",   # Unpacked unused variables (fixture patterns)
 ]
 # FastAPI route handlers require auth user arg even if not used (dependency injection pattern)
 "api/main.py" = [
