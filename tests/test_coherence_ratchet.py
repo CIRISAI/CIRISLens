@@ -463,7 +463,7 @@ class TestDetectCrossAgentDivergence:
         assert alert.agent_id_hash == "agent-divergent"
         assert alert.domain == "healthcare"
         assert alert.detection_mechanism == DetectionMechanism.CROSS_AGENT_DIVERGENCE
-        assert "σ" in alert.deviation
+        assert "sigma" in alert.deviation
 
     @pytest.mark.asyncio
     async def test_detect_cross_agent_divergence_empty_result(self, mock_db_pool):

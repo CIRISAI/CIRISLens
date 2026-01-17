@@ -979,12 +979,23 @@ class CovenantTraceEvent(BaseModel):
     trace: CovenantTrace
 
 
+class CorrelationMetadata(BaseModel):
+    """Optional metadata for Early Warning System correlation analysis."""
+
+    deployment_region: str | None = None  # na, eu, uk, apac, latam, mena, africa, oceania
+    deployment_type: str | None = None  # personal, business, research, nonprofit
+    agent_role: str | None = None  # assistant, customer_support, content, coding, etc.
+    agent_template: str | None = None  # CIRIS template name if using standard template
+
+
 class CovenantEventsRequest(BaseModel):
     """Batch of covenant trace events."""
 
     events: list[CovenantTraceEvent]
     batch_timestamp: datetime
     consent_timestamp: datetime
+    trace_level: str = "generic"  # generic, detailed, full_traces
+    correlation_metadata: CorrelationMetadata | None = None
 
 
 class CovenantEventsResponse(BaseModel):
@@ -1087,7 +1098,7 @@ def verify_trace_signature(
         return False, f"Verification error: {str(e)[:100]}"
 
 
-def extract_trace_metadata(trace: CovenantTrace) -> dict[str, Any]:
+def extract_trace_metadata(trace: CovenantTrace, trace_level: str = "generic") -> dict[str, Any]:
     """Extract denormalized fields from trace components for database storage."""
     metadata: dict[str, Any] = {
         # Trace-level fields
@@ -1096,6 +1107,7 @@ def extract_trace_metadata(trace: CovenantTrace) -> dict[str, Any]:
         "agent_id_hash": trace.agent_id_hash or "unknown",
         "started_at": trace.started_at,
         "completed_at": trace.completed_at,
+        "trace_level": trace_level,
         # Classification
         "trace_type": None,
         "cognitive_state": None,
@@ -1108,6 +1120,11 @@ def extract_trace_metadata(trace: CovenantTrace) -> dict[str, Any]:
         "dsdma_domain": None,
         "pdma_stakeholders": None,
         "pdma_conflicts": None,
+        # IDMA (Intuition DMA) - Coherence Collapse Analysis
+        "idma_k_eff": None,
+        "idma_correlation_risk": None,
+        "idma_fragility_flag": None,
+        "idma_phase": None,
         # Action selection
         "action_rationale": None,
         "selected_action": None,
@@ -1209,6 +1226,15 @@ def extract_trace_metadata(trace: CovenantTrace) -> dict[str, Any]:
             pdma = data.get("pdma", {})
             metadata["pdma_stakeholders"] = pdma.get("stakeholders")
             metadata["pdma_conflicts"] = pdma.get("conflicts")
+            # Extract IDMA (Intuition DMA) - Coherence Collapse Analysis
+            # k_eff formula: k / (1 + rho*(k-1)) where k=sources, rho=correlation
+            # k_eff < 2 indicates fragile single-source dependence
+            idma = data.get("idma", {})
+            if idma:
+                metadata["idma_k_eff"] = idma.get("k_eff")
+                metadata["idma_correlation_risk"] = idma.get("correlation_risk")
+                metadata["idma_fragility_flag"] = idma.get("fragility_flag")
+                metadata["idma_phase"] = idma.get("phase")
 
         elif event_type == "ASPDMA_RESULT":
             metadata["aspdma_result"] = data
@@ -1315,7 +1341,7 @@ async def receive_covenant_events(
                 continue
 
             # Extract metadata from components
-            metadata = extract_trace_metadata(trace)
+            metadata = extract_trace_metadata(trace, trace_level=request.trace_level)
 
             try:
                 # Store trace with all extracted metadata
@@ -1330,6 +1356,7 @@ async def receive_covenant_events(
                         aspdma_result, conscience_result, action_result,
                         csdma_plausibility_score, dsdma_domain_alignment, dsdma_domain,
                         pdma_stakeholders, pdma_conflicts,
+                        idma_k_eff, idma_correlation_risk, idma_fragility_flag, idma_phase,
                         action_rationale,
                         conscience_passed, action_was_overridden,
                         entropy_level, coherence_level, uncertainty_acknowledged, reasoning_transparency,
@@ -1342,14 +1369,14 @@ async def receive_covenant_events(
                         cost_cents, carbon_grams, energy_mwh,
                         llm_calls, models_used,
                         signature, signer_key_id, signature_verified,
-                        consent_timestamp, timestamp
+                        consent_timestamp, timestamp, trace_level
                     ) VALUES (
                         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
                         $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
                         $21, $22, $23, $24, $25, $26, $27, $28, $29, $30,
                         $31, $32, $33, $34, $35, $36, $37, $38, $39, $40,
                         $41, $42, $43, $44, $45, $46, $47, $48, $49, $50,
-                        $51, $52, $53, $54, $55
+                        $51, $52, $53, $54, $55, $56, $57, $58, $59, $60
                     )
                     ON CONFLICT (trace_id) DO NOTHING
                     """,
@@ -1375,39 +1402,44 @@ async def receive_covenant_events(
                     metadata["dsdma_domain"],                    # $20
                     metadata["pdma_stakeholders"],               # $21
                     metadata["pdma_conflicts"],                  # $22
-                    metadata["action_rationale"],                # $23
-                    metadata["conscience_passed"],               # $24
-                    metadata["action_was_overridden"],           # $25
-                    metadata["entropy_level"],                   # $26
-                    metadata["coherence_level"],                 # $27
-                    metadata["uncertainty_acknowledged"],        # $28
-                    metadata["reasoning_transparency"],          # $29
-                    metadata["updated_status_detected"],         # $30
-                    metadata["thought_depth_triggered"],         # $31
-                    metadata["entropy_passed"],                  # $32
-                    metadata["coherence_passed"],                # $33
-                    metadata["optimization_veto_passed"],        # $34
-                    metadata["epistemic_humility_passed"],       # $35
-                    metadata["selected_action"],                 # $36
-                    metadata["action_success"],                  # $37
-                    metadata["processing_ms"],                   # $38
-                    metadata["audit_entry_id"],                  # $39
-                    metadata["audit_sequence_number"],           # $40
-                    metadata["audit_entry_hash"],                # $41
-                    metadata["audit_signature"],                 # $42
-                    metadata["tokens_input"],                    # $43
-                    metadata["tokens_output"],                   # $44
-                    metadata["tokens_total"],                    # $45
-                    metadata["cost_cents"],                      # $46
-                    metadata["carbon_grams"],                    # $47
-                    metadata["energy_mwh"],                      # $48
-                    metadata["llm_calls"],                       # $49
-                    metadata["models_used"],                     # $50
-                    trace.signature,                             # $51
-                    trace.signature_key_id,                      # $52
-                    is_valid,                                    # $53
-                    request.consent_timestamp,                   # $54
-                    request.batch_timestamp,                     # $55
+                    metadata["idma_k_eff"],                      # $23
+                    metadata["idma_correlation_risk"],           # $24
+                    metadata["idma_fragility_flag"],             # $25
+                    metadata["idma_phase"],                      # $26
+                    metadata["action_rationale"],                # $27
+                    metadata["conscience_passed"],               # $28
+                    metadata["action_was_overridden"],           # $29
+                    metadata["entropy_level"],                   # $30
+                    metadata["coherence_level"],                 # $31
+                    metadata["uncertainty_acknowledged"],        # $32
+                    metadata["reasoning_transparency"],          # $33
+                    metadata["updated_status_detected"],         # $34
+                    metadata["thought_depth_triggered"],         # $35
+                    metadata["entropy_passed"],                  # $36
+                    metadata["coherence_passed"],                # $37
+                    metadata["optimization_veto_passed"],        # $38
+                    metadata["epistemic_humility_passed"],       # $39
+                    metadata["selected_action"],                 # $40
+                    metadata["action_success"],                  # $41
+                    metadata["processing_ms"],                   # $42
+                    metadata["audit_entry_id"],                  # $43
+                    metadata["audit_sequence_number"],           # $44
+                    metadata["audit_entry_hash"],                # $45
+                    metadata["audit_signature"],                 # $46
+                    metadata["tokens_input"],                    # $47
+                    metadata["tokens_output"],                   # $48
+                    metadata["tokens_total"],                    # $49
+                    metadata["cost_cents"],                      # $50
+                    metadata["carbon_grams"],                    # $51
+                    metadata["energy_mwh"],                      # $52
+                    metadata["llm_calls"],                       # $53
+                    metadata["models_used"],                     # $54
+                    trace.signature,                             # $55
+                    trace.signature_key_id,                      # $56
+                    is_valid,                                    # $57
+                    request.consent_timestamp,                   # $58
+                    request.batch_timestamp,                     # $59
+                    metadata["trace_level"],                     # $60
                 )
                 accepted += 1
 
@@ -1418,13 +1450,17 @@ async def receive_covenant_events(
                 errors.append(f"{trace.trace_id}: Storage error")
 
         # Record batch metadata
+        correlation_json = None
+        if request.correlation_metadata:
+            correlation_json = json.dumps(request.correlation_metadata.model_dump(exclude_none=True))
+
         await conn.execute(
             """
             INSERT INTO cirislens.covenant_trace_batches (
                 batch_timestamp, consent_timestamp,
                 traces_received, traces_accepted, traces_rejected,
-                rejection_reasons
-            ) VALUES ($1, $2, $3, $4, $5, $6)
+                rejection_reasons, trace_level, correlation_metadata
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
             """,
             request.batch_timestamp,
             request.consent_timestamp,
@@ -1432,6 +1468,8 @@ async def receive_covenant_events(
             accepted,
             rejected,
             json.dumps(errors) if errors else None,
+            request.trace_level,
+            correlation_json,
         )
 
     logger.info(

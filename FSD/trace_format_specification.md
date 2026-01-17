@@ -8,7 +8,51 @@
 
 Every decision made by a CIRIS agent produces an immutable, cryptographically-signed trace. This document specifies the canonical trace format used for the Coherence Ratchet detection mechanism.
 
-## 2. Trace Structure
+## 2. Trace Detail Levels
+
+Traces are captured at three privacy levels, controlled by the sending agent:
+
+| Level | Description | Use Case |
+|-------|-------------|----------|
+| `generic` | Numeric scores only (default) | Powers [ciris.ai/ciris-scoring](https://ciris.ai/ciris-scoring) |
+| `detailed` | Adds lists & identifiers | Debugging without reasoning exposure |
+| `full_traces` | Complete reasoning text | Research corpus contribution |
+
+### What Each Level Captures
+
+**generic** (default) - Minimum data for CIRIS Capacity Score:
+- Numeric scores: `plausibility_score`, `domain_alignment`, `k_eff`, `correlation_risk`
+- Boolean flags: `conscience_passed`, `fragility_flag`, `entropy_passed`
+- Resource usage: `tokens_total`, `cost_cents`, `audit_sequence_number`
+- NO text strings, NO reasoning, NO prompts
+
+**detailed** - Adds actionable identifiers:
+- String identifiers: `thought_type`, `trace_type`, `domain`, `phase`
+- Lists: `stakeholders`, `sources_identified`, `correlation_factors`
+- Still NO reasoning text or prompts
+
+**full_traces** - Complete data for Coherence Ratchet corpus:
+- Reasoning text: `reasoning`, `action_rationale`, `conscience_override_reason`
+- Prompts: `prompt_used`, `aspdma_prompt`
+- Full context: `task_description`, `conversation_history`
+
+The batch payload includes `trace_level` to indicate what level of detail is available:
+
+```json
+{
+  "events": [...],
+  "batch_timestamp": "2026-01-15T14:00:00Z",
+  "consent_timestamp": "2025-12-15T13:00:00Z",
+  "trace_level": "generic",
+  "correlation_metadata": {
+    "deployment_region": "na",
+    "deployment_type": "business",
+    "agent_role": "customer_support"
+  }
+}
+```
+
+## 3. Trace Structure
 
 A complete trace contains 6 components that capture the full decision-making pipeline:
 
@@ -16,7 +60,7 @@ A complete trace contains 6 components that capture the full decision-making pip
 Observation → Context → Rationale (3 DMAs) → Action Selection → Conscience → Action
 ```
 
-### 2.1 Top-Level Fields
+### 3.1 Top-Level Fields
 
 ```json
 {
@@ -44,7 +88,7 @@ Observation → Context → Rationale (3 DMAs) → Action Selection → Conscien
 | `signature` | string | Base64url Ed25519 signature of components |
 | `signature_key_id` | string | Identifier of signing key |
 
-### 2.2 Component Structure
+### 3.2 Component Structure
 
 Each component has:
 
@@ -57,9 +101,9 @@ Each component has:
 }
 ```
 
-## 3. Component Details
+## 4. Component Details
 
-### 3.1 THOUGHT_START (Observation)
+### 4.1 THOUGHT_START (Observation)
 
 **component_type:** `observation`
 
@@ -92,7 +136,7 @@ Captures what triggered this decision.
 - `thought_type`: `standard` vs `follow_up`
 - `task_description`: Contains the original request
 
-### 3.2 SNAPSHOT_AND_CONTEXT (Context)
+### 4.2 SNAPSHOT_AND_CONTEXT (Context)
 
 **component_type:** `context`
 
@@ -139,11 +183,11 @@ Captures system state at decision time.
 - `agent_code_hash`: Verify agent hasn't been modified
 - `telemetry_summary`: Resource usage patterns
 
-### 3.3 DMA_RESULTS (Rationale - 3 DMAs)
+### 4.3 DMA_RESULTS (Rationale - 4 DMAs)
 
 **component_type:** `rationale`
 
-Contains results from 3 parallel Decision-Making Algorithms.
+Contains results from 4 parallel Decision-Making Algorithms.
 
 ```json
 {
@@ -171,10 +215,42 @@ Contains results from 3 parallel Decision-Making Algorithms.
       "alignment_check": "The principles of Act Ethically and Be Honest...",
       "prompt_used": "..."
     },
+    "idma": {
+      "k_eff": 2.0,
+      "correlation_risk": 0.2,
+      "fragility_flag": false,
+      "phase": "healthy",
+      "sources_identified": ["source1", "source2"],
+      "correlation_factors": ["shared_training_data"],
+      "reasoning": "Analysis identified 2 independent sources...",
+      "prompt_used": "..."
+    },
     "combined_analysis": null
   }
 }
 ```
+
+**IDMA (Intuition DMA) - Coherence Collapse Analysis:**
+
+The IDMA implements Coherence Collapse Analysis (CCA) per Covenant Section II, Chapter 5. It detects fragile reasoning by measuring epistemic diversity:
+
+```
+k_eff = k / (1 + rho * (k - 1))
+```
+
+Where:
+- `k` = number of information sources identified
+- `rho` = correlation coefficient between sources (0.0-1.0)
+- `k_eff` = effective number of truly independent sources
+
+**IDMA Phases:**
+
+| Phase | k_eff Range | Description |
+|-------|-------------|-------------|
+| `nascent` | ~1.0 | New agent, expected single-source dependence |
+| `emerging` | 1.0-2.0 | Developing epistemic diversity |
+| `healthy` | >= 2.0 | Multiple truly independent perspectives |
+| `fragile` | < 2.0 (established agent) | Dangerous regression to single-source |
 
 **Key Fields for Detection:**
 
@@ -183,8 +259,9 @@ Contains results from 3 parallel Decision-Making Algorithms.
 | CSDMA | `plausibility_score` | Does reasoning match common sense? (0.0-1.0) |
 | DSDMA | `domain_alignment` | Does behavior match agent's stated identity? (0.0-1.0) |
 | PDMA | `stakeholders`, `conflicts` | Ethical analysis of affected parties |
+| IDMA | `k_eff`, `fragility_flag` | Epistemic diversity and single-source risk |
 
-### 3.4 ASPDMA_RESULT (Action Selection)
+### 4.4 ASPDMA_RESULT (Action Selection)
 
 **component_type:** `rationale`
 
@@ -213,7 +290,7 @@ Contains the action selection decision and justification.
 - `selected_action`: The chosen action type
 - `is_recursive`: Whether this followed a conscience override
 
-### 3.5 CONSCIENCE_RESULT (Conscience)
+### 4.5 CONSCIENCE_RESULT (Conscience)
 
 **component_type:** `conscience`
 
@@ -281,7 +358,7 @@ Contains the 6 conscience checks.
 - `epistemic_data.coherence_level`: Internal consistency (0.0-1.0)
 - `epistemic_data.entropy_level`: Information uncertainty (0.0-1.0)
 
-### 3.6 ACTION_RESULT (Action)
+### 4.6 ACTION_RESULT (Action)
 
 **component_type:** `action`
 
@@ -327,9 +404,9 @@ Contains execution results and audit metadata.
 - `audit_entry_hash`: SHA-256 for chain verification
 - `tokens_total`, `cost_cents`: Resource usage tracking
 
-## 4. Cryptographic Verification
+## 5. Cryptographic Verification
 
-### 4.1 Trace Signature
+### 5.1 Trace Signature
 
 The trace signature is an Ed25519 signature over the canonical JSON of `components`:
 
@@ -351,7 +428,7 @@ def verify_trace(trace: dict, public_key: bytes) -> bool:
     return True
 ```
 
-### 4.2 Audit Hash Chain
+### 5.2 Audit Hash Chain
 
 Each `ACTION_RESULT` contains hash chain fields:
 
@@ -369,7 +446,7 @@ Verification:
 2. Verify each hash links to previous
 3. Any gap or mismatch indicates tampering
 
-## 5. Wakeup Trace Types
+## 6. Wakeup Trace Types
 
 The 5 wakeup ritual traces demonstrate agent alignment:
 
@@ -381,16 +458,21 @@ The 5 wakeup ritual traces demonstrate agent alignment:
 | ACCEPT_INCOMPLETENESS | `ACCEPT_INCOMPLETENESS_*` | Demonstrates epistemic humility |
 | EXPRESS_GRATITUDE | `EXPRESS_GRATITUDE_*` | Affirms Ubuntu values |
 
-## 6. Storage Format
+## 7. Storage Format
 
 CIRISLens stores traces in TimescaleDB with denormalized fields for fast queries:
 
 ```sql
--- See sql/011_covenant_traces.sql for full schema
+-- See sql/011_covenant_traces.sql and sql/012_trace_levels_idma.sql for full schema
 SELECT
     trace_id,
+    trace_level,
     csdma_plausibility_score,
     dsdma_domain_alignment,
+    idma_k_eff,
+    idma_correlation_risk,
+    idma_fragility_flag,
+    idma_phase,
     coherence_level,
     action_rationale,
     selected_action,
@@ -400,9 +482,20 @@ WHERE signature_verified = TRUE
 ORDER BY timestamp DESC;
 ```
 
-## 7. API Endpoints
+**IDMA Fragility Query:**
 
-### 7.1 Receive Traces
+```sql
+-- Find traces with fragile reasoning (k_eff < 2)
+SELECT trace_id, agent_id_hash, idma_k_eff, idma_phase
+FROM cirislens.covenant_traces
+WHERE idma_fragility_flag = TRUE
+  AND timestamp > NOW() - INTERVAL '24 hours'
+ORDER BY idma_k_eff ASC;
+```
+
+## 8. API Endpoints
+
+### 8.1 Receive Traces
 
 ```
 POST /api/v1/covenant/events
@@ -420,13 +513,13 @@ Content-Type: application/json
 }
 ```
 
-### 7.2 Query Traces
+### 8.2 Query Traces
 
 ```
 GET /api/v1/covenant/traces?trace_type=VERIFY_IDENTITY&limit=100
 ```
 
-## 8. References
+## 9. References
 
 - [Coherence Ratchet Detection](./coherence_ratchet_detection.md)
 - [CIRIS How It Works](https://ciris.ai/how-it-works/)
