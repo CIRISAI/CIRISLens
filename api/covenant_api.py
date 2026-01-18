@@ -1073,15 +1073,15 @@ def verify_trace_signature(
         return False, "Signature verification unavailable"
 
     # Check if we have the signer's key
-    if trace.signer_key_id not in public_keys:
-        return False, f"Unknown signer key: {trace.signer_key_id}"
+    if trace.signature_key_id not in public_keys:
+        return False, f"Unknown signer key: {trace.signature_key_id}"
 
     try:
         # Decode signature
         signature = base64.b64decode(trace.signature)
 
         # Get verify key
-        verify_key = VerifyKey(public_keys[trace.signer_key_id])
+        verify_key = VerifyKey(public_keys[trace.signature_key_id])
 
         # Construct canonical message (JSON of components, sorted keys)
         message = json.dumps(
@@ -1368,7 +1368,7 @@ async def receive_covenant_events(
                         tokens_input, tokens_output, tokens_total,
                         cost_cents, carbon_grams, energy_mwh,
                         llm_calls, models_used,
-                        signature, signer_key_id, signature_verified,
+                        signature, signature_key_id, signature_verified,
                         consent_timestamp, timestamp, trace_level
                     ) VALUES (
                         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
