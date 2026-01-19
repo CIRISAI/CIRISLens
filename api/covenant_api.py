@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import traceback
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
@@ -1358,6 +1359,30 @@ async def receive_covenant_events(
             metadata = extract_trace_metadata(trace, trace_level=request.trace_level)
 
             try:
+                # Type conversions for database compatibility
+                # audit_entry_id: convert string UUID to UUID object if present
+                audit_entry_id = metadata["audit_entry_id"]
+                if audit_entry_id and isinstance(audit_entry_id, str):
+                    try:
+                        audit_entry_id = UUID(audit_entry_id)
+                    except (ValueError, TypeError):
+                        logger.warning("Invalid audit_entry_id format: %s", audit_entry_id)
+                        audit_entry_id = None
+
+                # models_used: ensure it's JSON serialized for JSONB column
+                models_used = metadata["models_used"]
+                if models_used is not None and not isinstance(models_used, str):
+                    models_used = json.dumps(models_used)
+
+                # Log trace storage attempt for debugging
+                logger.debug(
+                    "Storing trace %s: thought_id=%s, agent=%s, type=%s",
+                    trace.trace_id,
+                    metadata["thought_id"],
+                    metadata["agent_name"],
+                    metadata["trace_type"],
+                )
+
                 # Store trace with all extracted metadata
                 await conn.execute(
                     """
@@ -1436,7 +1461,7 @@ async def receive_covenant_events(
                     metadata["selected_action"],                 # $40
                     metadata["action_success"],                  # $41
                     metadata["processing_ms"],                   # $42
-                    metadata["audit_entry_id"],                  # $43
+                    audit_entry_id,                              # $43 - converted to UUID
                     metadata["audit_sequence_number"],           # $44
                     metadata["audit_entry_hash"],                # $45
                     metadata["audit_signature"],                 # $46
@@ -1447,7 +1472,7 @@ async def receive_covenant_events(
                     metadata["carbon_grams"],                    # $51
                     metadata["energy_mwh"],                      # $52
                     metadata["llm_calls"],                       # $53
-                    metadata["models_used"],                     # $54
+                    models_used,                                 # $54 - JSON serialized
                     trace.signature,                             # $55
                     trace.signature_key_id,                      # $56
                     is_valid,                                    # $57
@@ -1456,12 +1481,33 @@ async def receive_covenant_events(
                     metadata["trace_level"],                     # $60
                 )
                 accepted += 1
+                logger.info("Successfully stored trace %s", trace.trace_id)
 
             except Exception as e:
-                logger.error("Failed to store trace %s: %s", trace.trace_id, e)
+                # Log full error with traceback for debugging
+                error_msg = str(e)
+                logger.error(
+                    "Failed to store trace %s: %s\nTraceback:\n%s",
+                    trace.trace_id,
+                    error_msg,
+                    traceback.format_exc(),
+                )
+                # Log problematic metadata values for debugging
+                logger.error(
+                    "Trace %s metadata dump: started_at=%r, completed_at=%r, "
+                    "audit_entry_id=%r, models_used=%r, consent_timestamp=%r, batch_timestamp=%r",
+                    trace.trace_id,
+                    metadata.get("started_at"),
+                    metadata.get("completed_at"),
+                    metadata.get("audit_entry_id"),
+                    metadata.get("models_used"),
+                    request.consent_timestamp,
+                    request.batch_timestamp,
+                )
                 rejected += 1
                 rejected_traces.append(trace.trace_id)
-                errors.append(f"{trace.trace_id}: Storage error")
+                # Include actual error message for diagnosis
+                errors.append(f"{trace.trace_id}: {error_msg}")
 
         # Record batch metadata
         correlation_json = None
