@@ -1098,6 +1098,20 @@ def verify_trace_signature(
         return False, f"Verification error: {str(e)[:100]}"
 
 
+def _parse_timestamp(ts: str | None) -> datetime | None:
+    """Parse ISO timestamp string to datetime, handling various formats."""
+    if ts is None:
+        return None
+    try:
+        # Handle ISO format with timezone
+        from datetime import datetime as dt
+        if ts.endswith("Z"):
+            ts = ts[:-1] + "+00:00"
+        return dt.fromisoformat(ts)
+    except (ValueError, TypeError):
+        return None
+
+
 def extract_trace_metadata(trace: CovenantTrace, trace_level: str = "generic") -> dict[str, Any]:
     """Extract denormalized fields from trace components for database storage."""
     metadata: dict[str, Any] = {
@@ -1105,8 +1119,8 @@ def extract_trace_metadata(trace: CovenantTrace, trace_level: str = "generic") -
         "thought_id": trace.thought_id,
         "task_id": trace.task_id,
         "agent_id_hash": trace.agent_id_hash or "unknown",
-        "started_at": trace.started_at,
-        "completed_at": trace.completed_at,
+        "started_at": _parse_timestamp(trace.started_at),
+        "completed_at": _parse_timestamp(trace.completed_at),
         "trace_level": trace_level,
         # Classification
         "trace_type": None,
