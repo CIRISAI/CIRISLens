@@ -1417,7 +1417,7 @@ async def receive_covenant_events(
                         $41, $42, $43, $44, $45, $46, $47, $48, $49, $50,
                         $51, $52, $53, $54, $55, $56, $57, $58, $59, $60
                     )
-                    ON CONFLICT (trace_id) DO NOTHING
+                    ON CONFLICT (trace_id, timestamp) DO NOTHING
                     """,
                     trace.trace_id,                              # $1
                     metadata["thought_id"],                      # $2
