@@ -886,10 +886,13 @@ async def aggregated_status():  # noqa: PLR0912
                     )
                     if provider in ["openrouter", "groq", "together", "openai"] and provider not in llm_providers:
                         llm_providers[provider] = detail
-                    elif provider in ["exa", "brave"] and "web_search" not in internal_providers:
+                    elif (
+                        provider in ["exa", "brave"]
+                        and "web_search" not in internal_providers
+                        and "web_search" not in external_provider_results
+                    ):
                         # Only use proxy-reported status if we don't have a direct check
-                        if "web_search" not in external_provider_results:
-                            internal_providers["web_search"] = detail
+                        internal_providers["web_search"] = detail
 
     # Add direct external provider check results (these take precedence)
     for display_name, result in external_provider_results.items():
