@@ -778,8 +778,8 @@ async def aggregated_status():  # noqa: PLR0912
                     )
                     if provider in ["openrouter", "groq", "together", "openai"] and provider not in llm_providers:
                         llm_providers[provider] = detail
-                    elif provider == "brave" and "brave_search" not in internal_providers:
-                        internal_providers["brave_search"] = detail
+                    elif provider in ["exa", "brave"] and "web_search" not in internal_providers:
+                        internal_providers["web_search"] = detail
 
     # Calculate overall status
     all_statuses = [r.status for r in regions.values() if r.status != "unknown"]
