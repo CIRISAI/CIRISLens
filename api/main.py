@@ -612,6 +612,57 @@ async def check_infrastructure(
         return InfrastructureStatus(name=name, status="outage", provider=provider, latency_ms=None)
 
 
+async def check_external_provider(
+    name: str,
+    url: str,
+    api_key: str | None = None,
+    api_key_header: str = "x-api-key",
+    expected_text: str | None = None,
+    latency_threshold: int = 2000,
+) -> ProviderDetail:
+    """
+    Check external provider health endpoint.
+
+    Args:
+        name: Provider name for logging
+        url: Health check URL
+        api_key: Optional API key for authenticated endpoints
+        api_key_header: Header name for API key (default: x-api-key)
+        expected_text: Optional text to check in response body
+        latency_threshold: Max acceptable latency in ms
+    """
+    start = datetime.now(UTC)
+    try:
+        headers = {}
+        if api_key:
+            headers[api_key_header] = api_key
+
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(url, headers=headers)
+            latency = int((datetime.now(UTC) - start).total_seconds() * 1000)
+
+            if response.status_code == 200:
+                # Optionally check response body
+                if expected_text and expected_text not in response.text:
+                    return ProviderDetail(
+                        status="degraded",
+                        latency_ms=latency,
+                        source=f"direct.{name}"
+                    )
+                status = "operational" if latency < latency_threshold else "degraded"
+                return ProviderDetail(status=status, latency_ms=latency, source=f"direct.{name}")
+            else:
+                return ProviderDetail(
+                    status="degraded",
+                    latency_ms=latency,
+                    source=f"direct.{name}"
+                )
+    except httpx.TimeoutException:
+        return ProviderDetail(status="outage", latency_ms=None, source=f"direct.{name}")
+    except Exception:
+        return ProviderDetail(status="outage", latency_ms=None, source=f"direct.{name}")
+
+
 @app.get("/api/v1/status", response_model=AggregatedStatus)
 async def aggregated_status():  # noqa: PLR0912
     """
@@ -632,6 +683,23 @@ async def aggregated_status():  # noqa: PLR0912
             "proxy": os.getenv("EU_PROXY_URL", ""),
             "health": os.getenv("HETZNER_HEALTH_URL", ""),
         },
+    }
+
+    # External provider health check URLs (configurable via env vars)
+    external_providers_config = {
+        "exa": {
+            "url": os.getenv("EXA_HEALTH_URL", ""),
+            "api_key": os.getenv("EXA_API_KEY", ""),
+            "api_key_header": "x-api-key",
+            "expected_text": "healthy",  # Exa returns "I am healthy."
+            "display_name": "web_search",
+        },
+        # Add more external providers here as needed
+        # "brave": {
+        #     "url": os.getenv("BRAVE_HEALTH_URL", ""),
+        #     "api_key": os.getenv("BRAVE_API_KEY", ""),
+        #     ...
+        # },
     }
 
     # Infrastructure checks
@@ -669,6 +737,30 @@ async def aggregated_status():  # noqa: PLR0912
         )
 
     infra_results = await asyncio.gather(*infra_tasks, return_exceptions=True)
+
+    # Direct external provider health checks (run in parallel)
+    external_provider_results: dict[str, ProviderDetail] = {}
+    external_tasks = []
+    for provider_name, config in external_providers_config.items():
+        if config["url"]:
+            external_tasks.append(
+                (
+                    config.get("display_name", provider_name),
+                    check_external_provider(
+                        name=provider_name,
+                        url=config["url"],
+                        api_key=config.get("api_key") or None,
+                        api_key_header=config.get("api_key_header", "x-api-key"),
+                        expected_text=config.get("expected_text"),
+                    )
+                )
+            )
+
+    if external_tasks:
+        for display_name, task in external_tasks:
+            result = await task
+            if isinstance(result, ProviderDetail):
+                external_provider_results[display_name] = result
 
     # Build regions dict
     regions: dict[str, RegionStatus] = {}
@@ -779,7 +871,13 @@ async def aggregated_status():  # noqa: PLR0912
                     if provider in ["openrouter", "groq", "together", "openai"] and provider not in llm_providers:
                         llm_providers[provider] = detail
                     elif provider in ["exa", "brave"] and "web_search" not in internal_providers:
-                        internal_providers["web_search"] = detail
+                        # Only use proxy-reported status if we don't have a direct check
+                        if "web_search" not in external_provider_results:
+                            internal_providers["web_search"] = detail
+
+    # Add direct external provider check results (these take precedence)
+    for display_name, result in external_provider_results.items():
+        internal_providers[display_name] = result
 
     # Calculate overall status
     all_statuses = [r.status for r in regions.values() if r.status != "unknown"]
