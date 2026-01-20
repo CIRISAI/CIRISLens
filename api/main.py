@@ -686,6 +686,7 @@ async def aggregated_status():  # noqa: PLR0912
     }
 
     # External provider health check URLs (configurable via env vars)
+    # All providers follow the same pattern: URL + optional API key
     external_providers_config = {
         "exa": {
             "url": os.getenv("EXA_HEALTH_URL", ""),
@@ -694,12 +695,27 @@ async def aggregated_status():  # noqa: PLR0912
             "expected_text": "healthy",  # Exa returns "I am healthy."
             "display_name": "web_search",
         },
-        # Add more external providers here as needed
-        # "brave": {
-        #     "url": os.getenv("BRAVE_HEALTH_URL", ""),
-        #     "api_key": os.getenv("BRAVE_API_KEY", ""),
-        #     ...
-        # },
+        "brave": {
+            "url": os.getenv("BRAVE_HEALTH_URL", ""),
+            "api_key": os.getenv("BRAVE_API_KEY", ""),
+            "api_key_header": "X-Subscription-Token",
+            "expected_text": None,
+            "display_name": "brave_search",
+        },
+        "serper": {
+            "url": os.getenv("SERPER_HEALTH_URL", ""),
+            "api_key": os.getenv("SERPER_API_KEY", ""),
+            "api_key_header": "X-API-KEY",
+            "expected_text": None,
+            "display_name": "serper_search",
+        },
+        "tavily": {
+            "url": os.getenv("TAVILY_HEALTH_URL", ""),
+            "api_key": os.getenv("TAVILY_API_KEY", ""),
+            "api_key_header": "x-api-key",
+            "expected_text": None,
+            "display_name": "tavily_search",
+        },
     }
 
     # Infrastructure checks
