@@ -17,8 +17,8 @@ from api.covenant_api import (
     CovenantTrace,
     CovenantTraceEvent,
     TraceComponent,
-    extract_trace_metadata,
     _is_mock_trace,
+    extract_trace_metadata,
 )
 
 # =============================================================================

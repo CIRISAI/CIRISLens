@@ -6,20 +6,22 @@ Tests the NER-based PII scrubbing and cryptographic envelope preservation.
 
 import hashlib
 import json
-import pytest
-from unittest.mock import patch, MagicMock
 
 # Import the module under test
 import sys
+from unittest.mock import MagicMock, patch
+
+import pytest
+
 sys.path.insert(0, "api")
 
 from pii_scrubber import (
+    SCRUB_FIELDS,
+    PIIScrubber,
+    hash_content,
+    scrub_dict_recursive,
     scrub_text,
     scrub_text_regex_only,
-    scrub_dict_recursive,
-    hash_content,
-    PIIScrubber,
-    SCRUB_FIELDS,
 )
 
 
@@ -493,9 +495,10 @@ class TestPIIScrubber_Extended:
     def test_init_with_key_file(self):
         """Test initialization with key file."""
         try:
-            from nacl.signing import SigningKey
             import tempfile
-            import os
+            from pathlib import Path
+
+            from nacl.signing import SigningKey
 
             # Create temporary key file
             key = SigningKey.generate()
@@ -507,16 +510,17 @@ class TestPIIScrubber_Extended:
                 scrubber = PIIScrubber(scrub_key_path=key_path)
                 assert scrubber._signing_key is not None
             finally:
-                os.unlink(key_path)
+                Path(key_path).unlink()
         except ImportError:
             pytest.skip("nacl not installed")
 
     def test_scrub_trace_with_signing_key(self):
         """Test scrub_trace with actual signing key."""
         try:
-            from nacl.signing import SigningKey
             import tempfile
-            import os
+            from pathlib import Path
+
+            from nacl.signing import SigningKey
 
             key = SigningKey.generate()
             with tempfile.NamedTemporaryFile(mode='wb', delete=False) as f:
@@ -538,7 +542,7 @@ class TestPIIScrubber_Extended:
                 assert result["scrub_signature"] is not None
                 assert result["scrub_signature"] != ""
             finally:
-                os.unlink(key_path)
+                Path(key_path).unlink()
         except ImportError:
             pytest.skip("nacl not installed")
 
