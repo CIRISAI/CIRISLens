@@ -34,14 +34,15 @@ _spacy_available = None
 
 def _get_nlp() -> Any:
     """Lazy load spaCy NLP model."""
-    global _nlp, _spacy_available
+    global _nlp, _spacy_available  # noqa: PLW0603
 
     if _spacy_available is False:
         return None
 
     if _nlp is None:
         try:
-            import spacy
+            import spacy  # noqa: PLC0415
+
             try:
                 _nlp = spacy.load("en_core_web_sm")
                 _spacy_available = True
@@ -49,7 +50,8 @@ def _get_nlp() -> Any:
             except OSError:
                 # Model not installed, try to download
                 logger.warning("spaCy model not found, attempting download...")
-                from spacy.cli import download
+                from spacy.cli import download  # noqa: PLC0415
+
                 download("en_core_web_sm")
                 _nlp = spacy.load("en_core_web_sm")
                 _spacy_available = True
@@ -233,7 +235,7 @@ def hash_content(content: str | bytes) -> str:
 def sign_content(content: str | bytes, signing_key_bytes: bytes) -> str:
     """Sign content with Ed25519 key, return base64 signature."""
     try:
-        from nacl.signing import SigningKey
+        from nacl.signing import SigningKey  # noqa: PLC0415
 
         if isinstance(content, str):
             content = content.encode('utf-8')
@@ -269,15 +271,18 @@ class PIIScrubber:
         self.scrub_key_id = "lens-scrub-v1"
         self._signing_key: bytes | None = None
 
-        key_path = scrub_key_path or os.getenv("CIRISLENS_SCRUB_KEY_PATH")
+        key_path_str = scrub_key_path or os.getenv("CIRISLENS_SCRUB_KEY_PATH")
 
-        if key_path and os.path.exists(key_path):
-            try:
-                with open(key_path, 'rb') as f:
-                    self._signing_key = f.read()
-                logger.info("Loaded CIRISLens scrub signing key from %s", key_path)
-            except Exception as e:
-                logger.error("Failed to load scrub signing key: %s", e)
+        if key_path_str:
+            from pathlib import Path  # noqa: PLC0415
+
+            key_path = Path(key_path_str)
+            if key_path.exists():
+                try:
+                    self._signing_key = key_path.read_bytes()
+                    logger.info("Loaded CIRISLens scrub signing key from %s", key_path)
+                except Exception as e:
+                    logger.error("Failed to load scrub signing key: %s", e)
         else:
             logger.warning(
                 "No scrub signing key configured. Set CIRISLENS_SCRUB_KEY_PATH "
@@ -363,7 +368,7 @@ _scrubber: PIIScrubber | None = None
 
 def get_scrubber() -> PIIScrubber:
     """Get or create the global PII scrubber instance."""
-    global _scrubber
+    global _scrubber  # noqa: PLW0603
     if _scrubber is None:
         _scrubber = PIIScrubber()
     return _scrubber
