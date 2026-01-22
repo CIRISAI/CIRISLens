@@ -1098,11 +1098,26 @@ def verify_trace_signature(
             [c.model_dump() for c in trace.components], sort_keys=True
         ).encode()
 
+        # Debug logging for signature verification
+        logger.debug(
+            "Verifying trace %s: sig_len=%d, msg_len=%d, key_id=%s",
+            trace.trace_id, len(signature), len(message), trace.signature_key_id
+        )
+        logger.debug("Message hash (first 100 chars): %s", message[:100].decode())
+
         # Verify signature
         verify_key.verify(message, signature)
         return True, None
 
     except BadSignatureError:
+        # Log details for debugging signature mismatch
+        logger.warning(
+            "Invalid signature for trace %s (key_id=%s). "
+            "Message preview: %s...",
+            trace.trace_id,
+            trace.signature_key_id,
+            message[:200].decode() if message else "N/A"
+        )
         return False, "Invalid signature"
     except Exception as e:
         return False, f"Verification error: {str(e)[:100]}"
