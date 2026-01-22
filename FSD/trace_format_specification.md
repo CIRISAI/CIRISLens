@@ -519,8 +519,56 @@ Content-Type: application/json
 GET /api/v1/covenant/traces?trace_type=VERIFY_IDENTITY&limit=100
 ```
 
-## 9. References
+## 9. PII Scrubbing for Full Traces
+
+Full traces contain reasoning text that may include personally identifiable information. CIRISLens automatically scrubs PII while preserving cryptographic provenance.
+
+### 9.1 Scrubbing Pipeline
+
+```
+Agent sends full_trace → Verify signature → Hash original → Scrub PII → Sign scrubbed → Store
+```
+
+### 9.2 Scrubbed Fields
+
+21 text fields are scrubbed before storage:
+
+| Component | Fields |
+|-----------|--------|
+| THOUGHT_START | `task_description`, `initial_context` |
+| SNAPSHOT_AND_CONTEXT | `system_snapshot`, `gathered_context`, `relevant_memories`, `conversation_history` |
+| DMA_RESULTS | `reasoning`, `prompt_used`, `combined_analysis` |
+| ASPDMA_RESULT | `action_rationale`, `reasoning_summary`, `action_parameters`, `aspdma_prompt` |
+| CONSCIENCE_RESULT | `conscience_override_reason`, `epistemic_data`, `updated_status_content`, `entropy_reason`, `coherence_reason`, `optimization_veto_justification`, `epistemic_humility_justification` |
+| ACTION_RESULT | `execution_error` |
+
+### 9.3 Entity Detection
+
+**NER (spaCy):** Names, organizations, locations → `[PERSON_1]`, `[ORG_1]`, etc.
+
+**Regex:** Emails, phones, IPs, SSNs, credit cards → `[EMAIL]`, `[PHONE]`, etc.
+
+### 9.4 Cryptographic Envelope
+
+| Field | Purpose | Required for Provenance? |
+|-------|---------|-------------------------|
+| `original_content_hash` | SHA-256 of pre-scrub content | ✅ Yes |
+| `signature` | Agent's original signature | ✅ Yes |
+| `signature_verified` | Whether signature was valid | ✅ Yes |
+| `scrub_timestamp` | When scrubbing occurred | ✅ Yes |
+| `scrub_signature` | CIRISLens signature of scrubbed | ❌ Nice to have |
+| `scrub_key_id` | Key used for scrub signing | ❌ Nice to have |
+
+**Key insight:** Even if the scrub signing key is lost, provenance is still provable via `original_content_hash` and verified agent signature.
+
+### 9.5 Mock Trace Filtering
+
+Traces using mock LLMs (containing "mock" in `models_used`) are excluded from storage to keep the production corpus clean.
+
+## 10. References
 
 - [Coherence Ratchet Detection](./coherence_ratchet_detection.md)
+- [CIRIS Scoring Specification](./ciris_scoring_specification.md)
 - [CIRIS How It Works](https://ciris.ai/how-it-works/)
 - [Explore a Trace](https://ciris.ai/explore-a-trace/)
+- [Privacy Policy](https://ciris.ai/privacy)

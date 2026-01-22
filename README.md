@@ -118,6 +118,32 @@ CIRISLens collects from CIRIS agents v1.4.5+ with full OTLP support:
 - **Compression**: 90% space savings on data older than 7 days
 - **Retention**: Automatic cleanup via TimescaleDB background jobs
 
+## Covenant Traces
+
+CIRISLens receives Ed25519-signed reasoning traces from CIRIS agents at three privacy-tiered levels:
+
+### Trace Levels
+
+| Level | Content | PII Risk |
+|-------|---------|----------|
+| `generic` | DMA scores, conscience results | None |
+| `detailed` | + identifiers, timestamps, actions | Low |
+| `full_traces` | + reasoning text, prompts | High (auto-scrubbed) |
+
+### PII Scrubbing (Full Traces)
+
+Full traces are automatically scrubbed before storage:
+- **NER Detection**: Names, organizations, locations (spaCy)
+- **Regex Patterns**: Emails, phones, IPs, SSNs, credit cards
+- **Cryptographic Envelope**: Original content hash preserved for provenance
+- **21 Text Fields**: All reasoning/prompt fields scrubbed
+
+```
+Agent → Sign trace → CIRISLens verifies → Hash original → Scrub PII → Store scrubbed only
+```
+
+Mock traces (test LLMs) are automatically excluded from storage.
+
 ## Coherence Ratchet
 
 CIRISLens includes the Coherence Ratchet anomaly detection system for identifying potentially misaligned agent behavior through statistical analysis of Ed25519-signed reasoning traces.
@@ -133,6 +159,15 @@ CIRISLens includes the Coherence Ratchet anomaly detection system for identifyin
 | Conscience Override | Monitor ethical intervention rates | [docs/coherence-ratchet/conscience-override.md](docs/coherence-ratchet/conscience-override.md) |
 
 See the [Coherence Ratchet Overview](docs/coherence-ratchet/README.md) for complete documentation.
+
+## Case Law Compendium
+
+Full traces (with PII scrubbed) feed the Coherence Ratchet case law compendium - a corpus of agent reasoning patterns for alignment research. Key features:
+
+- **Patterns, not people**: Focus on reasoning structures, not individual interactions
+- **Cryptographic provenance**: Hash of original proves we had authentic data
+- **Consent-based**: Only traces from agents with explicit `full_traces` opt-in
+- **Human review**: Candidate traces staged for evaluation before publication
 
 ## Support
 

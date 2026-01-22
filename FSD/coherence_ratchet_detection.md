@@ -403,7 +403,40 @@ Alerts require human investigation to determine:
 - [ ] Configure alerting via Grafana Alerting or webhook
 - [ ] Document human review process for flagged agents
 
-## 7. References
+## 7. Trace Levels and PII Handling
+
+### 7.1 Trace Level Summary
+
+Detection mechanisms operate on all trace levels but derive maximum value from `full_traces`:
+
+| Level | Detection Value | Notes |
+|-------|-----------------|-------|
+| `generic` | Basic score analysis | Cross-agent divergence, temporal drift |
+| `detailed` | Full statistical analysis | + action patterns, conscience overrides |
+| `full_traces` | Complete with reasoning | + case law corpus, semantic analysis (Phase 2) |
+
+### 7.2 PII Scrubbing for Full Traces
+
+Full traces contain reasoning text that may include PII. Before storage:
+
+1. **Original signature verified** - Agent's Ed25519 signature checked
+2. **Content hash computed** - SHA-256 of original for provenance
+3. **PII scrubbed** - NER (spaCy) + regex patterns remove identifiable info
+4. **Scrubbed version signed** - CIRISLens signs the scrubbed content
+5. **Only scrubbed stored** - Original never persisted
+
+**Cryptographic envelope ensures:**
+- Provenance provable via `original_content_hash`
+- Agent authenticity via verified original signature
+- Tamper evidence via `scrub_signature`
+
+### 7.3 Mock Trace Filtering
+
+Traces using mock LLMs (containing "mock" in model name) are excluded from storage. This prevents test data from polluting the corpus.
+
+## 8. References
 
 - [Trace Format Specification](./trace_format_specification.md)
+- [CIRIS Scoring Specification](./ciris_scoring_specification.md)
 - [CIRIS Covenant 1.0b](https://ciris.ai/covenant/)
+- [Privacy Policy](https://ciris.ai/privacy)

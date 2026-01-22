@@ -426,6 +426,8 @@ GET    /api/v1/covenant/coherence-ratchet/stats      # Detection statistics
 | `covenant_traces` | Stores signed reasoning traces with denormalized DMA scores |
 | `coherence_ratchet_alerts` | Persisted anomaly alerts with lifecycle tracking |
 | `covenant_public_keys` | Ed25519 public keys for signature verification |
+| `lens_signing_keys` | CIRISLens signing keys for PII scrubbing operations |
+| `case_law_candidates` | Staging table for traces evaluated for case law compendium |
 
 ### Grafana Dashboard
 
@@ -458,13 +460,166 @@ Run `sql/011_covenant_traces.sql` to create Coherence Ratchet tables.
 
 - [Trace Format Specification](FSD/trace_format_specification.md) - Canonical trace structure
 - [Coherence Ratchet Detection](FSD/coherence_ratchet_detection.md) - Detection mechanisms
+- [CIRIS Scoring Specification](FSD/ciris_scoring_specification.md) - Scoring methodology
+
+## Covenant Trace Levels
+
+Agents can emit traces at three privacy-tiered levels, controlled by opt-in consent:
+
+### Trace Level Summary
+
+| Level | Content | Use Case | PII Risk |
+|-------|---------|----------|----------|
+| `generic` | Scores only (DMA, conscience) | Aggregate statistics | None |
+| `detailed` | + identifiers, timestamps, action types | Debugging, audits | Low |
+| `full_traces` | + reasoning text, prompts, context | Case law corpus | High (scrubbed) |
+
+### Level Details
+
+**`generic`** (Default)
+- CSDMA plausibility score, DSDMA domain alignment
+- PDMA stakeholder/conflict indicators (no details)
+- Conscience pass/fail, override status
+- IDMA k_eff and fragility flag
+- Safe for public dashboards
+
+**`detailed`** (Opt-in)
+- Everything in `generic` plus:
+- Agent name, thought ID, task ID
+- Timestamps (started_at, completed_at)
+- Selected action type, success status
+- Cognitive state, thought depth
+- Token usage, cost, models used
+
+**`full_traces`** (Explicit consent for Coherence Ratchet corpus)
+- Everything in `detailed` plus:
+- Full reasoning text from all DMAs
+- Prompts used, action rationale
+- Context snapshots, conversation history
+- Conscience override reasons
+- **Requires PII scrubbing before storage**
+
+### Trace Submission Endpoint
+
+```
+POST /api/v1/covenant/traces
+Content-Type: application/json
+
+{
+  "events": [...],
+  "trace_level": "full_traces",
+  "batch_timestamp": "2026-01-22T15:00:00Z",
+  "consent_timestamp": "2026-01-22T14:00:00Z"
+}
+```
+
+## PII Scrubbing for Full Traces
+
+Full traces contain reasoning text that may include PII. CIRISLens automatically scrubs PII while preserving cryptographic provenance.
+
+### Scrubbing Pipeline
+
+```
+Agent sends full_trace → Verify agent signature → Hash original content
+    → Scrub PII (NER + regex) → Sign scrubbed version → Store only scrubbed
+```
+
+### What Gets Scrubbed
+
+**21 Text Fields** (from trace components):
+- `task_description`, `initial_context`
+- `system_snapshot`, `gathered_context`, `relevant_memories`, `conversation_history`
+- `reasoning`, `prompt_used`, `combined_analysis`
+- `action_rationale`, `reasoning_summary`, `action_parameters`, `aspdma_prompt`
+- `conscience_override_reason`, `epistemic_data`, `updated_status_content`
+- `entropy_reason`, `coherence_reason`, `optimization_veto_justification`
+- `epistemic_humility_justification`, `execution_error`
+
+### Entity Detection
+
+**NER (spaCy `en_core_web_sm`):**
+- `PERSON` → `[PERSON_1]`, `[PERSON_2]`, etc.
+- `ORG` → `[ORG_1]`, `[ORG_2]`, etc.
+- `GPE`, `FAC`, `LOC`, `NORP` (geopolitical, facilities, locations)
+
+**Regex Patterns:**
+- Email → `[EMAIL]`
+- Phone → `[PHONE]`
+- IP Address → `[IP_ADDRESS]`
+- URL → `[URL]`
+- SSN → `[SSN]`
+- Credit Card → `[CREDIT_CARD]`
+
+### Cryptographic Envelope
+
+Preserves provenance while allowing PII deletion:
+
+| Field | Purpose | Depends on scrub key? |
+|-------|---------|----------------------|
+| `original_content_hash` | SHA-256 of pre-scrub content | ❌ No |
+| `signature` | Agent's Ed25519 signature (verified) | ❌ No |
+| `signature_verified` | Whether agent signature was valid | ❌ No |
+| `scrub_timestamp` | When scrubbing occurred | ❌ No |
+| `scrub_signature` | CIRISLens signature of scrubbed content | ✅ Yes |
+| `scrub_key_id` | Identifier of CIRISLens signing key | ✅ Yes |
+| `pii_scrubbed` | Boolean flag | ❌ No |
+
+**Key point:** If the scrub signing key is lost, provenance is still provable via `original_content_hash`. The scrub key only provides tamper-evidence for the scrubbed version.
+
+### Scrub Key Management
+
+```bash
+# Generate new scrub signing keypair
+python scripts/generate_scrub_key.py --output-dir /opt/ciris/lens/keys
+
+# Configure (add to environment)
+export CIRISLENS_SCRUB_KEY_PATH=/opt/ciris/lens/keys/lens_scrub_private.key
+
+# Register public key in database (run generated SQL)
+psql -f keys/register_scrub_key.sql
+```
+
+### Migration
+
+Run `sql/012_pii_scrubbing.sql` to add envelope columns and create `lens_signing_keys` table.
+
+## Mock Trace Filtering
+
+Traces from test/mock LLMs are automatically excluded from storage to keep the production corpus clean.
+
+### Detection
+
+Any trace where `models_used` contains "mock" (case-insensitive) is skipped:
+- `llama4scout (mock)` → excluded
+- `mock-model` → excluded
+- `meta-llama/Llama-4-Maverick-17B` → stored
+
+### Logging
+
+Mock traces are logged but not stored:
+```
+DEBUG: Skipping mock trace trace-123 (models: ["llama4scout (mock)"])
+```
 
 ## Test Coverage
 
-- **374 tests** passing (325 + 49 coherence ratchet tests)
+- **516 tests** passing
 - **75% coverage** (target: 70%)
 - Run tests: `pytest tests/ -x -q`
 - Run with coverage: `pytest tests/ --cov=api --cov=sdk`
+
+### Test Breakdown
+
+| Module | Tests | Coverage |
+|--------|-------|----------|
+| Coherence Ratchet | 49 | Detection algorithms |
+| Covenant API | 38 | Trace ingestion, IDMA, metadata |
+| PII Scrubber | 64 | NER, regex, envelope, signing |
+| Status/Health | 28 | Service status collection |
+| Log Ingest | 28 | Log sanitization, storage |
+| Manager Collector | 29 | Agent discovery, metrics |
+| OTLP Collector | 48 | Trace/metric collection |
+| Other | 232 | API routes, resilience, etc. |
 
 ## CI/CD Pipeline
 
