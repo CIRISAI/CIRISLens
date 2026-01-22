@@ -1146,10 +1146,7 @@ def _is_mock_trace(models_used: list[str] | None) -> bool:
     """Check if trace uses mock LLM models (for testing only, should not be stored)."""
     if not models_used:
         return False
-    for model in models_used:
-        if model and "mock" in str(model).lower():
-            return True
-    return False
+    return any(model and "mock" in str(model).lower() for model in models_used)
 
 
 def extract_trace_metadata(trace: CovenantTrace, trace_level: str = "generic") -> dict[str, Any]:
