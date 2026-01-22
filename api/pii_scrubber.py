@@ -32,7 +32,7 @@ _nlp = None
 _spacy_available = None
 
 
-def _get_nlp():
+def _get_nlp() -> Any:
     """Lazy load spaCy NLP model."""
     global _nlp, _spacy_available
 

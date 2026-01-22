@@ -288,3 +288,344 @@ class TestScrubFields:
     def test_total_field_count(self):
         """Verify we have all 21 fields documented."""
         assert len(SCRUB_FIELDS) == 21
+
+
+class TestRegexScrubbing_Extended:
+    """Extended tests for regex-based PII scrubbing."""
+
+    def test_scrub_multiple_emails(self):
+        """Test scrubbing multiple emails in same text."""
+        text = "Contact john@example.com or jane@test.org for help"
+        result = scrub_text_regex_only(text)
+        assert result.count("[EMAIL]") == 2
+        assert "john@example.com" not in result
+        assert "jane@test.org" not in result
+
+    def test_scrub_multiple_pii_types(self):
+        """Test scrubbing mixed PII types."""
+        text = "Call john@test.com at 555-123-4567 from IP 192.168.1.1"
+        result = scrub_text_regex_only(text)
+        assert "[EMAIL]" in result
+        assert "[PHONE]" in result
+        assert "[IP_ADDRESS]" in result
+        assert "john@test.com" not in result
+        assert "555-123-4567" not in result
+        assert "192.168.1.1" not in result
+
+    def test_scrub_phone_formats(self):
+        """Test various phone number formats."""
+        texts = [
+            "Call 5551234567",
+            "Call 555.123.4567",
+            "Call +1 555-123-4567",
+            "Call 1-555-123-4567",
+        ]
+        for text in texts:
+            result = scrub_text_regex_only(text)
+            assert "[PHONE]" in result
+
+    def test_scrub_url_http(self):
+        """Test HTTP URL scrubbing."""
+        text = "Visit http://example.com/user"
+        result = scrub_text_regex_only(text)
+        assert "[URL]" in result
+
+    def test_scrub_credit_card_spaces(self):
+        """Test credit card with spaces."""
+        text = "Card: 1234 5678 9012 3456"
+        result = scrub_text_regex_only(text)
+        assert "[CREDIT_CARD]" in result
+
+    def test_handles_non_string(self):
+        """Test non-string input returns as-is."""
+        assert scrub_text_regex_only(123) == 123
+        assert scrub_text_regex_only(["a", "b"]) == ["a", "b"]
+
+    def test_preserves_whitespace(self):
+        """Test that whitespace is preserved."""
+        text = "No PII   here\n\twith whitespace"
+        result = scrub_text_regex_only(text)
+        assert result == text
+
+
+class TestNERScrubbing_Extended:
+    """Extended tests for NER-based PII scrubbing."""
+
+    def test_scrub_combined_with_regex(self):
+        """Test NER scrubbing combined with regex patterns."""
+        # Even if spaCy fails, regex should catch these
+        text = "John contacted jane@example.com from 10.0.0.1"
+        result = scrub_text(text)
+        assert "[EMAIL]" in result
+        assert "[IP_ADDRESS]" in result
+
+    def test_handles_unicode(self):
+        """Test handling of unicode text."""
+        text = "Müller called from 555-123-4567"
+        result = scrub_text(text)
+        assert "[PHONE]" in result
+        assert "555-123-4567" not in result
+
+    def test_handles_long_text(self):
+        """Test handling of long text."""
+        text = "Some text with john@test.com in it. " * 100
+        result = scrub_text(text)
+        assert result.count("[EMAIL]") == 100
+
+    def test_handles_non_string(self):
+        """Test non-string input returns as-is."""
+        assert scrub_text(123) == 123
+        assert scrub_text(None) is None
+
+
+class TestDictScrubbing_Extended:
+    """Extended tests for recursive dictionary scrubbing."""
+
+    def test_scrub_empty_dict(self):
+        """Test empty dictionary."""
+        result = scrub_dict_recursive({})
+        assert result == {}
+
+    def test_scrub_empty_list(self):
+        """Test empty list."""
+        result = scrub_dict_recursive([])
+        assert result == []
+
+    def test_scrub_primitive_value(self):
+        """Test primitive values pass through."""
+        assert scrub_dict_recursive("string") == "string"
+        assert scrub_dict_recursive(123) == 123
+        assert scrub_dict_recursive(None) is None
+        assert scrub_dict_recursive(True) is True
+
+    def test_scrub_non_string_values_in_scrub_fields(self):
+        """Test non-string values in scrub fields are preserved."""
+        data = {
+            "task_description": 123,  # int instead of str
+            "reasoning": None,  # None value
+            "initial_context": ["list", "value"],  # list
+        }
+        result = scrub_dict_recursive(data)
+        assert result["task_description"] == 123
+        assert result["reasoning"] is None
+        assert result["initial_context"] == ["list", "value"]
+
+    def test_scrub_mixed_list(self):
+        """Test list with mixed content types."""
+        data = [
+            {"task_description": "test@test.com"},
+            "raw string",
+            123,
+            None,
+        ]
+        result = scrub_dict_recursive(data)
+        assert "[EMAIL]" in result[0]["task_description"]
+        assert result[1] == "raw string"
+        assert result[2] == 123
+        assert result[3] is None
+
+    def test_preserves_dict_structure(self):
+        """Test that dictionary structure is preserved."""
+        data = {
+            "a": {"b": {"c": {"task_description": "email@test.com"}}},
+            "x": [1, 2, 3],
+            "y": "plain value",
+        }
+        result = scrub_dict_recursive(data)
+        assert "a" in result
+        assert "b" in result["a"]
+        assert "c" in result["a"]["b"]
+        assert "[EMAIL]" in result["a"]["b"]["c"]["task_description"]
+        assert result["x"] == [1, 2, 3]
+        assert result["y"] == "plain value"
+
+
+class TestSignContent:
+    """Test content signing functionality."""
+
+    def test_sign_content_without_nacl(self):
+        """Test sign_content when nacl is not available."""
+        from pii_scrubber import sign_content
+
+        # With invalid key, should return empty string
+        result = sign_content("test content", b"invalid_key")
+        assert result == ""
+
+    def test_sign_content_with_valid_key(self):
+        """Test sign_content with valid Ed25519 key."""
+        from pii_scrubber import sign_content
+
+        try:
+            from nacl.signing import SigningKey
+            key = SigningKey.generate()
+            key_bytes = bytes(key)
+
+            result = sign_content("test content", key_bytes)
+            assert result != ""
+            assert len(result) > 0
+        except ImportError:
+            pytest.skip("nacl not installed")
+
+    def test_sign_content_bytes(self):
+        """Test sign_content with bytes input."""
+        from pii_scrubber import sign_content
+
+        try:
+            from nacl.signing import SigningKey
+            key = SigningKey.generate()
+            key_bytes = bytes(key)
+
+            result = sign_content(b"test content bytes", key_bytes)
+            assert result != ""
+        except ImportError:
+            pytest.skip("nacl not installed")
+
+
+class TestPIIScrubber_Extended:
+    """Extended tests for PIIScrubber class."""
+
+    def test_init_without_key(self):
+        """Test initialization without signing key."""
+        with patch.dict('os.environ', {}, clear=True):
+            scrubber = PIIScrubber()
+            assert scrubber._signing_key is None
+
+    def test_init_with_key_file(self):
+        """Test initialization with key file."""
+        try:
+            from nacl.signing import SigningKey
+            import tempfile
+            import os
+
+            # Create temporary key file
+            key = SigningKey.generate()
+            with tempfile.NamedTemporaryFile(mode='wb', delete=False) as f:
+                f.write(bytes(key))
+                key_path = f.name
+
+            try:
+                scrubber = PIIScrubber(scrub_key_path=key_path)
+                assert scrubber._signing_key is not None
+            finally:
+                os.unlink(key_path)
+        except ImportError:
+            pytest.skip("nacl not installed")
+
+    def test_scrub_trace_with_signing_key(self):
+        """Test scrub_trace with actual signing key."""
+        try:
+            from nacl.signing import SigningKey
+            import tempfile
+            import os
+
+            key = SigningKey.generate()
+            with tempfile.NamedTemporaryFile(mode='wb', delete=False) as f:
+                f.write(bytes(key))
+                key_path = f.name
+
+            try:
+                scrubber = PIIScrubber(scrub_key_path=key_path)
+
+                trace_data = {
+                    "components": [
+                        {"data": {"task_description": "email@test.com"}}
+                    ]
+                }
+                original_message = json.dumps(trace_data["components"]).encode()
+
+                result = scrubber.scrub_trace(trace_data, True, original_message)
+
+                assert result["scrub_signature"] is not None
+                assert result["scrub_signature"] != ""
+            finally:
+                os.unlink(key_path)
+        except ImportError:
+            pytest.skip("nacl not installed")
+
+    def test_scrub_trace_without_components(self):
+        """Test scrub_trace when components is missing."""
+        scrubber = PIIScrubber()
+        trace_data = {"trace_id": "test"}
+        original_message = b"test"
+
+        result = scrubber.scrub_trace(trace_data, True, original_message)
+
+        assert "original_content_hash" in result
+        assert "scrub_timestamp" in result
+        assert "components" not in result or result.get("components") == []
+
+    def test_scrub_component_non_dict(self):
+        """Test _scrub_component with non-dict input."""
+        scrubber = PIIScrubber()
+        result = scrubber._scrub_component("not a dict")
+        assert result == "not a dict"
+
+    def test_scrub_component_without_data(self):
+        """Test _scrub_component when data field is missing."""
+        scrubber = PIIScrubber()
+        component = {"component_type": "test", "other": "value"}
+        result = scrubber._scrub_component(component)
+        assert result == {"component_type": "test", "other": "value"}
+
+    def test_original_signature_verified_field(self):
+        """Test that original_signature_verified is stored."""
+        scrubber = PIIScrubber()
+        trace_data = {"components": []}
+        original_message = b"test"
+
+        result = scrubber.scrub_trace(trace_data, False, original_message)
+        assert result["original_signature_verified"] is False
+
+        trace_data2 = {"components": []}
+        result2 = scrubber.scrub_trace(trace_data2, True, b"test2")
+        assert result2["original_signature_verified"] is True
+
+
+class TestScrubFullTraceConvenience:
+    """Test the convenience function scrub_full_trace."""
+
+    def test_scrub_full_trace_basic(self):
+        """Test basic scrub_full_trace usage."""
+        from pii_scrubber import scrub_full_trace
+
+        trace_data = {
+            "components": [
+                {"data": {"reasoning": "User john@test.com requested help"}}
+            ]
+        }
+        original_message = json.dumps(trace_data["components"]).encode()
+
+        result = scrub_full_trace(trace_data, True, original_message)
+
+        assert "[EMAIL]" in result["components"][0]["data"]["reasoning"]
+        assert "original_content_hash" in result
+        assert "scrub_timestamp" in result
+
+    def test_scrub_full_trace_returns_same_object(self):
+        """Test that scrub_full_trace modifies the dict in place."""
+        from pii_scrubber import scrub_full_trace
+
+        trace_data = {"components": []}
+        original_message = b"test"
+
+        result = scrub_full_trace(trace_data, True, original_message)
+        assert result is trace_data
+
+
+class TestGetScrubber:
+    """Test the get_scrubber singleton."""
+
+    def test_get_scrubber_returns_instance(self):
+        """Test get_scrubber returns a PIIScrubber instance."""
+        from pii_scrubber import get_scrubber
+
+        scrubber = get_scrubber()
+        assert isinstance(scrubber, PIIScrubber)
+
+    def test_get_scrubber_singleton(self):
+        """Test get_scrubber returns same instance."""
+        from pii_scrubber import get_scrubber
+
+        scrubber1 = get_scrubber()
+        scrubber2 = get_scrubber()
+        assert scrubber1 is scrubber2

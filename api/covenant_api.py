@@ -27,7 +27,10 @@ from pydantic import BaseModel, Field
 if TYPE_CHECKING:
     import asyncpg
 
-from pii_scrubber import get_scrubber, scrub_dict_recursive
+try:
+    from pii_scrubber import get_scrubber, scrub_dict_recursive
+except ImportError:
+    from api.pii_scrubber import get_scrubber, scrub_dict_recursive
 
 logger = logging.getLogger(__name__)
 
