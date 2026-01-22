@@ -1142,6 +1142,16 @@ def _parse_timestamp(ts: str | None) -> datetime | None:
         return None
 
 
+def _is_mock_trace(models_used: list[str] | None) -> bool:
+    """Check if trace uses mock LLM models (for testing only, should not be stored)."""
+    if not models_used:
+        return False
+    for model in models_used:
+        if model and "mock" in str(model).lower():
+            return True
+    return False
+
+
 def extract_trace_metadata(trace: CovenantTrace, trace_level: str = "generic") -> dict[str, Any]:
     """Extract denormalized fields from trace components for database storage."""
     metadata: dict[str, Any] = {
@@ -1449,6 +1459,14 @@ async def receive_covenant_events(
                 models_used = metadata["models_used"]
                 if models_used is not None and not isinstance(models_used, str):
                     models_used = json.dumps(models_used)
+
+                # Skip mock traces - they're for testing only
+                if _is_mock_trace(metadata["models_used"]):
+                    logger.debug(
+                        "Skipping mock trace %s (models: %s)",
+                        trace.trace_id, metadata["models_used"]
+                    )
+                    continue
 
                 # Log trace storage attempt for debugging
                 logger.debug(

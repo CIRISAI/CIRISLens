@@ -18,6 +18,7 @@ from api.covenant_api import (
     CovenantTraceEvent,
     TraceComponent,
     extract_trace_metadata,
+    _is_mock_trace,
 )
 
 # =============================================================================
@@ -614,3 +615,32 @@ class TestTraceLevelIntegration:
         assert dumped["trace_level"] == "detailed"
         assert dumped["correlation_metadata"]["deployment_region"] == "na"
         assert len(dumped["events"]) == 1
+
+
+
+class TestIsMockTrace:
+    """Test mock trace detection."""
+
+    def test_mock_trace_detected(self):
+        """Test that mock models are detected."""
+        assert _is_mock_trace(["llama4scout (mock)"]) is True
+        assert _is_mock_trace(["mock-model"]) is True
+        assert _is_mock_trace(["MOCK_LLM"]) is True
+        assert _is_mock_trace(["test-mock-v1"]) is True
+
+    def test_real_models_not_detected(self):
+        """Test that real models are not detected as mock."""
+        assert _is_mock_trace(["meta-llama/Llama-4-Maverick-17B"]) is False
+        assert _is_mock_trace(["gpt-4"]) is False
+        assert _is_mock_trace(["claude-3-opus"]) is False
+
+    def test_empty_models(self):
+        """Test handling of empty/None models."""
+        assert _is_mock_trace(None) is False
+        assert _is_mock_trace([]) is False
+
+    def test_mixed_models(self):
+        """Test that any mock model in list triggers detection."""
+        assert _is_mock_trace(["gpt-4", "llama4scout (mock)"]) is True
+        assert _is_mock_trace(["claude-3", "real-model"]) is False
+
