@@ -1078,8 +1078,17 @@ def verify_trace_signature(
         return False, f"Unknown signer key: {trace.signature_key_id}"
 
     try:
-        # Decode signature
-        signature = base64.b64decode(trace.signature)
+        # Decode signature (handle both URL-safe and standard base64)
+        sig_str = trace.signature
+        # Add padding if missing (base64 requires length to be multiple of 4)
+        padding_needed = 4 - (len(sig_str) % 4)
+        if padding_needed != 4:
+            sig_str += "=" * padding_needed
+        # Try URL-safe first (signatures often use - and _ instead of + and /)
+        try:
+            signature = base64.urlsafe_b64decode(sig_str)
+        except Exception:
+            signature = base64.b64decode(sig_str)
 
         # Get verify key
         verify_key = VerifyKey(public_keys[trace.signature_key_id])
