@@ -27,6 +27,8 @@ from pydantic import BaseModel, Field
 if TYPE_CHECKING:
     import asyncpg
 
+from pii_scrubber import get_scrubber, scrub_dict_recursive
+
 logger = logging.getLogger(__name__)
 
 
@@ -1379,7 +1381,54 @@ async def receive_covenant_events(
                     errors.append(f"{trace.trace_id}: {error}")
                 continue
 
-            # Extract metadata from components
+            # PII Scrubbing for full_traces level
+            # Must happen BEFORE metadata extraction to scrub text fields
+            pii_scrubbed = False
+            original_content_hash = None
+            scrub_timestamp = None
+            scrub_signature = None
+            scrub_key_id = None
+
+            if request.trace_level == "full_traces":
+                scrubber = get_scrubber()
+
+                # Compute hash of original content before any modification
+                original_message = json.dumps(
+                    [c.model_dump() for c in trace.components], sort_keys=True
+                ).encode('utf-8')
+                original_content_hash = hashlib.sha256(original_message).hexdigest()
+
+                # Scrub PII from each component's data
+                scrubbed_components = []
+                for comp in trace.components:
+                    comp_dict = comp.model_dump()
+                    if "data" in comp_dict:
+                        comp_dict["data"] = scrub_dict_recursive(comp_dict["data"])
+                    scrubbed_components.append(comp_dict)
+
+                # Re-sign scrubbed content with CIRISLens key
+                scrub_timestamp = datetime.now(UTC)
+                scrub_key_id = scrubber.scrub_key_id
+                if scrubber._signing_key:
+                    scrubbed_message = json.dumps(scrubbed_components, sort_keys=True).encode('utf-8')
+                    scrub_signature = scrubber._signing_key  # Will be signed in scrubber
+                    from pii_scrubber import sign_content
+                    scrub_signature = sign_content(scrubbed_message, scrubber._signing_key)
+
+                # Update trace components with scrubbed data
+                # We modify the trace object in place for metadata extraction
+                for i, comp in enumerate(trace.components):
+                    for key, value in scrubbed_components[i].get("data", {}).items():
+                        if hasattr(comp, "data") and isinstance(comp.data, dict):
+                            comp.data[key] = value
+
+                pii_scrubbed = True
+                logger.info(
+                    "Scrubbed PII from full_traces %s (hash: %s...)",
+                    trace.trace_id, original_content_hash[:16]
+                )
+
+            # Extract metadata from components (now scrubbed if full_traces)
             metadata = extract_trace_metadata(trace, trace_level=request.trace_level)
 
             try:
@@ -1432,14 +1481,17 @@ async def receive_covenant_events(
                         cost_cents, carbon_grams, energy_mwh,
                         llm_calls, models_used,
                         signature, signature_key_id, signature_verified,
-                        consent_timestamp, timestamp, trace_level
+                        consent_timestamp, timestamp, trace_level,
+                        original_content_hash, pii_scrubbed, scrub_timestamp,
+                        scrub_signature, scrub_key_id
                     ) VALUES (
                         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
                         $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
                         $21, $22, $23, $24, $25, $26, $27, $28, $29, $30,
                         $31, $32, $33, $34, $35, $36, $37, $38, $39, $40,
                         $41, $42, $43, $44, $45, $46, $47, $48, $49, $50,
-                        $51, $52, $53, $54, $55, $56, $57, $58, $59, $60
+                        $51, $52, $53, $54, $55, $56, $57, $58, $59, $60,
+                        $61, $62, $63, $64, $65
                     )
                     ON CONFLICT (trace_id, timestamp) DO NOTHING
                     """,
@@ -1503,6 +1555,11 @@ async def receive_covenant_events(
                     request.consent_timestamp,                   # $58
                     request.batch_timestamp,                     # $59
                     metadata["trace_level"],                     # $60
+                    original_content_hash,                       # $61
+                    pii_scrubbed,                                # $62
+                    scrub_timestamp,                             # $63
+                    scrub_signature,                             # $64
+                    scrub_key_id,                                # $65
                 )
                 accepted += 1
                 logger.info("Successfully stored trace %s", trace.trace_id)
