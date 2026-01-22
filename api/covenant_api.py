@@ -1255,14 +1255,14 @@ def extract_trace_metadata(trace: CovenantTrace, trace_level: str = "generic") -
         elif event_type == "DMA_RESULTS":
             metadata["dma_results"] = data
             # Extract CSDMA (Common Sense DMA)
-            csdma = data.get("csdma", {})
+            csdma = data.get("csdma") or {}
             metadata["csdma_plausibility_score"] = csdma.get("plausibility_score")
             # Extract DSDMA (Domain-Specific DMA)
-            dsdma = data.get("dsdma", {})
+            dsdma = data.get("dsdma") or {}
             metadata["dsdma_domain_alignment"] = dsdma.get("domain_alignment")
             metadata["dsdma_domain"] = dsdma.get("domain")
             # Extract PDMA (Principled DMA)
-            pdma = data.get("pdma", {})
+            pdma = data.get("pdma") or {}
             metadata["pdma_stakeholders"] = pdma.get("stakeholders")
             metadata["pdma_conflicts"] = pdma.get("conflicts")
             # Extract IDMA (Intuition DMA) - Coherence Collapse Analysis
