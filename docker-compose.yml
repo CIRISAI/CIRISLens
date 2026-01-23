@@ -97,7 +97,8 @@ services:
     volumes:
       - ./api:/app:ro
       - ./config:/app/config:ro
-      - ./sql:/app/sql:ro
+      # Note: SQL migrations are baked into the Docker image at build time
+      # Do NOT mount ./sql:/app/sql as it causes drift in production
     ports:
       - "8000:8000"
     networks:

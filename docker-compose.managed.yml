@@ -56,8 +56,9 @@ services:
     volumes:
       - ./api:/app
       - ./config:/app/config:ro
-      - ./sql:/app/sql:ro
       - cirislens_sessions:/app/sessions
+      # Note: SQL migrations are baked into the Docker image at build time
+      # Do NOT mount ./sql:/app/sql as it causes drift in production
     networks:
       - ciris-network
     depends_on:
