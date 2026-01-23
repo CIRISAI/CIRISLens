@@ -1895,8 +1895,12 @@ async def list_repository_traces(
     start_time: datetime | None = None,
     end_time: datetime | None = None,
     min_plausibility: float | None = None,
+    max_plausibility: float | None = None,
     conscience_passed: bool | None = None,
+    action_overridden: bool | None = None,
     fragility_flag: bool | None = None,
+    # Grouping
+    group_by_task: bool = False,
     # Pagination
     limit: int = 100,
     offset: int = 0,
@@ -1908,6 +1912,9 @@ async def list_repository_traces(
     - full: All traces, all fields
     - partner: Own agents + public samples + partner-tagged traces
     - public: Public sample traces only (for ciris.ai/explore-a-trace)
+
+    When group_by_task=true, returns traces grouped by task_id with the
+    seed observation from the initial thought (depth=0) included.
     """
     db_pool = get_db_pool()
     if db_pool is None:
@@ -1986,9 +1993,19 @@ async def list_repository_traces(
         params.append(min_plausibility)
         param_idx += 1
 
+    if max_plausibility is not None:
+        query += f" AND csdma_plausibility_score <= ${param_idx}"
+        params.append(max_plausibility)
+        param_idx += 1
+
     if conscience_passed is not None:
         query += f" AND conscience_passed = ${param_idx}"
         params.append(conscience_passed)
+        param_idx += 1
+
+    if action_overridden is not None:
+        query += f" AND action_was_overridden = ${param_idx}"
+        params.append(action_overridden)
         param_idx += 1
 
     if fragility_flag is not None:
@@ -2024,6 +2041,7 @@ async def list_repository_traces(
                 },
                 "thought": {
                     "thought_id": row["thought_id"],
+                    "task_id": row["task_id"],
                     "type": row["thought_type"],
                     "depth": row["thought_depth"],
                     "cognitive_state": row["cognitive_state"],
@@ -2069,6 +2087,51 @@ async def list_repository_traces(
             # Filter fields based on access level
             filtered_trace = filter_trace_fields(trace, access_level)
             traces.append(filtered_trace)
+
+        # Group by task_id if requested
+        if group_by_task and traces:
+            tasks: dict[str, dict[str, Any]] = {}
+            for trace in traces:
+                task_id = trace.get("thought", {}).get("task_id")
+                if not task_id:
+                    # Traces without task_id go into a "standalone" group
+                    task_id = f"standalone-{trace['trace_id']}"
+
+                if task_id not in tasks:
+                    tasks[task_id] = {
+                        "task_id": task_id,
+                        "initial_observation": None,
+                        "traces": [],
+                    }
+
+                # Extract initial observation from seed trace (depth 0)
+                depth = trace.get("thought", {}).get("depth", 0)
+                if depth == 0:
+                    # The seed trace's rationale is the initial observation
+                    tasks[task_id]["initial_observation"] = trace.get("action", {}).get("rationale")
+                    # Also capture agent and timestamp from seed
+                    tasks[task_id]["agent"] = trace.get("agent")
+                    tasks[task_id]["started_at"] = trace.get("timestamp")
+
+                tasks[task_id]["traces"].append(trace)
+
+            # Sort tasks by their earliest trace timestamp
+            sorted_tasks = sorted(
+                tasks.values(),
+                key=lambda t: t.get("started_at") or "",
+                reverse=True,
+            )
+
+            return {
+                "tasks": sorted_tasks,
+                "pagination": {
+                    "total": count_result or 0,
+                    "limit": safe_limit,
+                    "offset": offset,
+                    "has_more": (offset + len(traces)) < (count_result or 0),
+                    "task_count": len(sorted_tasks),
+                },
+            }
 
         return {
             "traces": traces,

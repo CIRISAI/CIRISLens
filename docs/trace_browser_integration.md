@@ -33,6 +33,7 @@ GET /traces?limit=10&offset=0
 | `fragility_flag` | bool | - | Filter by IDMA fragility |
 | `start_time` | ISO8601 | - | Start of time range |
 | `end_time` | ISO8601 | - | End of time range |
+| `group_by_task` | bool | false | Group traces by task_id with initial observation |
 
 **Example Request:**
 ```bash
@@ -53,6 +54,7 @@ curl "https://lens.ciris-services-1.ai/api/v1/covenant/repository/traces?limit=5
       },
       "thought": {
         "thought_id": "th_seed_xxx",
+        "task_id": "task_abc123",
         "type": "standard",
         "depth": 0,
         "cognitive_state": "work"
@@ -98,6 +100,54 @@ curl "https://lens.ciris-services-1.ai/api/v1/covenant/repository/traces?limit=5
   }
 }
 ```
+
+**Grouped Response (when `group_by_task=true`):**
+
+```bash
+curl "https://lens.ciris-services-1.ai/api/v1/covenant/repository/traces?group_by_task=true"
+```
+
+```json
+{
+  "tasks": [
+    {
+      "task_id": "task_abc123",
+      "initial_observation": "The user is asking about legal implications of AI systems...",
+      "agent": {
+        "name": "Scout",
+        "id_hash": "8a1db462be753774",
+        "domain": "Scout"
+      },
+      "started_at": "2026-01-23T01:09:22Z",
+      "traces": [
+        {
+          "trace_id": "trace-th_seed_xxx",
+          "thought": { "depth": 0, "task_id": "task_abc123" },
+          "action": { "selected": "SPEAK", "rationale": "..." }
+        },
+        {
+          "trace_id": "trace-th_child_yyy",
+          "thought": { "depth": 1, "task_id": "task_abc123" },
+          "action": { "selected": "TASK_COMPLETE", "rationale": "..." }
+        }
+      ]
+    }
+  ],
+  "pagination": {
+    "total": 2,
+    "limit": 100,
+    "offset": 0,
+    "has_more": false,
+    "task_count": 1
+  }
+}
+```
+
+The grouped format:
+- Groups traces sharing the same `task_id`
+- Includes `initial_observation` from the seed trace (depth=0)
+- Preserves full trace details within each task
+- Useful for displaying task workflows with their triggering context
 
 ### 2. Get Single Trace
 
