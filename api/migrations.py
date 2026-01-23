@@ -5,6 +5,7 @@ Automatically applies all numbered SQL migrations on startup.
 Tracks applied migrations in a `cirislens.schema_migrations` table.
 """
 
+import hashlib
 import logging
 import re
 from pathlib import Path
@@ -63,7 +64,6 @@ async def apply_migration(conn, filepath: Path) -> bool:
         await conn.execute(sql_content)
 
         # Record as applied
-        import hashlib
         checksum = hashlib.sha256(sql_content.encode()).hexdigest()[:16]
         await conn.execute(
             """

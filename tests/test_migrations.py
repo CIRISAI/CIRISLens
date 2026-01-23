@@ -1,15 +1,16 @@
 """Tests for auto-migration system."""
 
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
+
+import pytest
 
 from api.migrations import (
+    REQUIRED_SCHEMA,
     ensure_migrations_table,
     get_applied_migrations,
-    validate_schema,
     run_all_migrations,
-    REQUIRED_SCHEMA,
+    validate_schema,
 )
 
 
