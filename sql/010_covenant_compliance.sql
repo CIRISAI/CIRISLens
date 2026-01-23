@@ -273,6 +273,15 @@ CREATE INDEX IF NOT EXISTS idx_sunset_sentience ON cirislens.sunset_ledger(senti
 -- Reference: Covenant Section I - "Core Identity"
 -- ============================================================================
 
+-- Ensure update_timestamp function exists (from init.sql)
+CREATE OR REPLACE FUNCTION cirislens.update_timestamp()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = CURRENT_TIMESTAMP;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
 -- Ensure agents table exists (may not exist if init.sql didn't run)
 CREATE TABLE IF NOT EXISTS cirislens.agents (
     agent_id VARCHAR(255) PRIMARY KEY,
@@ -292,6 +301,13 @@ CREATE TABLE IF NOT EXISTS cirislens.agents (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Add trigger for agents table (idempotent)
+DROP TRIGGER IF EXISTS update_agents_timestamp ON cirislens.agents;
+CREATE TRIGGER update_agents_timestamp
+    BEFORE UPDATE ON cirislens.agents
+    FOR EACH ROW
+    EXECUTE FUNCTION cirislens.update_timestamp();
 
 -- Add Covenant-specific fields to agents tracking
 ALTER TABLE cirislens.agents
