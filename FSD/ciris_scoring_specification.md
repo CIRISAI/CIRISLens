@@ -518,6 +518,22 @@ JOIN coherence_scores s ON c.agent_name = s.agent_name;
 
 ---
 
+## Trace Level Requirements
+
+Scoring operates primarily on `generic` level data:
+
+| Level | Scoring Value | Notes |
+|-------|---------------|-------|
+| `generic` | ✅ Full scoring | All numeric scores and flags available |
+| `detailed` | ✅ Full scoring | + action types for deeper analysis |
+| `full_traces` | ✅ Full scoring | + reasoning text (PII-scrubbed) for semantic analysis |
+
+**Key insight:** The CIRIS Capacity Score can be computed from `generic` traces alone, making it privacy-preserving. Agents don't need to opt into `full_traces` for scoring.
+
+### Mock Trace Exclusion
+
+Traces using mock LLMs are excluded from scoring to ensure production metrics accuracy.
+
 ## Implementation Notes
 
 1. **Minimum Data Requirements:** Scoring requires at least 30 traces per agent per window for statistical validity.
@@ -529,3 +545,11 @@ JOIN coherence_scores s ON c.agent_name = s.agent_name;
 4. **Signature Verification:** Factor 2 (I_int) requires registered public keys in `covenant_public_keys`.
 
 5. **Real-time vs Batch:** Scores can be computed on-demand or pre-aggregated hourly/daily.
+
+6. **PII Independence:** Scoring uses only numeric fields, preserving privacy even for `full_traces`.
+
+## References
+
+- [Trace Format Specification](./trace_format_specification.md) - Canonical trace structure
+- [Coherence Ratchet Detection](./coherence_ratchet_detection.md) - Anomaly detection
+- [CIRIS Scoring](https://ciris.ai/ciris-scoring) - Public documentation

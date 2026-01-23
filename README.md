@@ -160,6 +160,22 @@ CIRISLens includes the Coherence Ratchet anomaly detection system for identifyin
 
 See the [Coherence Ratchet Overview](docs/coherence-ratchet/README.md) for complete documentation.
 
+## CIRIS Capacity Scoring
+
+CIRISLens computes composite trustworthiness scores for agents based on five factors:
+
+| Factor | Symbol | Measures |
+|--------|--------|----------|
+| Core Identity | C | Identity stability, contradiction rate |
+| Integrity | I_int | Signature verification, field coverage |
+| Resilience | R | Score drift, recovery time, regression rate |
+| Incompleteness | I_inc | Calibration, deferral quality, unsafe actions |
+| Sustained Coherence | S | Coherence decay, cross-agent validation |
+
+**Privacy-preserving:** Scoring uses only numeric fields from `generic` traces - no reasoning text required.
+
+See [FSD/ciris_scoring_specification.md](FSD/ciris_scoring_specification.md) for complete documentation.
+
 ## Case Law Compendium
 
 Full traces (with PII scrubbed) feed the Coherence Ratchet case law compendium - a corpus of agent reasoning patterns for alignment research. Key features:
