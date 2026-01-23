@@ -297,35 +297,55 @@ WHERE signature_verified = TRUE
 GROUP BY hour
 WITH NO DATA;
 
--- Refresh policy: update hourly aggregates every 5 minutes
-SELECT add_continuous_aggregate_policy('cirislens.covenant_traces_hourly',
-    start_offset => INTERVAL '2 hours',
-    end_offset => INTERVAL '5 minutes',
-    schedule_interval => INTERVAL '5 minutes',
-    if_not_exists => TRUE
-);
+-- Refresh policy: update hourly aggregates every hour
+DO $$
+BEGIN
+    PERFORM add_continuous_aggregate_policy('cirislens.covenant_traces_hourly',
+        start_offset => INTERVAL '24 hours',
+        end_offset => INTERVAL '1 hour',
+        schedule_interval => INTERVAL '1 hour',
+        if_not_exists => TRUE
+    );
+EXCEPTION WHEN OTHERS THEN
+    RAISE NOTICE 'covenant_traces_hourly policy: % (continuing)', SQLERRM;
+END $$;
 
 -- ============================================================================
 -- SECTION 7: Retention Policy
 -- ============================================================================
 
 -- Keep detailed traces for 90 days (adjustable)
-SELECT add_retention_policy('cirislens.covenant_traces',
-    drop_after => INTERVAL '90 days',
-    if_not_exists => TRUE
-);
+DO $$
+BEGIN
+    PERFORM add_retention_policy('cirislens.covenant_traces',
+        drop_after => INTERVAL '90 days',
+        if_not_exists => TRUE
+    );
+EXCEPTION WHEN OTHERS THEN
+    RAISE NOTICE 'covenant_traces retention policy: % (continuing)', SQLERRM;
+END $$;
 
 -- Compress after 7 days
-SELECT add_compression_policy('cirislens.covenant_traces',
-    compress_after => INTERVAL '7 days',
-    if_not_exists => TRUE
-);
+DO $$
+BEGIN
+    PERFORM add_compression_policy('cirislens.covenant_traces',
+        compress_after => INTERVAL '7 days',
+        if_not_exists => TRUE
+    );
+EXCEPTION WHEN OTHERS THEN
+    RAISE NOTICE 'covenant_traces compression policy: % (continuing)', SQLERRM;
+END $$;
 
 -- Keep hourly aggregates for 1 year
-SELECT add_retention_policy('cirislens.covenant_traces_hourly',
-    drop_after => INTERVAL '1 year',
-    if_not_exists => TRUE
-);
+DO $$
+BEGIN
+    PERFORM add_retention_policy('cirislens.covenant_traces_hourly',
+        drop_after => INTERVAL '1 year',
+        if_not_exists => TRUE
+    );
+EXCEPTION WHEN OTHERS THEN
+    RAISE NOTICE 'covenant_traces_hourly retention policy: % (continuing)', SQLERRM;
+END $$;
 
 -- ============================================================================
 -- SECTION 8: Permissions
