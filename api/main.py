@@ -23,6 +23,7 @@ from pydantic import BaseModel, EmailStr
 from covenant_api import router as covenant_router
 from log_ingest import LogIngestService
 from manager_collector import ManagerCollector
+from migrations import startup_migrations
 from otlp_collector import OTLPCollector
 from token_manager import TokenManager
 
@@ -322,34 +323,29 @@ async def startup():
         db_pool = await asyncpg.create_pool(DATABASE_URL, min_size=2, max_size=10)
         logger.info("Database pool created")
 
-        # Initialize tables
+        # Initialize tables and run migrations
         async with db_pool.acquire() as conn:
-            # Create manager tables (required for manager collector)
+            # Create base tables first (non-numbered, always needed)
             try:
                 sql_content = Path("/app/sql/manager_tables.sql").read_text()
                 await conn.execute(sql_content)
                 logger.info("Manager tables initialized")
             except Exception as e:
                 logger.warning(f"Manager tables migration may have already run: {e}")
+
             # Create OTLP tables only if OTLP collection is enabled
             if os.getenv("OTLP_COLLECTION_ENABLED", "true").lower() == "true":
-                sql_content = Path("/app/sql/otlp_tables.sql").read_text()
-                await conn.execute(sql_content)
-            # Create service logs tables
-            try:
-                sql_content = Path("/app/sql/007_service_logs.sql").read_text()
-                await conn.execute(sql_content)
-                logger.info("Service logs tables initialized")
-            except Exception as e:
-                logger.warning(f"Service logs migration may have already run: {e}")
-            # Create status checks tables
-            try:
-                sql_content = Path("/app/sql/008_status_checks.sql").read_text()
-                await conn.execute(sql_content)
-                logger.info("Status checks tables initialized")
-            except Exception as e:
-                logger.warning(f"Status checks migration may have already run: {e}")
-            logger.info("Database tables initialized")
+                try:
+                    sql_content = Path("/app/sql/otlp_tables.sql").read_text()
+                    await conn.execute(sql_content)
+                    logger.info("OTLP tables initialized")
+                except Exception as e:
+                    logger.warning(f"OTLP tables may have already run: {e}")
+
+            # Run all numbered migrations and validate schema
+            # This will FAIL LOUDLY if required columns are missing
+            await startup_migrations(conn, Path("/app/sql"))
+            logger.info("All migrations applied and schema validated")
 
         # Initialize log ingest service
         log_ingest_service = LogIngestService(db_pool)

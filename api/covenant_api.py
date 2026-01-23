@@ -1459,15 +1459,15 @@ async def receive_covenant_events(
 
                 # Skip mock traces - they're for testing only
                 if _is_mock_trace(metadata["models_used"]):
-                    logger.debug(
-                        "Skipping mock trace %s (models: %s)",
+                    logger.info(
+                        "SKIPPING mock trace %s (models: %s)",
                         trace.trace_id, metadata["models_used"]
                     )
                     continue
 
-                # Log trace storage attempt for debugging
-                logger.debug(
-                    "Storing trace %s: thought_id=%s, agent=%s, type=%s",
+                # Log trace storage attempt
+                logger.info(
+                    "STORING trace %s: thought_id=%s, agent=%s, type=%s",
                     trace.trace_id,
                     metadata["thought_id"],
                     metadata["agent_name"],
