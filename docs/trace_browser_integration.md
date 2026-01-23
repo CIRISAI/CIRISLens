@@ -33,7 +33,7 @@ GET /traces?limit=10&offset=0
 | `fragility_flag` | bool | - | Filter by IDMA fragility |
 | `start_time` | ISO8601 | - | Start of time range |
 | `end_time` | ISO8601 | - | End of time range |
-| `group_by_task` | bool | false | Group traces by task_id with initial observation |
+| `group_by_task` | bool | true | Group traces by task_id with initial observation (default) |
 
 **Example Request:**
 ```bash
@@ -101,18 +101,20 @@ curl "https://lens.ciris-services-1.ai/api/v1/covenant/repository/traces?limit=5
 }
 ```
 
-**Grouped Response (when `group_by_task=true`):**
+**Grouped Response (default behavior):**
+
+Traces are grouped by `task_id` by default. The `initial_observation` contains the user's message that triggered the task.
 
 ```bash
-curl "https://lens.ciris-services-1.ai/api/v1/covenant/repository/traces?group_by_task=true"
+curl "https://lens.ciris-services-1.ai/api/v1/covenant/repository/traces"
 ```
 
 ```json
 {
   "tasks": [
     {
-      "task_id": "task_abc123",
-      "initial_observation": "The user is asking about legal implications of AI systems...",
+      "task_id": "5ecbe1cc-88f0-4a91-8704-6f96e3aa4c75",
+      "initial_observation": "What about using [ORG_1] agents in medical situations? Any particular considerations?",
       "agent": {
         "name": "Scout",
         "id_hash": "8a1db462be753774",
@@ -143,11 +145,12 @@ curl "https://lens.ciris-services-1.ai/api/v1/covenant/repository/traces?group_b
 }
 ```
 
-The grouped format:
+The grouped format (default):
 - Groups traces sharing the same `task_id`
-- Includes `initial_observation` from the seed trace (depth=0)
+- `initial_observation` contains the user's triggering message (extracted from seed trace context)
 - Preserves full trace details within each task
-- Useful for displaying task workflows with their triggering context
+- Seed trace (depth=0) contains the initial SPEAK, followed by TASK_COMPLETE (depth=1)
+- Use `group_by_task=false` to get flat trace list
 
 ### 2. Get Single Trace
 

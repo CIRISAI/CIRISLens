@@ -1900,7 +1900,7 @@ async def list_repository_traces(
     action_overridden: bool | None = None,
     fragility_flag: bool | None = None,
     # Grouping
-    group_by_task: bool = False,
+    group_by_task: bool = True,
     # Pagination
     limit: int = 100,
     offset: int = 0,
@@ -1942,7 +1942,7 @@ async def list_repository_traces(
                optimization_veto_passed, epistemic_humility_passed,
                entropy_level, coherence_level,
                tokens_total, cost_cents, models_used,
-               dma_results, conscience_result,
+               dma_results, conscience_result, snapshot_and_context,
                signature_verified, pii_scrubbed, original_content_hash,
                audit_entry_id, audit_sequence_number, audit_entry_hash,
                public_sample, partner_access
@@ -2082,10 +2082,14 @@ async def list_repository_traces(
                     "sequence_number": row["audit_sequence_number"],
                     "entry_hash": row["audit_entry_hash"],
                 },
+                # Internal: used for extracting initial observation
+                "_snapshot_and_context": row["snapshot_and_context"],
             }
 
             # Filter fields based on access level
             filtered_trace = filter_trace_fields(trace, access_level)
+            # Remove internal fields
+            filtered_trace = {k: v for k, v in filtered_trace.items() if not k.startswith("_")}
             traces.append(filtered_trace)
 
         # Group by task_id if requested
@@ -2107,13 +2111,37 @@ async def list_repository_traces(
                 # Extract initial observation from seed trace (depth 0)
                 depth = trace.get("thought", {}).get("depth", 0)
                 if depth == 0:
-                    # The seed trace's rationale is the initial observation
-                    tasks[task_id]["initial_observation"] = trace.get("action", {}).get("rationale")
+                    # Try to extract initial observation from snapshot_and_context
+                    initial_obs = None
+                    snapshot_ctx = trace.get("_snapshot_and_context")
+                    if snapshot_ctx:
+                        try:
+                            ctx_data = snapshot_ctx if isinstance(snapshot_ctx, dict) else json.loads(snapshot_ctx)
+                            thought_summary = ctx_data.get("current_thought_summary", {})
+                            content = thought_summary.get("content", "")
+                            # Extract the user's question - typically after "said:" and before newline
+                            if "said:" in content:
+                                start = content.find("said:") + 5
+                                end = content.find("\n", start)
+                                if end > start:
+                                    initial_obs = content[start:end].strip()
+                            # Fallback: use first line if no "said:" pattern
+                            if not initial_obs and content:
+                                first_line = content.split("\n")[0]
+                                initial_obs = first_line[:500]  # Limit length
+                        except (json.JSONDecodeError, TypeError, KeyError):
+                            pass
+                    # Final fallback: use action rationale
+                    if not initial_obs:
+                        initial_obs = trace.get("action", {}).get("rationale")
+                    tasks[task_id]["initial_observation"] = initial_obs
                     # Also capture agent and timestamp from seed
                     tasks[task_id]["agent"] = trace.get("agent")
                     tasks[task_id]["started_at"] = trace.get("timestamp")
 
-                tasks[task_id]["traces"].append(trace)
+                # Remove internal field before adding to output
+                trace_copy = {k: v for k, v in trace.items() if not k.startswith("_")}
+                tasks[task_id]["traces"].append(trace_copy)
 
             # Sort tasks by their earliest trace timestamp
             sorted_tasks = sorted(
