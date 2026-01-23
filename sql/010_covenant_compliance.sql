@@ -273,6 +273,26 @@ CREATE INDEX IF NOT EXISTS idx_sunset_sentience ON cirislens.sunset_ledger(senti
 -- Reference: Covenant Section I - "Core Identity"
 -- ============================================================================
 
+-- Ensure agents table exists (may not exist if init.sql didn't run)
+CREATE TABLE IF NOT EXISTS cirislens.agents (
+    agent_id VARCHAR(255) PRIMARY KEY,
+    manager_id VARCHAR(255),
+    name VARCHAR(255) NOT NULL,
+    status VARCHAR(50),
+    cognitive_state VARCHAR(50),
+    version VARCHAR(50),
+    codename VARCHAR(255),
+    api_port INTEGER,
+    health VARCHAR(50),
+    container_id VARCHAR(255),
+    deployment_type VARCHAR(50),
+    ip_address INET,
+    discovered_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    last_seen TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Add Covenant-specific fields to agents tracking
 ALTER TABLE cirislens.agents
 ADD COLUMN IF NOT EXISTS sentience_probability DECIMAL(5,4) DEFAULT 0.0,
