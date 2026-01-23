@@ -14,10 +14,12 @@ Reference: covenant_1.0b.txt Sections I-VIII
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import traceback
 from datetime import UTC, datetime
 from decimal import Decimal
+from enum import Enum
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
@@ -1069,7 +1071,6 @@ def verify_trace_signature(
     Returns (is_valid, error_message).
     """
     import base64
-    import json
 
     try:
         from nacl.exceptions import BadSignatureError
@@ -1361,7 +1362,6 @@ async def receive_covenant_events(
     Reference: Covenant Section IV - Ethical Integrity Surveillance
     """
     import base64
-    import json
 
     db_pool = get_db_pool()
     if db_pool is None:
@@ -1753,35 +1753,212 @@ async def list_public_keys() -> dict[str, Any]:
 
 
 # =============================================================================
-# API Endpoint - Trace Queries
+# Trace Repository API - RBAC Access Control
+# Reference: FSD/trace_repository_api.md
 # =============================================================================
 
 
-@router.get("/traces")
-async def list_traces(
-    agent_id: str | None = None,
-    trace_type: str | None = None,
-    limit: int = 100,
+class AccessLevel(str, Enum):
+    """Access levels for trace repository."""
+
+    FULL = "full"  # Internal/admin - all traces, all fields
+    PARTNER = "partner"  # Own agents + samples + partner-tagged
+    PUBLIC = "public"  # Public samples only
+
+
+class TraceAccessContext(BaseModel):
+    """Context for trace access control."""
+
+    access_level: AccessLevel
+    user_id: str
+    agent_scope: list[str] = []  # Agent IDs the user owns (partner)
+    partner_id: str | None = None  # Partner ID for partner-tagged access
+
+
+class PublicSampleRequest(BaseModel):
+    """Request to mark a trace as public sample."""
+
+    public_sample: bool
+    reason: str | None = None
+
+
+class PartnerAccessRequest(BaseModel):
+    """Request to modify partner access for a trace."""
+
+    partner_ids: list[str]
+    action: str = "add"  # add, remove, set
+
+
+class TraceRepositoryResponse(BaseModel):
+    """Response for trace repository queries."""
+
+    traces: list[dict[str, Any]]
+    pagination: dict[str, Any]
+
+
+class TraceStatisticsResponse(BaseModel):
+    """Response for aggregate statistics."""
+
+    period: dict[str, str]
+    totals: dict[str, int]
+    scores: dict[str, dict[str, float]]
+    conscience: dict[str, Any]
+    actions: dict[str, Any]
+    fragility: dict[str, Any]
+    by_domain: list[dict[str, Any]] | None = None
+
+
+def build_access_scope_filter(
+    ctx: TraceAccessContext,
+    param_idx: int,
+) -> tuple[str, list[Any], int]:
+    """
+    Build SQL WHERE clause for access control scoping.
+
+    Returns (sql_fragment, params, next_param_idx)
+    """
+    if ctx.access_level == AccessLevel.FULL:
+        # Full access - no restrictions
+        return "", [], param_idx
+
+    elif ctx.access_level == AccessLevel.PUBLIC:
+        # Public - only public samples
+        return " AND public_sample = TRUE", [], param_idx
+
+    elif ctx.access_level == AccessLevel.PARTNER:
+        # Partner - own agents + public samples + partner-tagged
+        params = []
+        conditions = []
+
+        if ctx.agent_scope:
+            conditions.append(f"agent_id_hash = ANY(${param_idx})")
+            params.append(ctx.agent_scope)
+            param_idx += 1
+
+        conditions.append("public_sample = TRUE")
+
+        if ctx.partner_id:
+            conditions.append(f"${param_idx} = ANY(partner_access)")
+            params.append(ctx.partner_id)
+            param_idx += 1
+
+        sql = f" AND ({' OR '.join(conditions)})"
+        return sql, params, param_idx
+
+    return "", [], param_idx
+
+
+def filter_trace_fields(
+    trace: dict[str, Any],
+    access_level: AccessLevel,
 ) -> dict[str, Any]:
-    """List recent covenant traces with optional filtering."""
+    """Filter trace fields based on access level."""
+    # Full access gets everything
+    if access_level == AccessLevel.FULL:
+        return trace
+
+    # Partner gets most fields except raw prompts and audit internals
+    if access_level == AccessLevel.PARTNER:
+        excluded = {"audit_signature", "scrub_signature", "scrub_key_id"}
+        # Also strip prompts from DMA results
+        filtered = {k: v for k, v in trace.items() if k not in excluded}
+        if filtered.get("dma_results"):
+            dma = filtered["dma_results"].copy() if isinstance(filtered["dma_results"], dict) else filtered["dma_results"]
+            if isinstance(dma, dict):
+                for key in dma:
+                    if isinstance(dma[key], dict) and "prompt_used" in dma[key]:
+                        dma[key] = {k: v for k, v in dma[key].items() if k != "prompt_used"}
+                filtered["dma_results"] = dma
+        return filtered
+
+    # Public gets full details for sample traces (no field filtering)
+    return trace
+
+
+# =============================================================================
+# API Endpoint - Trace Repository
+# =============================================================================
+
+
+@router.get("/repository/traces")
+async def list_repository_traces(
+    # Access control (normally from JWT, here as query params for flexibility)
+    access_level: AccessLevel = AccessLevel.PUBLIC,
+    user_id: str = "anonymous",
+    agent_scope: str | None = None,  # Comma-separated agent IDs
+    partner_id: str | None = None,
+    # Filtering
+    agent_id: str | None = None,
+    domain: str | None = None,
+    trace_type: str | None = None,
+    cognitive_state: str | None = None,
+    start_time: datetime | None = None,
+    end_time: datetime | None = None,
+    min_plausibility: float | None = None,
+    conscience_passed: bool | None = None,
+    fragility_flag: bool | None = None,
+    # Pagination
+    limit: int = 100,
+    offset: int = 0,
+) -> dict[str, Any]:
+    """
+    List covenant traces with RBAC access control.
+
+    Access levels:
+    - full: All traces, all fields
+    - partner: Own agents + public samples + partner-tagged traces
+    - public: Public sample traces only (for ciris.ai/explore-a-trace)
+    """
     db_pool = get_db_pool()
     if db_pool is None:
         raise HTTPException(status_code=503, detail="Database not available")
 
+    # Build access context
+    ctx = TraceAccessContext(
+        access_level=access_level,
+        user_id=user_id,
+        agent_scope=agent_scope.split(",") if agent_scope else [],
+        partner_id=partner_id,
+    )
+
+    # Base query with all fields for full details
     query = """
-        SELECT trace_id, agent_id_hash, trace_type, cognitive_state,
-               selected_action, action_success, signature_verified,
-               entropy_passed, coherence_passed, optimization_veto_passed,
-               epistemic_humility_passed, timestamp
+        SELECT trace_id, timestamp, agent_name, agent_id_hash,
+               thought_id, task_id, trace_type, trace_level,
+               cognitive_state, thought_type, thought_depth,
+               started_at, completed_at,
+               csdma_plausibility_score, dsdma_domain_alignment, dsdma_domain,
+               pdma_stakeholders, pdma_conflicts, action_rationale,
+               selected_action, action_success, action_was_overridden,
+               idma_k_eff, idma_correlation_risk, idma_fragility_flag, idma_phase,
+               conscience_passed, entropy_passed, coherence_passed,
+               optimization_veto_passed, epistemic_humility_passed,
+               entropy_level, coherence_level,
+               tokens_total, cost_cents, models_used,
+               dma_results, conscience_result,
+               signature_verified, pii_scrubbed, original_content_hash,
+               audit_entry_id, audit_sequence_number, audit_entry_hash,
+               public_sample, partner_access
         FROM cirislens.covenant_traces
         WHERE 1=1
     """
     params: list[Any] = []
     param_idx = 1
 
+    # Apply access control scoping
+    scope_sql, scope_params, param_idx = build_access_scope_filter(ctx, param_idx)
+    query += scope_sql
+    params.extend(scope_params)
+
+    # Apply filters
     if agent_id:
         query += f" AND agent_id_hash = ${param_idx}"
         params.append(agent_id)
+        param_idx += 1
+
+    if domain:
+        query += f" AND dsdma_domain = ${param_idx}"
+        params.append(domain)
         param_idx += 1
 
     if trace_type:
@@ -1789,33 +1966,407 @@ async def list_traces(
         params.append(trace_type)
         param_idx += 1
 
-    query += f" ORDER BY timestamp DESC LIMIT ${param_idx}"
-    params.append(min(limit, 1000))
+    if cognitive_state:
+        query += f" AND cognitive_state = ${param_idx}"
+        params.append(cognitive_state)
+        param_idx += 1
+
+    if start_time:
+        query += f" AND timestamp >= ${param_idx}"
+        params.append(start_time)
+        param_idx += 1
+
+    if end_time:
+        query += f" AND timestamp <= ${param_idx}"
+        params.append(end_time)
+        param_idx += 1
+
+    if min_plausibility is not None:
+        query += f" AND csdma_plausibility_score >= ${param_idx}"
+        params.append(min_plausibility)
+        param_idx += 1
+
+    if conscience_passed is not None:
+        query += f" AND conscience_passed = ${param_idx}"
+        params.append(conscience_passed)
+        param_idx += 1
+
+    if fragility_flag is not None:
+        query += f" AND idma_fragility_flag = ${param_idx}"
+        params.append(fragility_flag)
+        param_idx += 1
+
+    # Add pagination
+    safe_limit = min(limit, 1000)
+    query += f" ORDER BY timestamp DESC LIMIT ${param_idx} OFFSET ${param_idx + 1}"
+    params.extend([safe_limit, offset])
 
     async with db_pool.acquire() as conn:
+        # Get total count
+        count_result = await conn.fetchval(
+            f"SELECT COUNT(*) FROM cirislens.covenant_traces WHERE 1=1{scope_sql}"
+            + (f" AND agent_id_hash = ${len(scope_params) + 1}" if agent_id else ""),
+            *scope_params,
+            *([agent_id] if agent_id else []),
+        )
+
         rows = await conn.fetch(query, *params)
 
-        traces = [
-            {
+        traces = []
+        for row in rows:
+            trace = {
                 "trace_id": row["trace_id"],
-                "agent_id_hash": row["agent_id_hash"],
-                "trace_type": row["trace_type"],
-                "cognitive_state": row["cognitive_state"],
-                "selected_action": row["selected_action"],
-                "action_success": row["action_success"],
-                "signature_verified": row["signature_verified"],
+                "timestamp": row["timestamp"].isoformat() if row["timestamp"] else None,
+                "agent": {
+                    "name": row["agent_name"],
+                    "id_hash": row["agent_id_hash"],
+                    "domain": row["dsdma_domain"],
+                },
+                "thought": {
+                    "thought_id": row["thought_id"],
+                    "type": row["thought_type"],
+                    "depth": row["thought_depth"],
+                    "cognitive_state": row["cognitive_state"],
+                },
+                "action": {
+                    "selected": row["selected_action"],
+                    "success": row["action_success"],
+                    "was_overridden": row["action_was_overridden"],
+                    "rationale": row["action_rationale"],
+                },
+                "scores": {
+                    "csdma_plausibility": float(row["csdma_plausibility_score"]) if row["csdma_plausibility_score"] else None,
+                    "dsdma_alignment": float(row["dsdma_domain_alignment"]) if row["dsdma_domain_alignment"] else None,
+                    "idma_k_eff": float(row["idma_k_eff"]) if row["idma_k_eff"] else None,
+                    "idma_fragility": row["idma_fragility_flag"],
+                    "idma_phase": row["idma_phase"],
+                },
                 "conscience": {
+                    "passed": row["conscience_passed"],
                     "entropy_passed": row["entropy_passed"],
                     "coherence_passed": row["coherence_passed"],
                     "optimization_veto_passed": row["optimization_veto_passed"],
                     "epistemic_humility_passed": row["epistemic_humility_passed"],
                 },
-                "timestamp": row["timestamp"].isoformat() if row["timestamp"] else None,
+                "dma_results": row["dma_results"],
+                "resources": {
+                    "tokens_total": row["tokens_total"],
+                    "cost_cents": float(row["cost_cents"]) if row["cost_cents"] else None,
+                    "models_used": row["models_used"],
+                },
+                "provenance": {
+                    "signature_verified": row["signature_verified"],
+                    "pii_scrubbed": row["pii_scrubbed"],
+                    "original_content_hash": row["original_content_hash"],
+                },
+                "audit": {
+                    "entry_id": str(row["audit_entry_id"]) if row["audit_entry_id"] else None,
+                    "sequence_number": row["audit_sequence_number"],
+                    "entry_hash": row["audit_entry_hash"],
+                },
             }
-            for row in rows
-        ]
 
-        return {"traces": traces, "count": len(traces)}
+            # Filter fields based on access level
+            filtered_trace = filter_trace_fields(trace, access_level)
+            traces.append(filtered_trace)
+
+        return {
+            "traces": traces,
+            "pagination": {
+                "total": count_result or 0,
+                "limit": safe_limit,
+                "offset": offset,
+                "has_more": (offset + len(traces)) < (count_result or 0),
+            },
+        }
+
+
+@router.get("/repository/traces/{trace_id}")
+async def get_repository_trace(
+    trace_id: str,
+    access_level: AccessLevel = AccessLevel.PUBLIC,
+    user_id: str = "anonymous",
+    agent_scope: str | None = None,
+    partner_id: str | None = None,
+) -> dict[str, Any]:
+    """Get a single trace by ID with access control."""
+    db_pool = get_db_pool()
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    ctx = TraceAccessContext(
+        access_level=access_level,
+        user_id=user_id,
+        agent_scope=agent_scope.split(",") if agent_scope else [],
+        partner_id=partner_id,
+    )
+
+    query = """
+        SELECT * FROM cirislens.covenant_traces
+        WHERE trace_id = $1
+    """
+    params: list[Any] = [trace_id]
+    param_idx = 2
+
+    # Apply access control
+    scope_sql, scope_params, _ = build_access_scope_filter(ctx, param_idx)
+    query += scope_sql
+    params.extend(scope_params)
+
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(query, *params)
+
+        if not row:
+            raise HTTPException(
+                status_code=404,
+                detail="Trace not found or access denied",
+            )
+
+        # Build full trace response (same structure as list)
+        trace = dict(row)
+        # Convert types for JSON serialization
+        for key, val in trace.items():
+            if isinstance(val, datetime):
+                trace[key] = val.isoformat()
+            elif isinstance(val, Decimal):
+                trace[key] = float(val)
+            elif isinstance(val, UUID):
+                trace[key] = str(val)
+
+        return filter_trace_fields(trace, access_level)
+
+
+@router.get("/repository/statistics")
+async def get_repository_statistics(
+    access_level: AccessLevel = AccessLevel.PUBLIC,  # noqa: ARG001 - reserved for future scoping
+    domain: str | None = None,
+    start_time: datetime | None = None,
+    end_time: datetime | None = None,
+) -> dict[str, Any]:
+    """Get aggregate statistics for traces. Available at all access levels."""
+    db_pool = get_db_pool()
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    # Default to last 30 days
+    if not end_time:
+        end_time = datetime.now(UTC)
+    if not start_time:
+        from datetime import timedelta
+        start_time = end_time - timedelta(days=30)
+
+    # Build domain filter
+    domain_filter = ""
+    params: list[Any] = [start_time, end_time]
+    if domain:
+        domain_filter = " AND dsdma_domain = $3"
+        params.append(domain)
+
+    async with db_pool.acquire() as conn:
+        # Base stats
+        stats = await conn.fetchrow(
+            f"""
+            SELECT
+                COUNT(*) as trace_count,
+                COUNT(DISTINCT agent_id_hash) as agent_count,
+                COUNT(DISTINCT dsdma_domain) as domain_count,
+                AVG(csdma_plausibility_score) as avg_plausibility,
+                AVG(dsdma_domain_alignment) as avg_alignment,
+                AVG(idma_k_eff) as avg_k_eff,
+                AVG(CASE WHEN conscience_passed THEN 1.0 ELSE 0.0 END) as conscience_pass_rate,
+                AVG(CASE WHEN action_was_overridden THEN 1.0 ELSE 0.0 END) as override_rate,
+                AVG(CASE WHEN idma_fragility_flag THEN 1.0 ELSE 0.0 END) as fragility_rate
+            FROM cirislens.covenant_traces
+            WHERE timestamp >= $1 AND timestamp <= $2{domain_filter}
+            """,
+            *params,
+        )
+
+        # Action distribution
+        actions = await conn.fetch(
+            f"""
+            SELECT selected_action, COUNT(*) as count
+            FROM cirislens.covenant_traces
+            WHERE timestamp >= $1 AND timestamp <= $2{domain_filter}
+            AND selected_action IS NOT NULL
+            GROUP BY selected_action
+            """,
+            *params,
+        )
+
+        total_actions = sum(r["count"] for r in actions)
+        action_dist = {
+            r["selected_action"]: r["count"] / total_actions if total_actions > 0 else 0
+            for r in actions
+        }
+
+        # By domain (only if not filtering by specific domain)
+        by_domain_results = []
+        if not domain:
+            by_domain = await conn.fetch(
+                """
+                SELECT
+                    dsdma_domain as domain,
+                    COUNT(*) as traces,
+                    AVG(csdma_plausibility_score) as avg_plausibility,
+                    AVG(dsdma_domain_alignment) as avg_alignment
+                FROM cirislens.covenant_traces
+                WHERE timestamp >= $1 AND timestamp <= $2
+                AND dsdma_domain IS NOT NULL
+                GROUP BY dsdma_domain
+                ORDER BY traces DESC
+                """,
+                start_time,
+                end_time,
+            )
+            by_domain_results = [
+                {
+                    "domain": r["domain"],
+                    "traces": r["traces"],
+                    "avg_plausibility": float(r["avg_plausibility"] or 0),
+                    "avg_alignment": float(r["avg_alignment"] or 0),
+                }
+                for r in by_domain
+            ]
+
+        return {
+            "period": {
+                "start": start_time.isoformat(),
+                "end": end_time.isoformat(),
+            },
+            "totals": {
+                "traces": stats["trace_count"],
+                "agents": stats["agent_count"],
+                "domains": stats["domain_count"],
+            },
+            "scores": {
+                "csdma_plausibility": {"mean": float(stats["avg_plausibility"] or 0)},
+                "dsdma_alignment": {"mean": float(stats["avg_alignment"] or 0)},
+                "idma_k_eff": {"mean": float(stats["avg_k_eff"] or 0)},
+            },
+            "conscience": {
+                "pass_rate": float(stats["conscience_pass_rate"] or 0),
+                "override_rate": float(stats["override_rate"] or 0),
+            },
+            "actions": {
+                "distribution": action_dist,
+            },
+            "fragility": {
+                "fragile_trace_rate": float(stats["fragility_rate"] or 0),
+            },
+            "by_domain": by_domain_results,
+        }
+
+
+@router.put("/repository/traces/{trace_id}/public-sample")
+async def set_trace_public_sample(
+    trace_id: str,
+    request: PublicSampleRequest,
+    access_level: AccessLevel = AccessLevel.FULL,
+    user_id: str = "admin",
+) -> dict[str, Any]:
+    """Mark a trace as a public sample. Full access only."""
+    if access_level != AccessLevel.FULL:
+        raise HTTPException(status_code=403, detail="Full access required")
+
+    db_pool = get_db_pool()
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    async with db_pool.acquire() as conn:
+        result = await conn.execute(
+            """
+            UPDATE cirislens.covenant_traces
+            SET public_sample = $1,
+                access_updated_at = NOW(),
+                access_updated_by = $2
+            WHERE trace_id = $3
+            """,
+            request.public_sample,
+            user_id,
+            trace_id,
+        )
+
+        if result == "UPDATE 0":
+            raise HTTPException(status_code=404, detail="Trace not found")
+
+        logger.info(
+            "Trace %s public_sample set to %s by %s: %s",
+            trace_id,
+            request.public_sample,
+            user_id,
+            request.reason,
+        )
+
+        return {
+            "trace_id": trace_id,
+            "public_sample": request.public_sample,
+            "updated_at": datetime.now(UTC).isoformat(),
+        }
+
+
+@router.put("/repository/traces/{trace_id}/partner-access")
+async def set_trace_partner_access(
+    trace_id: str,
+    request: PartnerAccessRequest,
+    access_level: AccessLevel = AccessLevel.FULL,
+    user_id: str = "admin",
+) -> dict[str, Any]:
+    """Modify partner access for a trace. Full access only."""
+    if access_level != AccessLevel.FULL:
+        raise HTTPException(status_code=403, detail="Full access required")
+
+    db_pool = get_db_pool()
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    async with db_pool.acquire() as conn:
+        # Get current access
+        current = await conn.fetchval(
+            "SELECT partner_access FROM cirislens.covenant_traces WHERE trace_id = $1",
+            trace_id,
+        )
+
+        if current is None:
+            raise HTTPException(status_code=404, detail="Trace not found")
+
+        current_set = set(current or [])
+
+        if request.action == "add":
+            new_access = list(current_set | set(request.partner_ids))
+        elif request.action == "remove":
+            new_access = list(current_set - set(request.partner_ids))
+        elif request.action == "set":
+            new_access = request.partner_ids
+        else:
+            raise HTTPException(status_code=400, detail="Invalid action")
+
+        await conn.execute(
+            """
+            UPDATE cirislens.covenant_traces
+            SET partner_access = $1,
+                access_updated_at = NOW(),
+                access_updated_by = $2
+            WHERE trace_id = $3
+            """,
+            new_access,
+            user_id,
+            trace_id,
+        )
+
+        logger.info(
+            "Trace %s partner_access updated by %s: %s %s",
+            trace_id,
+            user_id,
+            request.action,
+            request.partner_ids,
+        )
+
+        return {
+            "trace_id": trace_id,
+            "partner_access": new_access,
+            "updated_at": datetime.now(UTC).isoformat(),
+        }
 
 
 # =============================================================================
