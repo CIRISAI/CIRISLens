@@ -1,17 +1,17 @@
 -- Add error tracking table for better observability
 CREATE TABLE IF NOT EXISTS collection_errors (
     id SERIAL PRIMARY KEY,
-    source VARCHAR(255) NOT NULL,           -- e.g., 'manager_collector:primary', 'otlp_collector'  
+    source VARCHAR(255) NOT NULL,           -- e.g., 'manager_collector:primary', 'otlp_collector'
     error_type VARCHAR(100) NOT NULL,       -- e.g., 'DISCOVERY_FAILURE', 'NETWORK_ERROR'
     error_message TEXT NOT NULL,
     occurred_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    resolved_at TIMESTAMP WITH TIME ZONE,  -- When error was resolved
-    
-    -- Indexes for querying
-    INDEX idx_collection_errors_source_time (source, occurred_at),
-    INDEX idx_collection_errors_type (error_type),
-    INDEX idx_collection_errors_unresolved (occurred_at) WHERE resolved_at IS NULL
+    resolved_at TIMESTAMP WITH TIME ZONE   -- When error was resolved
 );
+
+-- Indexes for querying
+CREATE INDEX IF NOT EXISTS idx_collection_errors_source_time ON collection_errors (source, occurred_at);
+CREATE INDEX IF NOT EXISTS idx_collection_errors_type ON collection_errors (error_type);
+CREATE INDEX IF NOT EXISTS idx_collection_errors_unresolved ON collection_errors (occurred_at) WHERE resolved_at IS NULL;
 
 -- Add error tracking column to managers table
 ALTER TABLE managers 
