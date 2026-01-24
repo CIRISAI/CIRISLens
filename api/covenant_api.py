@@ -1143,9 +1143,18 @@ def _parse_timestamp(ts: str | None) -> datetime | None:
         return None
 
 
-def _is_mock_trace(models_used: list[str] | None) -> bool:
-    """Check if trace uses mock LLM models (stored in mock repo, not production)."""
+def _is_mock_trace(models_used: list[str] | None, trace_level: str = "generic") -> bool:
+    """
+    Check if trace uses mock LLM models (stored in mock repo, not production).
+
+    NOTE: For 'generic' trace level, models_used is not included in the payload.
+    In this case, we cannot determine if it's a mock trace and return False.
+    To route mock traces to the mock repo, agents must send 'detailed' or 'full_traces' level.
+    """
     if not models_used:
+        # Generic traces don't include models_used - can't detect mock
+        if trace_level == "generic":
+            logger.debug("Cannot detect mock trace at 'generic' level (no models_used)")
         return False
     return any(model and "mock" in str(model).lower() for model in models_used)
 
@@ -1342,12 +1351,23 @@ def extract_trace_metadata(trace: CovenantTrace, trace_level: str = "generic") -
         elif "EXPRESS_GRATITUDE" in task_id_upper:
             metadata["trace_type"] = "EXPRESS_GRATITUDE"
 
-    # Debug: log component event_types for schema detection
+    # Log trace level and expected fields
     component_types = [c.event_type for c in trace.components]
-    logger.info(
-        "SCHEMA_DEBUG: Trace %s has %d components with event_types: %s",
-        trace.trace_id, len(trace.components), component_types
+    logger.debug(
+        "Extracting trace %s: level=%s components=%s",
+        trace.trace_id, trace_level, component_types
     )
+
+    # Document what's available at each trace level (per FSD spec)
+    # - generic: numeric scores only (plausibility, alignment, k_eff, tokens, cost)
+    # - detailed: + identifiers (agent_name, domain, models_used, stakeholders)
+    # - full_traces: + reasoning text (rationale, prompts, context)
+    if trace_level == "generic":
+        logger.debug(
+            "Trace %s is 'generic' level - only numeric scores available, "
+            "no agent_name/models_used/domain",
+            trace.trace_id
+        )
 
     for component in trace.components:
         event_type = component.event_type
@@ -1573,10 +1593,12 @@ async def receive_covenant_events(
 
                 # Route mock traces to mock repository for dev/testing
                 # Mock traces reaching here have already passed signature verification
-                if _is_mock_trace(metadata["models_used"]):
+                # NOTE: Generic traces don't include models_used, so mock detection only works
+                # for 'detailed' or 'full_traces' level traces
+                if _is_mock_trace(metadata["models_used"], trace_level=request.trace_level):
                     logger.info(
-                        "ROUTING mock trace %s to mock repo (models: %s)",
-                        trace.trace_id, metadata["models_used"]
+                        "ROUTING mock trace %s to mock repo (models: %s, level: %s)",
+                        trace.trace_id, metadata["models_used"], request.trace_level
                     )
                     await _store_mock_trace(
                         conn, trace, metadata, models_used,
@@ -1585,14 +1607,28 @@ async def receive_covenant_events(
                     )
                     continue
 
-                # Log trace storage attempt
-                logger.info(
-                    "STORING trace %s: thought_id=%s, agent=%s, type=%s",
-                    trace.trace_id,
-                    metadata["thought_id"],
-                    metadata["agent_name"],
-                    metadata["trace_type"],
-                )
+                # Log trace storage attempt with level-appropriate info
+                if request.trace_level == "generic":
+                    # Generic traces: log scores (that's what we have)
+                    logger.info(
+                        "STORING trace %s: level=%s csdma=%.2f dsdma=%.2f k_eff=%.1f conscience=%s",
+                        trace.trace_id,
+                        request.trace_level,
+                        metadata.get("csdma_plausibility_score") or 0,
+                        metadata.get("dsdma_domain_alignment") or 0,
+                        metadata.get("idma_k_eff") or 0,
+                        metadata.get("conscience_passed"),
+                    )
+                else:
+                    # Detailed/full traces: log identifiers
+                    logger.info(
+                        "STORING trace %s: level=%s agent=%s type=%s action=%s",
+                        trace.trace_id,
+                        request.trace_level,
+                        metadata["agent_name"],
+                        metadata["trace_type"],
+                        metadata["selected_action"],
+                    )
 
                 # Store trace with all extracted metadata
                 await conn.execute(
