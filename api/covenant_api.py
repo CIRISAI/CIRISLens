@@ -2117,7 +2117,9 @@ async def list_repository_traces(
                     if snapshot_ctx:
                         try:
                             ctx_data = snapshot_ctx if isinstance(snapshot_ctx, dict) else json.loads(snapshot_ctx)
-                            thought_summary = ctx_data.get("current_thought_summary", {})
+                            # Path: system_snapshot.current_thought_summary.content
+                            system_snapshot = ctx_data.get("system_snapshot", {})
+                            thought_summary = system_snapshot.get("current_thought_summary", {})
                             content = thought_summary.get("content", "")
                             # Extract the user's question - typically after "said:" and before newline
                             if "said:" in content:
