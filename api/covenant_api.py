@@ -2088,8 +2088,7 @@ async def list_repository_traces(
 
             # Filter fields based on access level
             filtered_trace = filter_trace_fields(trace, access_level)
-            # Remove internal fields
-            filtered_trace = {k: v for k, v in filtered_trace.items() if not k.startswith("_")}
+            # Keep internal fields for now - they're needed for grouping
             traces.append(filtered_trace)
 
         # Group by task_id if requested
@@ -2163,8 +2162,13 @@ async def list_repository_traces(
                 },
             }
 
+        # Strip internal fields for non-grouped response
+        clean_traces = [
+            {k: v for k, v in t.items() if not k.startswith("_")}
+            for t in traces
+        ]
         return {
-            "traces": traces,
+            "traces": clean_traces,
             "pagination": {
                 "total": count_result or 0,
                 "limit": safe_limit,
