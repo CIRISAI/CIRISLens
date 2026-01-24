@@ -1576,7 +1576,6 @@ async def receive_covenant_events(
                         request.batch_timestamp, request.consent_timestamp,
                         signature_verified=is_valid,
                     )
-                    mock_count = mock_count + 1 if 'mock_count' in dir() else 1
                     continue
 
                 # Log trace storage attempt
