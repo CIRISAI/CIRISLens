@@ -136,11 +136,7 @@ def validate_trace_schema(
     # Extract event_types from components
     event_types: set[str] = set()
     for comp in components:
-        if isinstance(comp, dict):
-            et = comp.get("event_type")
-        else:
-            # Pydantic model
-            et = getattr(comp, "event_type", None)
+        et = comp.get("event_type") if isinstance(comp, dict) else getattr(comp, "event_type", None)
         if et:
             event_types.add(et)
 
