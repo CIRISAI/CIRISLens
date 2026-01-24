@@ -1144,10 +1144,117 @@ def _parse_timestamp(ts: str | None) -> datetime | None:
 
 
 def _is_mock_trace(models_used: list[str] | None) -> bool:
-    """Check if trace uses mock LLM models (for testing only, should not be stored)."""
+    """Check if trace uses mock LLM models (stored in mock repo, not production)."""
     if not models_used:
         return False
     return any(model and "mock" in str(model).lower() for model in models_used)
+
+
+def _get_mock_models(models_used: list[str] | None) -> list[str]:
+    """Extract mock model names from models_used list."""
+    if not models_used:
+        return []
+    return [m for m in models_used if m and "mock" in str(m).lower()]
+
+
+async def _store_mock_trace(
+    conn,
+    trace,
+    metadata: dict[str, Any],
+    models_used_json: str | None,
+    batch_timestamp,
+    consent_timestamp,
+    signature_verified: bool,
+) -> None:
+    """Store a mock trace in the mock repository for dev/testing."""
+    mock_models = _get_mock_models(metadata.get("models_used"))
+
+    await conn.execute(
+        """
+        INSERT INTO cirislens.covenant_traces_mock (
+            trace_id, thought_id, task_id,
+            agent_id_hash, agent_name,
+            trace_type, cognitive_state, thought_type, thought_depth,
+            started_at, completed_at,
+            thought_start, snapshot_and_context, dma_results,
+            aspdma_result, conscience_result, action_result,
+            csdma_plausibility_score, dsdma_domain_alignment, dsdma_domain,
+            pdma_stakeholders, pdma_conflicts,
+            idma_k_eff, idma_correlation_risk, idma_fragility_flag, idma_phase,
+            action_rationale,
+            conscience_passed, action_was_overridden,
+            entropy_level, coherence_level,
+            entropy_passed, coherence_passed,
+            optimization_veto_passed, epistemic_humility_passed,
+            selected_action, action_success, processing_ms,
+            tokens_input, tokens_output, tokens_total,
+            cost_cents, llm_calls, models_used,
+            signature, signature_key_id, signature_verified,
+            consent_timestamp, timestamp, trace_level,
+            mock_models, mock_reason
+        ) VALUES (
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+            $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
+            $21, $22, $23, $24, $25, $26, $27, $28, $29, $30,
+            $31, $32, $33, $34, $35, $36, $37, $38, $39, $40,
+            $41, $42, $43, $44, $45, $46, $47, $48, $49, $50,
+            $51, $52
+        )
+        ON CONFLICT (trace_id) DO NOTHING
+        """,
+        trace.trace_id,                              # $1
+        metadata["thought_id"],                      # $2
+        metadata["task_id"],                         # $3
+        metadata["agent_id_hash"],                   # $4
+        metadata["agent_name"],                      # $5
+        metadata["trace_type"],                      # $6
+        metadata["cognitive_state"],                 # $7
+        metadata["thought_type"],                    # $8
+        metadata["thought_depth"],                   # $9
+        metadata["started_at"],                      # $10
+        metadata["completed_at"],                    # $11
+        json.dumps(metadata["thought_start"]),       # $12
+        json.dumps(metadata["snapshot_and_context"]),# $13
+        json.dumps(metadata["dma_results"]),         # $14
+        json.dumps(metadata["aspdma_result"]),       # $15
+        json.dumps(metadata["conscience_result"]),   # $16
+        json.dumps(metadata["action_result"]),       # $17
+        metadata["csdma_plausibility_score"],        # $18
+        metadata["dsdma_domain_alignment"],          # $19
+        metadata["dsdma_domain"],                    # $20
+        metadata["pdma_stakeholders"],               # $21
+        metadata["pdma_conflicts"],                  # $22
+        metadata["idma_k_eff"],                      # $23
+        metadata["idma_correlation_risk"],           # $24
+        metadata["idma_fragility_flag"],             # $25
+        metadata["idma_phase"],                      # $26
+        metadata["action_rationale"],                # $27
+        metadata["conscience_passed"],               # $28
+        metadata["action_was_overridden"],           # $29
+        metadata["entropy_level"],                   # $30
+        metadata["coherence_level"],                 # $31
+        metadata["entropy_passed"],                  # $32
+        metadata["coherence_passed"],                # $33
+        metadata["optimization_veto_passed"],        # $34
+        metadata["epistemic_humility_passed"],       # $35
+        metadata["selected_action"],                 # $36
+        metadata["action_success"],                  # $37
+        metadata["processing_ms"],                   # $38
+        metadata["tokens_input"],                    # $39
+        metadata["tokens_output"],                   # $40
+        metadata["tokens_total"],                    # $41
+        metadata["cost_cents"],                      # $42
+        metadata["llm_calls"],                       # $43
+        models_used_json,                            # $44
+        trace.signature,                             # $45
+        trace.signature_key_id,                      # $46
+        signature_verified,                          # $47 - signature verified status
+        consent_timestamp,                           # $48
+        batch_timestamp,                             # $49
+        metadata["trace_level"],                     # $50
+        mock_models,                                 # $51 - mock_models array
+        "models_used contains mock",                 # $52 - mock_reason
+    )
 
 
 def extract_trace_metadata(trace: CovenantTrace, trace_level: str = "generic") -> dict[str, Any]:
@@ -1457,12 +1564,19 @@ async def receive_covenant_events(
                 if models_used is not None and not isinstance(models_used, str):
                     models_used = json.dumps(models_used)
 
-                # Skip mock traces - they're for testing only
+                # Route mock traces to mock repository for dev/testing
+                # Mock traces reaching here have already passed signature verification
                 if _is_mock_trace(metadata["models_used"]):
                     logger.info(
-                        "SKIPPING mock trace %s (models: %s)",
+                        "ROUTING mock trace %s to mock repo (models: %s)",
                         trace.trace_id, metadata["models_used"]
                     )
+                    await _store_mock_trace(
+                        conn, trace, metadata, models_used,
+                        request.batch_timestamp, request.consent_timestamp,
+                        signature_verified=is_valid,
+                    )
+                    mock_count = mock_count + 1 if 'mock_count' in dir() else 1
                     continue
 
                 # Log trace storage attempt

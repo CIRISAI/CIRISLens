@@ -217,6 +217,13 @@ class TestRepositoryEndpoints:
                 "models_used": ["llama"],
                 "dma_results": {"csdma": {}},
                 "conscience_result": {},
+                "snapshot_and_context": {
+                    "system_snapshot": {
+                        "current_thought_summary": {
+                            "content": "User asked a question"
+                        }
+                    }
+                },
                 "signature_verified": True,
                 "pii_scrubbed": True,
                 "original_content_hash": "hash",
@@ -236,9 +243,12 @@ class TestRepositoryEndpoints:
                 user_id="anonymous",
             )
 
-            assert "traces" in result
+            # Default response is grouped by task
+            assert "tasks" in result
             assert "pagination" in result
-            assert len(result["traces"]) == 1
+            assert len(result["tasks"]) == 1
+            # Check initial_observation was extracted
+            assert result["tasks"][0]["initial_observation"] == "User asked a question"
 
     @pytest.mark.asyncio
     async def test_set_public_sample_requires_full_access(self, mock_db_pool):
