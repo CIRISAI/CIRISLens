@@ -1342,6 +1342,13 @@ def extract_trace_metadata(trace: CovenantTrace, trace_level: str = "generic") -
         elif "EXPRESS_GRATITUDE" in task_id_upper:
             metadata["trace_type"] = "EXPRESS_GRATITUDE"
 
+    # Debug: log component event_types for schema detection
+    component_types = [c.event_type for c in trace.components]
+    logger.info(
+        "SCHEMA_DEBUG: Trace %s has %d components with event_types: %s",
+        trace.trace_id, len(trace.components), component_types
+    )
+
     for component in trace.components:
         event_type = component.event_type
         data = component.data
