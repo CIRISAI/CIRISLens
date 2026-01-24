@@ -1436,11 +1436,12 @@ def extract_trace_metadata(trace: CovenantTrace, trace_level: str = "generic") -
             # Overall conscience result
             metadata["conscience_passed"] = data.get("conscience_passed")
             metadata["action_was_overridden"] = data.get("action_was_overridden")
-            # Epistemic data
+            # Epistemic data - V1.8 nested in epistemic_data, V1.9+ at top level
             epistemic = data.get("epistemic_data", {})
-            metadata["entropy_level"] = epistemic.get("entropy_level")
-            metadata["coherence_level"] = epistemic.get("coherence_level")
-            metadata["uncertainty_acknowledged"] = epistemic.get("uncertainty_acknowledged")
+            # Try V1.9 format first (top level), fall back to V1.8 (nested)
+            metadata["entropy_level"] = data.get("entropy_level") or epistemic.get("entropy_level")
+            metadata["coherence_level"] = data.get("coherence_level") or epistemic.get("coherence_level")
+            metadata["uncertainty_acknowledged"] = data.get("uncertainty_acknowledged") or epistemic.get("uncertainty_acknowledged")
             metadata["reasoning_transparency"] = epistemic.get("reasoning_transparency")
             # Bypass guardrails
             metadata["updated_status_detected"] = data.get("updated_status_detected")
