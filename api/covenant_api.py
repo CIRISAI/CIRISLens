@@ -1592,8 +1592,6 @@ async def receive_covenant_events(
             # SECURITY SANITIZATION - applies to ALL trace levels
             # Detects and neutralizes XSS, SQL injection, and other payloads
             # =================================================================
-            security_sanitized = False
-            sanitization_detections: list[str] = []
             try:
                 # Sanitize trace components
                 trace_dict = {"components": [c.model_dump() for c in trace.components]}
@@ -1603,8 +1601,6 @@ async def receive_covenant_events(
 
                 # Update trace components with sanitized data
                 if sanitization_result.fields_modified > 0:
-                    security_sanitized = True
-                    sanitization_detections = sanitization_result.total_detections
                     # Apply sanitized data back to trace components
                     for i, comp in enumerate(trace.components):
                         if i < len(sanitized_trace.get("components", [])):
@@ -1614,7 +1610,7 @@ async def receive_covenant_events(
                     logger.warning(
                         "SECURITY_SANITIZATION trace %s: detections=%s modified=%d",
                         trace.trace_id,
-                        sanitization_detections,
+                        sanitization_result.total_detections,
                         sanitization_result.fields_modified,
                     )
             except Exception as e:
