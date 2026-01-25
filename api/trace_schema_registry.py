@@ -212,7 +212,7 @@ def detect_schema_version(
     }
 
     # Check if we have the required event types
-    if not event_types == required_event_types:
+    if event_types != required_event_types:
         # Check if it's a subset (might be partial trace)
         if event_types.issubset(required_event_types) and len(event_types) >= 4:
             logger.warning(
@@ -243,14 +243,12 @@ def detect_schema_version(
             return SchemaVersion.V1_9_1
 
         # V1.9 detection: entropy_level at top level (not in epistemic_data)
-        if conscience_data:
-            # V1.9+ has entropy_level at top level
-            if "entropy_level" in conscience_data:
-                epistemic_data = conscience_data.get("epistemic_data", {})
-                # V1.8 has it ONLY in epistemic_data, V1.9+ has it at top level
-                top_level_entropy = conscience_data.get("entropy_level")
-                if top_level_entropy is not None:
-                    return SchemaVersion.V1_9
+        # V1.9+ has entropy_level at top level
+        if conscience_data and "entropy_level" in conscience_data:
+            # V1.8 has it ONLY in epistemic_data, V1.9+ has it at top level
+            top_level_entropy = conscience_data.get("entropy_level")
+            if top_level_entropy is not None:
+                return SchemaVersion.V1_9
 
         # Default to V1.8 if we have the right event types but can't detect newer version
         return SchemaVersion.V1_8
