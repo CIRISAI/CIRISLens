@@ -35,7 +35,6 @@ Documented from production mock traces received 2026-01-25.
 | Field | Level | Type | Description | Example |
 |-------|-------|------|-------------|---------|
 | `selected_action` | GENERIC | string | Action selected | `SPEAK` |
-| `selection_confidence` | GENERIC | float | Confidence in selection | `0.95` |
 | `is_recursive` | GENERIC | bool | Whether action is recursive | `false` |
 | `action_rationale` | FULL | string | Rationale for action | (reasoning text) |
 | `aspdma_prompt` | FULL | string | Prompt used for ASPDMA | (prompt text) |
@@ -176,7 +175,6 @@ Documented from production mock traces received 2026-01-25.
 | `has_positive_moment` | ACTION_RESULT | **S (critical)** | HIGH |
 | `has_execution_error` | ACTION_RESULT | I_inc | MEDIUM |
 | `execution_time_ms` | ACTION_RESULT | (performance) | LOW |
-| `selection_confidence` | ASPDMA_RESULT | I_inc (ECE) | MEDIUM |
 | `is_recursive` | ASPDMA_RESULT | (analysis) | LOW |
 | `follow_up_thought_id` | ACTION_RESULT | (chain) | LOW |
 | `api_bases_used` | ACTION_RESULT | (provider) | LOW |
@@ -349,7 +347,6 @@ ALTER TABLE cirislens.covenant_traces
 ADD COLUMN IF NOT EXISTS has_positive_moment BOOLEAN,
 ADD COLUMN IF NOT EXISTS has_execution_error BOOLEAN,
 ADD COLUMN IF NOT EXISTS execution_time_ms NUMERIC(10,3),
-ADD COLUMN IF NOT EXISTS selection_confidence NUMERIC(3,2),
 ADD COLUMN IF NOT EXISTS is_recursive BOOLEAN;
 
 -- Same for mock table
@@ -357,7 +354,6 @@ ALTER TABLE cirislens.covenant_traces_mock
 ADD COLUMN IF NOT EXISTS has_positive_moment BOOLEAN,
 ADD COLUMN IF NOT EXISTS has_execution_error BOOLEAN,
 ADD COLUMN IF NOT EXISTS execution_time_ms NUMERIC(10,3),
-ADD COLUMN IF NOT EXISTS selection_confidence NUMERIC(3,2),
 ADD COLUMN IF NOT EXISTS is_recursive BOOLEAN;
 ```
 

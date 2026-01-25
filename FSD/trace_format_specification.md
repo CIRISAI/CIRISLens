@@ -278,7 +278,6 @@ Contains the action selection decision and justification.
     "reasoning_summary": null,
     "action_parameters": null,
     "alternatives_considered": null,
-    "selection_confidence": null,
     "is_recursive": false,
     "aspdma_prompt": "..."
   }
