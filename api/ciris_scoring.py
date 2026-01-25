@@ -358,12 +358,12 @@ async def calculate_factor_R(
     """
     Factor R: Resilience
 
-    R = sigmoid((1 − δ_drift) · 1/(1 + MTTR) · (1 − ρ_regression))
+    R = sigmoid((1 - delta_drift) * 1/(1 + MTTR) * (1 - rho_regression))
 
     Uses non-exempt actions to measure:
-    - δ_drift: Score drift from baseline
+    - delta_drift: Score drift from baseline
     - MTTR: Mean time to recovery from fragility
-    - ρ_regression: Regression rate
+    - rho_regression: Regression rate
     """
     # Get baseline statistics (older window)
     baseline_start = window_start - timedelta(days=PARAMS["baseline_window_days"])
@@ -409,7 +409,7 @@ async def calculate_factor_R(
     recent_csdma = float(recent["recent_csdma"]) if recent["recent_csdma"] else baseline_csdma
 
     csdma_drift = abs(recent_csdma - baseline_csdma) / max(std_csdma, 0.01)
-    delta_drift = min(1.0, csdma_drift / 3.0)  # Normalize to [0, 1], 3σ = max drift
+    delta_drift = min(1.0, csdma_drift / 3.0)  # Normalize to [0, 1], 3 sigma = max drift
 
     # MTTR placeholder (not fully implemented - requires temporal fragility tracking)
     mttr_hours = 1.0  # Assume 1 hour recovery for now
@@ -448,7 +448,7 @@ async def calculate_factor_I_inc(
     """
     Factor I_inc: Incompleteness Awareness
 
-    I_inc = (1 − ECE) · Q_deferral · (1 − U_unsafe)
+    I_inc = (1 - ECE) * Q_deferral * (1 - U_unsafe)
 
     Uses non-exempt actions to measure:
     - ECE: Expected calibration error (confidence vs outcomes)

@@ -4,34 +4,32 @@ Tests for CIRIS Scoring Module
 Tests the factor calculations and composite scoring logic.
 """
 
-import math
+import sys
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 # Import from api package
-import sys
 sys.path.insert(0, "api")
 
 from ciris_scoring import (
-    NON_EXEMPT_ACTIONS,
     EXEMPT_ACTIONS,
+    NON_EXEMPT_ACTIONS,
     PARAMS,
-    FactorScore,
     CIRISScore,
-    is_non_exempt_action,
-    sigmoid,
-    get_confidence_level,
-    get_category,
+    FactorScore,
+    calculate_ciris_score,
     calculate_factor_C,
+    calculate_factor_I_inc,
     calculate_factor_I_int,
     calculate_factor_R,
-    calculate_factor_I_inc,
     calculate_factor_S,
-    calculate_ciris_score,
+    get_category,
+    get_confidence_level,
+    is_non_exempt_action,
+    sigmoid,
 )
-
 
 # ============================================================================
 # Unit Tests - Helper Functions

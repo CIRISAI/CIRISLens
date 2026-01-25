@@ -15,18 +15,15 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, HTTPException, Query
 
-if TYPE_CHECKING:
-    import asyncpg
-
 from ciris_scoring import (
+    PARAMS,
     calculate_ciris_score,
     get_alerts,
     get_fleet_scores,
-    PARAMS,
 )
 
 logger = logging.getLogger(__name__)
@@ -34,7 +31,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/scoring", tags=["scoring"])
 
 
-def get_db_pool() -> "asyncpg.Pool | None":
+def get_db_pool() -> Any:
     """Get the database pool from main module. Avoids circular import."""
     import main  # noqa: PLC0415
 
@@ -180,7 +177,7 @@ async def get_agent_factors(
                 },
                 "R": {
                     "name": "Resilience",
-                    "formula": "R = sigmoid((1-δ_drift) · 1/(1+MTTR) · (1-ρ_regression))",
+                    "formula": "R = sigmoid((1-delta_drift) * 1/(1+MTTR) * (1-rho_regression))",
                     "score": round(score.R.score, 4),
                     "components": {k: round(v, 4) for k, v in score.R.components.items()},
                     "trace_count": score.R.trace_count,
