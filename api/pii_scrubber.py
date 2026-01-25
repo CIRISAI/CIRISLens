@@ -298,15 +298,10 @@ class PIIScrubber:
         if key_path.exists():
             try:
                 key_data = key_path.read_bytes()
-                if len(key_data) == 32:
-                    self._signing_key = key_data
+                self._signing_key = self._parse_key_data(key_data, key_path)
+                if self._signing_key:
                     logger.info("Loaded CIRISLens scrub signing key from %s", key_path)
                 else:
-                    logger.warning(
-                        "Scrub key at %s has invalid size (%d bytes, expected 32). Regenerating.",
-                        key_path,
-                        len(key_data),
-                    )
                     self._signing_key = self._create_and_save_key(key_path)
             except Exception as e:
                 logger.error("Failed to load scrub signing key: %s", e)
@@ -315,6 +310,43 @@ class PIIScrubber:
             # Key doesn't exist - create it
             logger.info("No scrub signing key found at %s. Generating new key.", key_path)
             self._signing_key = self._create_and_save_key(key_path)
+
+    def _parse_key_data(self, key_data: bytes, key_path: "Path") -> bytes | None:
+        """Parse key data, accepting both raw 32-byte keys and base64-encoded keys."""
+        # Strip whitespace/newlines
+        key_data = key_data.strip()
+
+        # If exactly 32 bytes, it's raw
+        if len(key_data) == 32:
+            return key_data
+
+        # Try base64 decode
+        try:
+            # Try standard base64
+            decoded = base64.b64decode(key_data)
+            if len(decoded) == 32:
+                logger.info("Decoded base64 scrub key from %s", key_path)
+                return decoded
+        except Exception:
+            pass
+
+        try:
+            # Try URL-safe base64
+            decoded = base64.urlsafe_b64decode(key_data)
+            if len(decoded) == 32:
+                logger.info("Decoded URL-safe base64 scrub key from %s", key_path)
+                return decoded
+        except Exception:
+            pass
+
+        # Invalid key
+        logger.warning(
+            "Scrub key at %s has invalid format (size=%d bytes after strip). "
+            "Expected 32 raw bytes or 44-char base64. Regenerating.",
+            key_path,
+            len(key_data),
+        )
+        return None
 
     def _create_and_save_key(self, key_path: "Path") -> bytes | None:
         """Generate a new signing key and save it to disk."""
