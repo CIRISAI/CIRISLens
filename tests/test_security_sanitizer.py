@@ -191,7 +191,7 @@ class TestSanitizeDictRecursive:
         # Create deeply nested structure
         data = {"level": {}}
         current = data["level"]
-        for i in range(25):
+        for _ in range(25):
             current["nested"] = {}
             current = current["nested"]
 

@@ -20,6 +20,7 @@ import hashlib
 import html
 import json
 import logging
+import math
 import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -200,7 +201,7 @@ def neutralize_pattern(text: str, pattern_name: str, pattern: re.Pattern) -> str
     elif pattern_name.startswith("cmd_"):
         placeholder = f"[CMD_REMOVED:{pattern_name}]"
     elif pattern_name.startswith("path_"):
-        placeholder = f"[PATH_REMOVED]"
+        placeholder = "[PATH_REMOVED]"
     elif pattern_name.startswith("null_"):
         placeholder = "[NULL_BYTE_REMOVED]"
     else:
@@ -274,7 +275,7 @@ def sanitize_text(
     )
 
 
-def sanitize_dict_recursive(
+def sanitize_dict_recursive(  # noqa: PLR0912, PLR0915
     data: Any,
     depth: int = 0,
     max_depth: int | None = None,
@@ -301,15 +302,16 @@ def sanitize_dict_recursive(
         result = {}
         for key, value in data.items():
             # Sanitize the key itself (could be attack vector)
+            safe_key = key
             if isinstance(key, str) and len(key) > SIZE_LIMITS["max_string_in_identifier"]:
-                key = key[:SIZE_LIMITS["max_string_in_identifier"]]
+                safe_key = key[:SIZE_LIMITS["max_string_in_identifier"]]
                 all_detections.append("key_truncated")
 
             # Check if this field should be sanitized
-            if key in SANITIZE_FIELDS and isinstance(value, str):
-                is_identifier = key in IDENTIFIER_FIELDS
+            if safe_key in SANITIZE_FIELDS and isinstance(value, str):
+                is_identifier = safe_key in IDENTIFIER_FIELDS
                 san_result = sanitize_text(value, is_identifier=is_identifier)
-                result[key] = san_result.sanitized_text
+                result[safe_key] = san_result.sanitized_text
                 all_detections.extend(san_result.detections)
                 if san_result.was_modified:
                     fields_modified += 1
@@ -320,12 +322,12 @@ def sanitize_dict_recursive(
                 san_data, det, mod, trunc = sanitize_dict_recursive(
                     value, depth + 1, max_depth
                 )
-                result[key] = san_data
+                result[safe_key] = san_data
                 all_detections.extend(det)
                 fields_modified += mod
                 fields_truncated += trunc
             else:
-                result[key] = value
+                result[safe_key] = value
         return result, all_detections, fields_modified, fields_truncated
 
     elif isinstance(data, list):
@@ -461,7 +463,7 @@ def validate_identifier(
     if detections:
         issues.extend(detections)
         # For identifiers, strip the dangerous content entirely
-        for pattern_name, pattern in DANGEROUS_PATTERNS.items():
+        for pattern in DANGEROUS_PATTERNS.values():
             result = pattern.sub("", result)
 
     return result, issues
@@ -490,7 +492,7 @@ def validate_numeric(
         return None, [f"{field_name}_invalid_type"]
 
     # Check for NaN/Inf
-    if num_value != num_value:  # NaN check
+    if math.isnan(num_value):
         return None, [f"{field_name}_is_nan"]
     if abs(num_value) == float("inf"):
         return None, [f"{field_name}_is_infinite"]
