@@ -6,7 +6,9 @@ This document specifies how the UI/UX team should update `ciris.ai/ciris-scoring
 
 ## API Base URL
 
-**Production:** `https://agents.ciris.ai/lens/api/v1/scoring`
+**Production:** `https://lens.ciris-services-1.ai/api/v1/scoring`
+
+**Note:** All endpoints are public (no authentication required), rate limited (60 req/min per IP), and cached (5 min TTL).
 
 ## Available Endpoints
 
@@ -299,13 +301,14 @@ GET /parameters
 ### Fetch Fleet Scores (JavaScript)
 ```javascript
 const response = await fetch(
-  'https://agents.ciris.ai/lens/api/v1/scoring/capacity/fleet?window_days=7'
+  'https://lens.ciris-services-1.ai/api/v1/scoring/capacity/fleet?window_days=7'
 );
 const data = await response.json();
 
 // Access summary
 console.log(`${data.agent_count} agents scored`);
 console.log(`${data.summary.high_fragility} need attention`);
+console.log(`Cached: ${data.cache.cached}`);
 
 // Access individual agents
 data.agents.forEach(agent => {
@@ -317,7 +320,7 @@ data.agents.forEach(agent => {
 ```javascript
 const agentName = 'Scout';
 const response = await fetch(
-  `https://agents.ciris.ai/lens/api/v1/scoring/factors/${agentName}`
+  `https://lens.ciris-services-1.ai/api/v1/scoring/factors/${agentName}`
 );
 const data = await response.json();
 
