@@ -23,6 +23,7 @@ import logging
 import os
 import re
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -285,8 +286,6 @@ class PIIScrubber:
         self.scrub_key_id = "lens-scrub-v1"
         self._signing_key: bytes | None = None
 
-        from pathlib import Path  # noqa: PLC0415
-
         key_path_str = (
             scrub_key_path
             or os.getenv("CIRISLENS_SCRUB_KEY_PATH")
@@ -311,7 +310,7 @@ class PIIScrubber:
             logger.info("No scrub signing key found at %s. Generating new key.", key_path)
             self._signing_key = self._create_and_save_key(key_path)
 
-    def _parse_key_data(self, key_data: bytes, key_path: "Path") -> bytes | None:
+    def _parse_key_data(self, key_data: bytes, key_path: Path) -> bytes | None:
         """Parse key data, accepting both raw 32-byte keys and base64-encoded keys."""
         # Strip whitespace/newlines
         key_data = key_data.strip()
@@ -327,8 +326,8 @@ class PIIScrubber:
             if len(decoded) == 32:
                 logger.info("Decoded base64 scrub key from %s", key_path)
                 return decoded
-        except Exception:
-            pass
+        except Exception:  # noqa: S110
+            pass  # Expected for non-base64 keys
 
         try:
             # Try URL-safe base64
@@ -336,8 +335,8 @@ class PIIScrubber:
             if len(decoded) == 32:
                 logger.info("Decoded URL-safe base64 scrub key from %s", key_path)
                 return decoded
-        except Exception:
-            pass
+        except Exception:  # noqa: S110
+            pass  # Expected for non-base64 keys
 
         # Invalid key
         logger.warning(
@@ -348,10 +347,8 @@ class PIIScrubber:
         )
         return None
 
-    def _create_and_save_key(self, key_path: "Path") -> bytes | None:
+    def _create_and_save_key(self, key_path: Path) -> bytes | None:
         """Generate a new signing key and save it to disk."""
-        from pathlib import Path  # noqa: PLC0415
-
         try:
             # Ensure parent directory exists
             key_path.parent.mkdir(parents=True, exist_ok=True)
