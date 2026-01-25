@@ -49,6 +49,19 @@ except ImportError:
         validate_score,
     )
 
+try:
+    from trace_schema_registry import (
+        SchemaVersion,
+        is_scoring_eligible,
+        validate_trace_schema,
+    )
+except ImportError:
+    from api.trace_schema_registry import (
+        SchemaVersion,
+        is_scoring_eligible,
+        validate_trace_schema,
+    )
+
 logger = logging.getLogger(__name__)
 
 
@@ -1217,14 +1230,15 @@ async def _store_mock_trace(
             consent_timestamp, timestamp, trace_level,
             mock_models, mock_reason,
             has_positive_moment, has_execution_error, execution_time_ms,
-            selection_confidence, is_recursive, follow_up_thought_id, api_bases_used
+            selection_confidence, is_recursive, follow_up_thought_id, api_bases_used,
+            schema_version
         ) VALUES (
             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
             $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
             $21, $22, $23, $24, $25, $26, $27, $28, $29, $30,
             $31, $32, $33, $34, $35, $36, $37, $38, $39, $40,
             $41, $42, $43, $44, $45, $46, $47, $48, $49, $50,
-            $51, $52, $53, $54, $55, $56, $57, $58, $59
+            $51, $52, $53, $54, $55, $56, $57, $58, $59, $60
         )
         ON CONFLICT (trace_id) DO NOTHING
         """,
@@ -1287,6 +1301,7 @@ async def _store_mock_trace(
         metadata["is_recursive"],                    # $57
         metadata["follow_up_thought_id"],            # $58
         metadata["api_bases_used"],                  # $59 - array
+        metadata["schema_version"],                  # $60 - for scoring eligibility
     )
 
 
@@ -1360,6 +1375,8 @@ def extract_trace_metadata(trace: CovenantTrace, trace_level: str = "generic") -
         "energy_mwh": None,
         "llm_calls": None,
         "models_used": None,
+        # Schema version (detected during validation)
+        "schema_version": None,
         # Components as dicts (for JSONB storage)
         "thought_start": None,
         "snapshot_and_context": None,
@@ -1557,6 +1574,56 @@ async def receive_covenant_events(
         for event in request.events:
             trace = event.trace
 
+            # =================================================================
+            # SCHEMA VALIDATION - First line of defense
+            # Ensures trace conforms to known schema before any processing
+            # =================================================================
+            schema_result = validate_trace_schema(
+                trace.trace_id,
+                [c.model_dump() for c in trace.components],
+            )
+
+            if not schema_result.is_valid:
+                # Log to malformation table for audit
+                logger.warning(
+                    "SCHEMA_INVALID trace %s: version=%s errors=%s",
+                    trace.trace_id,
+                    schema_result.schema_version.value,
+                    schema_result.errors,
+                )
+                rejected += 1
+                rejected_traces.append(trace.trace_id)
+                errors.append(f"{trace.trace_id}: Schema validation failed - {schema_result.errors}")
+
+                # Store in malformed_traces for audit
+                try:
+                    await conn.execute(
+                        """
+                        INSERT INTO cirislens.malformed_traces (
+                            trace_id, received_at, rejection_reason, raw_data,
+                            source_ip, agent_id_hash
+                        ) VALUES ($1, $2, $3, $4, $5, $6)
+                        ON CONFLICT (trace_id) DO NOTHING
+                        """,
+                        trace.trace_id,
+                        datetime.now(UTC),
+                        f"Schema validation failed: {schema_result.errors}",
+                        json.dumps([c.model_dump() for c in trace.components]),
+                        None,  # source_ip not available here
+                        trace.agent_id_hash,
+                    )
+                except Exception as e:
+                    logger.error("Failed to log malformed trace %s: %s", trace.trace_id, e)
+                continue
+
+            # Log detected schema version for monitoring
+            logger.info(
+                "SCHEMA_VALID trace %s: version=%s event_types=%s",
+                trace.trace_id,
+                schema_result.schema_version.value,
+                schema_result.detected_event_types,
+            )
+
             # Verify signature
             is_valid, error = verify_trace_signature(trace, public_keys)
 
@@ -1645,6 +1712,16 @@ async def receive_covenant_events(
 
             # Extract metadata from components (now scrubbed and sanitized)
             metadata = extract_trace_metadata(trace, trace_level=request.trace_level)
+
+            # Add detected schema version (from validation above)
+            metadata["schema_version"] = schema_result.schema_version.value
+
+            # Log scoring eligibility
+            if is_scoring_eligible(schema_result.schema_version):
+                logger.debug(
+                    "Trace %s eligible for CIRIS Scoring (schema %s)",
+                    trace.trace_id, schema_result.schema_version.value
+                )
 
             try:
                 # Type conversions and validation for database compatibility
@@ -1742,7 +1819,8 @@ async def receive_covenant_events(
                         original_content_hash, pii_scrubbed, scrub_timestamp,
                         scrub_signature, scrub_key_id,
                         has_positive_moment, has_execution_error, execution_time_ms,
-                        selection_confidence, is_recursive, follow_up_thought_id, api_bases_used
+                        selection_confidence, is_recursive, follow_up_thought_id, api_bases_used,
+                        schema_version
                     ) VALUES (
                         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
                         $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
@@ -1751,7 +1829,7 @@ async def receive_covenant_events(
                         $41, $42, $43, $44, $45, $46, $47, $48, $49, $50,
                         $51, $52, $53, $54, $55, $56, $57, $58, $59, $60,
                         $61, $62, $63, $64, $65, $66, $67, $68, $69, $70,
-                        $71, $72
+                        $71, $72, $73
                     )
                     ON CONFLICT (trace_id, timestamp) DO NOTHING
                     """,
@@ -1827,6 +1905,7 @@ async def receive_covenant_events(
                     metadata["is_recursive"],                    # $70
                     metadata["follow_up_thought_id"],            # $71
                     metadata["api_bases_used"],                  # $72 - array
+                    metadata["schema_version"],                  # $73 - for scoring eligibility
                 )
                 accepted += 1
                 logger.info("Successfully stored trace %s", trace.trace_id)
