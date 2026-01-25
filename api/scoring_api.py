@@ -42,43 +42,8 @@ def get_db_pool() -> Any:
 # API Endpoints
 # ============================================================================
 
-@router.get("/capacity/{agent_name}")
-async def get_agent_score(
-    agent_name: str,
-    window_days: Annotated[int, Query(ge=1, le=90)] = 7,
-):
-    """
-    Get CIRIS Capacity Score for a specific agent.
-
-    Args:
-        agent_name: Name of the agent
-        window_days: Scoring window in days (1-90, default: 7)
-
-    Returns:
-        Complete CIRIS score with all factors
-    """
-    db_pool = get_db_pool()
-    if db_pool is None:
-        raise HTTPException(status_code=503, detail="Database not available")
-
-    try:
-        async with db_pool.acquire() as conn:
-            score = await calculate_ciris_score(conn, agent_name, window_days)
-
-            if score.total_traces == 0:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"No traces found for agent '{agent_name}' in the last {window_days} days",
-                )
-
-            return score.to_dict()
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception("Error calculating score for %s", agent_name)
-        raise HTTPException(status_code=500, detail=str(e)) from e
-
+# NOTE: Fleet endpoint MUST come before parameterized endpoint
+# to avoid FastAPI matching "fleet" as an agent_name
 
 @router.get("/capacity/fleet")
 async def get_fleet_score(
@@ -116,6 +81,44 @@ async def get_fleet_score(
 
     except Exception as e:
         logger.exception("Error calculating fleet scores")
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@router.get("/capacity/{agent_name}")
+async def get_agent_score(
+    agent_name: str,
+    window_days: Annotated[int, Query(ge=1, le=90)] = 7,
+):
+    """
+    Get CIRIS Capacity Score for a specific agent.
+
+    Args:
+        agent_name: Name of the agent
+        window_days: Scoring window in days (1-90, default: 7)
+
+    Returns:
+        Complete CIRIS score with all factors
+    """
+    db_pool = get_db_pool()
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    try:
+        async with db_pool.acquire() as conn:
+            score = await calculate_ciris_score(conn, agent_name, window_days)
+
+            if score.total_traces == 0:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"No traces found for agent '{agent_name}' in the last {window_days} days",
+                )
+
+            return score.to_dict()
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Error calculating score for %s", agent_name)
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
