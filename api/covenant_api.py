@@ -34,6 +34,21 @@ try:
 except ImportError:
     from api.pii_scrubber import get_scrubber, scrub_dict_recursive
 
+try:
+    from security_sanitizer import (
+        sanitize_trace_for_storage,
+        validate_identifier,
+        validate_models_used,
+        validate_score,
+    )
+except ImportError:
+    from api.security_sanitizer import (
+        sanitize_trace_for_storage,
+        validate_identifier,
+        validate_models_used,
+        validate_score,
+    )
+
 logger = logging.getLogger(__name__)
 
 
@@ -1170,13 +1185,13 @@ async def _store_mock_trace(
     conn,
     trace,
     metadata: dict[str, Any],
-    models_used_json: str | None,
+    models_used_list: list[str] | None,
     batch_timestamp,
     consent_timestamp,
     signature_verified: bool,
 ) -> None:
     """Store a mock trace in the mock repository for dev/testing."""
-    mock_models = _get_mock_models(metadata.get("models_used"))
+    mock_models = _get_mock_models(models_used_list)
 
     await conn.execute(
         """
@@ -1254,7 +1269,7 @@ async def _store_mock_trace(
         metadata["tokens_total"],                    # $41
         metadata["cost_cents"],                      # $42
         metadata["llm_calls"],                       # $43
-        models_used_json,                            # $44
+        models_used_list,                            # $44
         trace.signature,                             # $45
         trace.signature_key_id,                      # $46
         signature_verified,                          # $47 - signature verified status
@@ -1573,11 +1588,54 @@ async def receive_covenant_events(
                     trace.trace_id, original_content_hash[:16]
                 )
 
-            # Extract metadata from components (now scrubbed if full_traces)
+            # =================================================================
+            # SECURITY SANITIZATION - applies to ALL trace levels
+            # Detects and neutralizes XSS, SQL injection, and other payloads
+            # =================================================================
+            security_sanitized = False
+            sanitization_detections: list[str] = []
+            try:
+                # Sanitize trace components
+                trace_dict = {"components": [c.model_dump() for c in trace.components]}
+                sanitized_trace, sanitization_result = sanitize_trace_for_storage(
+                    trace_dict, trace_level=request.trace_level
+                )
+
+                # Update trace components with sanitized data
+                if sanitization_result.fields_modified > 0:
+                    security_sanitized = True
+                    sanitization_detections = sanitization_result.total_detections
+                    # Apply sanitized data back to trace components
+                    for i, comp in enumerate(trace.components):
+                        if i < len(sanitized_trace.get("components", [])):
+                            sanitized_comp = sanitized_trace["components"][i]
+                            if hasattr(comp, "data") and isinstance(comp.data, dict):
+                                comp.data.update(sanitized_comp.get("data", {}))
+                    logger.warning(
+                        "SECURITY_SANITIZATION trace %s: detections=%s modified=%d",
+                        trace.trace_id,
+                        sanitization_detections,
+                        sanitization_result.fields_modified,
+                    )
+            except Exception as e:
+                logger.error("Security sanitization failed for %s: %s", trace.trace_id, e)
+                # Continue processing - don't block on sanitization failure
+
+            # Extract metadata from components (now scrubbed and sanitized)
             metadata = extract_trace_metadata(trace, trace_level=request.trace_level)
 
             try:
-                # Type conversions for database compatibility
+                # Type conversions and validation for database compatibility
+
+                # Validate and sanitize models_used
+                validated_models, model_issues = validate_models_used(metadata["models_used"])
+                if model_issues:
+                    logger.debug(
+                        "models_used validation issues for %s: %s",
+                        trace.trace_id, model_issues
+                    )
+                metadata["models_used"] = validated_models
+
                 # audit_entry_id: convert string UUID to UUID object if present
                 audit_entry_id = metadata["audit_entry_id"]
                 if audit_entry_id and isinstance(audit_entry_id, str):
@@ -1601,8 +1659,10 @@ async def receive_covenant_events(
                         "ROUTING mock trace %s to mock repo (models: %s, level: %s)",
                         trace.trace_id, metadata["models_used"], request.trace_level
                     )
+                    # Pass original list for TEXT[] column, not JSON string
+                    models_used_list = metadata["models_used"] or []
                     await _store_mock_trace(
-                        conn, trace, metadata, models_used,
+                        conn, trace, metadata, models_used_list,
                         request.batch_timestamp, request.consent_timestamp,
                         signature_verified=is_valid,
                     )
