@@ -21,6 +21,7 @@ from pydantic import BaseModel, EmailStr
 
 # Import Covenant API router
 from covenant_api import router as covenant_router
+from scoring_api import router as scoring_router
 from log_ingest import LogIngestService
 from manager_collector import ManagerCollector
 from migrations import startup_migrations
@@ -64,6 +65,9 @@ app.add_middleware(
 
 # Include Covenant API router for CIRIS Covenant 1.0b compliance
 app.include_router(covenant_router)
+
+# Include Scoring API router for CIRIS Capacity Scores
+app.include_router(scoring_router)
 
 
 # Configuration from environment
