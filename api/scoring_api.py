@@ -229,6 +229,7 @@ async def get_fleet_score(
     cached = score_cache.get(key)
     if cached is not None:
         logger.debug("Cache hit for fleet scores (window=%d)", window_days)
+        cached["cache"]["cached"] = True
         return cached
 
     db_pool = get_db_pool()
@@ -292,6 +293,7 @@ async def get_agent_score(
     cached = score_cache.get(key)
     if cached is not None:
         logger.debug("Cache hit for agent %s (window=%d)", agent_name, window_days)
+        cached["cache"]["cached"] = True
         return cached
 
     db_pool = get_db_pool()
@@ -352,6 +354,7 @@ async def get_agent_factors(
     cached = score_cache.get(key)
     if cached is not None:
         logger.debug("Cache hit for factors %s (window=%d)", agent_name, window_days)
+        cached["cache"]["cached"] = True
         return cached
 
     db_pool = get_db_pool()
@@ -468,6 +471,7 @@ async def get_scoring_alerts(
     cached = score_cache.get(key)
     if cached is not None:
         logger.debug("Cache hit for alerts (threshold=%.2f, window=%d)", threshold, window_days)
+        cached["cache"]["cached"] = True
         return cached
 
     db_pool = get_db_pool()
