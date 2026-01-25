@@ -248,6 +248,18 @@ def sign_content(content: str | bytes, signing_key_bytes: bytes) -> str:
         return ""
 
 
+def _generate_scrub_key() -> bytes:
+    """Generate a new Ed25519 signing key (32 bytes seed)."""
+    try:
+        from nacl.signing import SigningKey  # noqa: PLC0415
+
+        key = SigningKey.generate()
+        return bytes(key)
+    except ImportError:
+        # Fallback to os.urandom if nacl not available
+        return os.urandom(32)
+
+
 class PIIScrubber:
     """
     PII Scrubber with cryptographic envelope preservation.
@@ -259,35 +271,101 @@ class PIIScrubber:
     4. Scrubbed version signed by CIRISLens
     """
 
+    DEFAULT_KEY_PATH = "/data/keys/scrub_signing.key"
+
     def __init__(self, scrub_key_path: str | None = None):
         """
-        Initialize scrubber with optional signing key.
+        Initialize scrubber with signing key (auto-generates if missing).
 
         Args:
             scrub_key_path: Path to Ed25519 private key for signing scrubbed data.
                            If not provided, will look for CIRISLENS_SCRUB_KEY_PATH env var
-                           or generate a warning.
+                           or use default path. Key is auto-generated if missing.
         """
         self.scrub_key_id = "lens-scrub-v1"
         self._signing_key: bytes | None = None
 
-        key_path_str = scrub_key_path or os.getenv("CIRISLENS_SCRUB_KEY_PATH")
+        from pathlib import Path  # noqa: PLC0415
 
-        if key_path_str:
-            from pathlib import Path  # noqa: PLC0415
+        key_path_str = (
+            scrub_key_path
+            or os.getenv("CIRISLENS_SCRUB_KEY_PATH")
+            or self.DEFAULT_KEY_PATH
+        )
+        key_path = Path(key_path_str)
 
-            key_path = Path(key_path_str)
-            if key_path.exists():
-                try:
-                    self._signing_key = key_path.read_bytes()
+        # Try to load existing key
+        if key_path.exists():
+            try:
+                key_data = key_path.read_bytes()
+                if len(key_data) == 32:
+                    self._signing_key = key_data
                     logger.info("Loaded CIRISLens scrub signing key from %s", key_path)
-                except Exception as e:
-                    logger.error("Failed to load scrub signing key: %s", e)
+                else:
+                    logger.warning(
+                        "Scrub key at %s has invalid size (%d bytes, expected 32). Regenerating.",
+                        key_path,
+                        len(key_data),
+                    )
+                    self._signing_key = self._create_and_save_key(key_path)
+            except Exception as e:
+                logger.error("Failed to load scrub signing key: %s", e)
+                self._signing_key = self._create_and_save_key(key_path)
         else:
-            logger.warning(
-                "No scrub signing key configured. Set CIRISLENS_SCRUB_KEY_PATH "
-                "or pass scrub_key_path. Scrubbed traces will not be signed."
+            # Key doesn't exist - create it
+            logger.info("No scrub signing key found at %s. Generating new key.", key_path)
+            self._signing_key = self._create_and_save_key(key_path)
+
+    def _create_and_save_key(self, key_path: "Path") -> bytes | None:
+        """Generate a new signing key and save it to disk."""
+        from pathlib import Path  # noqa: PLC0415
+
+        try:
+            # Ensure parent directory exists
+            key_path.parent.mkdir(parents=True, exist_ok=True)
+
+            # Generate new key
+            new_key = _generate_scrub_key()
+
+            # Save with restricted permissions
+            key_path.write_bytes(new_key)
+            key_path.chmod(0o600)
+
+            logger.info("Generated and saved new scrub signing key to %s", key_path)
+
+            # Log the public key for registration
+            self._log_public_key(new_key)
+
+            return new_key
+        except Exception as e:
+            logger.error("Failed to create scrub signing key at %s: %s", key_path, e)
+            return None
+
+    def _log_public_key(self, private_key: bytes) -> None:
+        """Log the public key for database registration."""
+        try:
+            from nacl.signing import SigningKey  # noqa: PLC0415
+
+            signing_key = SigningKey(private_key)
+            public_key = signing_key.verify_key
+            public_key_b64 = base64.urlsafe_b64encode(bytes(public_key)).decode('ascii')
+
+            logger.info(
+                "SCRUB_KEY_PUBLIC: key_id=%s public_key=%s",
+                self.scrub_key_id,
+                public_key_b64,
             )
+            logger.info(
+                "Register this key in the database with:\n"
+                "INSERT INTO cirislens.lens_signing_keys (key_id, public_key, created_at) "
+                "VALUES ('%s', '%s', NOW()) ON CONFLICT (key_id) DO UPDATE SET public_key = EXCLUDED.public_key;",
+                self.scrub_key_id,
+                public_key_b64,
+            )
+        except ImportError:
+            logger.warning("nacl not available - cannot log public key")
+        except Exception as e:
+            logger.error("Failed to log public key: %s", e)
 
     def scrub_trace(
         self,
