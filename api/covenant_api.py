@@ -1215,14 +1215,16 @@ async def _store_mock_trace(
             cost_cents, llm_calls, models_used,
             signature, signature_key_id, signature_verified,
             consent_timestamp, timestamp, trace_level,
-            mock_models, mock_reason
+            mock_models, mock_reason,
+            has_positive_moment, has_execution_error, execution_time_ms,
+            selection_confidence, is_recursive, follow_up_thought_id, api_bases_used
         ) VALUES (
             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
             $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
             $21, $22, $23, $24, $25, $26, $27, $28, $29, $30,
             $31, $32, $33, $34, $35, $36, $37, $38, $39, $40,
             $41, $42, $43, $44, $45, $46, $47, $48, $49, $50,
-            $51, $52
+            $51, $52, $53, $54, $55, $56, $57, $58, $59
         )
         ON CONFLICT (trace_id) DO NOTHING
         """,
@@ -1278,6 +1280,13 @@ async def _store_mock_trace(
         metadata["trace_level"],                     # $50
         mock_models,                                 # $51 - mock_models array
         "models_used contains mock",                 # $52 - mock_reason
+        metadata["has_positive_moment"],             # $53 - S factor scoring
+        metadata["has_execution_error"],             # $54
+        metadata["execution_time_ms"],               # $55
+        metadata["selection_confidence"],            # $56
+        metadata["is_recursive"],                    # $57
+        metadata["follow_up_thought_id"],            # $58
+        metadata["api_bases_used"],                  # $59 - array
     )
 
 
@@ -1311,8 +1320,16 @@ def extract_trace_metadata(trace: CovenantTrace, trace_level: str = "generic") -
         # Action selection
         "action_rationale": None,
         "selected_action": None,
+        "selection_confidence": None,
+        "is_recursive": None,
         "action_success": None,
         "processing_ms": None,
+        # Positive moments (for S factor scoring)
+        "has_positive_moment": None,
+        "has_execution_error": None,
+        "execution_time_ms": None,
+        "follow_up_thought_id": None,
+        "api_bases_used": None,
         # Conscience - overall
         "conscience_passed": None,
         "action_was_overridden": None,
@@ -1445,6 +1462,9 @@ def extract_trace_metadata(trace: CovenantTrace, trace_level: str = "generic") -
             if selected and "." in selected:
                 selected = selected.split(".")[-1]
             metadata["selected_action"] = selected
+            # ASPDMA decision metadata
+            metadata["selection_confidence"] = data.get("selection_confidence")
+            metadata["is_recursive"] = data.get("is_recursive")
 
         elif event_type == "CONSCIENCE_RESULT":
             metadata["conscience_result"] = data
@@ -1474,6 +1494,12 @@ def extract_trace_metadata(trace: CovenantTrace, trace_level: str = "generic") -
                 metadata["selected_action"] = data.get("action_executed")
             metadata["action_success"] = data.get("execution_success")
             metadata["processing_ms"] = data.get("execution_time_ms")
+            # Positive moment indicator (key for S factor scoring)
+            metadata["has_positive_moment"] = data.get("has_positive_moment")
+            metadata["has_execution_error"] = data.get("has_execution_error")
+            metadata["execution_time_ms"] = data.get("execution_time_ms")
+            metadata["follow_up_thought_id"] = data.get("follow_up_thought_id")
+            metadata["api_bases_used"] = data.get("api_bases_used")
             # Audit trail
             metadata["audit_entry_id"] = data.get("audit_entry_id")
             metadata["audit_sequence_number"] = data.get("audit_sequence_number")
@@ -1714,7 +1740,9 @@ async def receive_covenant_events(
                         signature, signature_key_id, signature_verified,
                         consent_timestamp, timestamp, trace_level,
                         original_content_hash, pii_scrubbed, scrub_timestamp,
-                        scrub_signature, scrub_key_id
+                        scrub_signature, scrub_key_id,
+                        has_positive_moment, has_execution_error, execution_time_ms,
+                        selection_confidence, is_recursive, follow_up_thought_id, api_bases_used
                     ) VALUES (
                         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
                         $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
@@ -1722,7 +1750,8 @@ async def receive_covenant_events(
                         $31, $32, $33, $34, $35, $36, $37, $38, $39, $40,
                         $41, $42, $43, $44, $45, $46, $47, $48, $49, $50,
                         $51, $52, $53, $54, $55, $56, $57, $58, $59, $60,
-                        $61, $62, $63, $64, $65
+                        $61, $62, $63, $64, $65, $66, $67, $68, $69, $70,
+                        $71, $72
                     )
                     ON CONFLICT (trace_id, timestamp) DO NOTHING
                     """,
@@ -1791,6 +1820,13 @@ async def receive_covenant_events(
                     scrub_timestamp,                             # $63
                     scrub_signature,                             # $64
                     scrub_key_id,                                # $65
+                    metadata["has_positive_moment"],             # $66 - S factor scoring
+                    metadata["has_execution_error"],             # $67
+                    metadata["execution_time_ms"],               # $68
+                    metadata["selection_confidence"],            # $69
+                    metadata["is_recursive"],                    # $70
+                    metadata["follow_up_thought_id"],            # $71
+                    metadata["api_bases_used"],                  # $72 - array
                 )
                 accepted += 1
                 logger.info("Successfully stored trace %s", trace.trace_id)
