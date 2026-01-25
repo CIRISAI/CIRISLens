@@ -556,7 +556,7 @@ async def calculate_factor_S(
         COUNT(*) as total_traces,
         AVG(
             CASE WHEN coherence_passed THEN 1.0 ELSE 0.0 END
-            * EXP(-$4 * EXTRACT(EPOCH FROM ($5::timestamptz - timestamp)) / 86400)
+            * EXP(-($4::float8) * EXTRACT(EPOCH FROM ($5::timestamptz - timestamp)) / 86400.0)
         ) as decayed_coherence,
         AVG(CASE WHEN coherence_passed THEN 1.0 ELSE 0.0 END) as raw_coherence_rate
     FROM cirislens.covenant_traces
