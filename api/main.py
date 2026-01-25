@@ -21,11 +21,11 @@ from pydantic import BaseModel, EmailStr
 
 # Import Covenant API router
 from covenant_api import router as covenant_router
-from scoring_api import router as scoring_router
 from log_ingest import LogIngestService
 from manager_collector import ManagerCollector
 from migrations import startup_migrations
 from otlp_collector import OTLPCollector
+from scoring_api import router as scoring_router
 from token_manager import TokenManager
 
 # Configure logging
