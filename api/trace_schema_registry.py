@@ -259,7 +259,7 @@ SCHEMA_DEFINITIONS: dict[SchemaVersion, dict[str, Any]] = {
 # =============================================================================
 
 
-def detect_schema_version(  # noqa: PLR0911, PLR0912
+def detect_schema_version(  # noqa: PLR0912
     event_types: set[str],
     components: list[dict[str, Any]] | None = None,
 ) -> SchemaVersion:
