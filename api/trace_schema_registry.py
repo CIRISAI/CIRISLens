@@ -24,6 +24,7 @@ class SchemaVersion(str, Enum):
     V1_8 = "1.8"  # Original format with 6 component event_types
     V1_9 = "1.9"  # Updated format - entropy/coherence at top level
     V1_9_1 = "1.9.1"  # Adds has_positive_moment, ethical faculty booleans
+    V1_9_3 = "1.9.3"  # Adds IDMA_RESULT as separate event, optional TSASPDMA_RESULT
     UNKNOWN = "unknown"
 
 
@@ -181,6 +182,75 @@ SCHEMA_DEFINITIONS: dict[SchemaVersion, dict[str, Any]] = {
             "follow_up_thought_id": ["ACTION_RESULT", "data", "follow_up_thought_id"],
         },
     },
+    # V1.9.3 - IDMA_RESULT as separate event, optional TSASPDMA_RESULT for TOOL actions
+    SchemaVersion.V1_9_3: {
+        "description": "CIRIS trace format 1.9.3 - separate IDMA_RESULT, optional TSASPDMA_RESULT",
+        "required_event_types": {
+            "THOUGHT_START",
+            "SNAPSHOT_AND_CONTEXT",
+            "DMA_RESULTS",
+            "ASPDMA_RESULT",
+            "CONSCIENCE_RESULT",
+            "ACTION_RESULT",
+            "IDMA_RESULT",  # New in 1.9.3: IDMA as separate event
+        },
+        "optional_event_types": {
+            "TSASPDMA_RESULT",  # Tool-Specific ASPDMA, only present for TOOL actions
+        },
+        "min_components": 7,
+        "max_components": 8,  # 7 required + 1 optional TSASPDMA
+        # V1.9.3 specific fields for scoring (same as 1.9.1 plus IDMA fields)
+        "scoring_fields": {
+            "has_positive_moment": ["ACTION_RESULT", "data", "has_positive_moment"],
+            "has_execution_error": ["ACTION_RESULT", "data", "has_execution_error"],
+            "entropy_passed": ["CONSCIENCE_RESULT", "data", "entropy_passed"],
+            "coherence_passed": ["CONSCIENCE_RESULT", "data", "coherence_passed"],
+            "optimization_veto_passed": ["CONSCIENCE_RESULT", "data", "optimization_veto_passed"],
+            "epistemic_humility_passed": ["CONSCIENCE_RESULT", "data", "epistemic_humility_passed"],
+        },
+        "field_paths": {
+            "agent_name": ["SNAPSHOT_AND_CONTEXT", "data", "system_snapshot", "agent_identity", "agent_id"],
+            "models_used": ["ACTION_RESULT", "data", "models_used"],
+            "thought_type": ["THOUGHT_START", "data", "thought_type"],
+            "thought_depth": ["THOUGHT_START", "data", "thought_depth"],
+            "cognitive_state": ["SNAPSHOT_AND_CONTEXT", "data", "cognitive_state"],
+            "csdma_plausibility_score": ["DMA_RESULTS", "data", "csdma", "plausibility_score"],
+            "dsdma_domain_alignment": ["DMA_RESULTS", "data", "dsdma", "domain_alignment"],
+            "dsdma_domain": ["DMA_RESULTS", "data", "dsdma", "domain"],
+            # IDMA fields from separate IDMA_RESULT event in 1.9.3
+            "idma_k_eff": ["IDMA_RESULT", "data", "k_eff"],
+            "idma_correlation_risk": ["IDMA_RESULT", "data", "correlation_risk"],
+            "idma_fragility_flag": ["IDMA_RESULT", "data", "fragility_flag"],
+            "idma_phase": ["IDMA_RESULT", "data", "phase"],
+            "pdma_stakeholders": ["DMA_RESULTS", "data", "pdma", "stakeholders"],
+            "pdma_conflicts": ["DMA_RESULTS", "data", "pdma", "conflicts"],
+            "action_rationale": ["ASPDMA_RESULT", "data", "action_rationale"],
+            "selected_action": ["ASPDMA_RESULT", "data", "selected_action"],
+            "is_recursive": ["ASPDMA_RESULT", "data", "is_recursive"],
+            "conscience_passed": ["CONSCIENCE_RESULT", "data", "conscience_passed"],
+            "action_was_overridden": ["CONSCIENCE_RESULT", "data", "action_was_overridden"],
+            "entropy_level": ["CONSCIENCE_RESULT", "data", "entropy_level"],
+            "coherence_level": ["CONSCIENCE_RESULT", "data", "coherence_level"],
+            "entropy_passed": ["CONSCIENCE_RESULT", "data", "entropy_passed"],
+            "coherence_passed": ["CONSCIENCE_RESULT", "data", "coherence_passed"],
+            "optimization_veto_passed": ["CONSCIENCE_RESULT", "data", "optimization_veto_passed"],
+            "epistemic_humility_passed": ["CONSCIENCE_RESULT", "data", "epistemic_humility_passed"],
+            "tokens_input": ["ACTION_RESULT", "data", "tokens_input"],
+            "tokens_output": ["ACTION_RESULT", "data", "tokens_output"],
+            "tokens_total": ["ACTION_RESULT", "data", "tokens_total"],
+            "cost_cents": ["ACTION_RESULT", "data", "cost_cents"],
+            "carbon_grams": ["ACTION_RESULT", "data", "carbon_grams"],
+            "energy_mwh": ["ACTION_RESULT", "data", "energy_mwh"],
+            "llm_calls": ["ACTION_RESULT", "data", "llm_calls"],
+            "has_positive_moment": ["ACTION_RESULT", "data", "has_positive_moment"],
+            "has_execution_error": ["ACTION_RESULT", "data", "has_execution_error"],
+            "execution_time_ms": ["ACTION_RESULT", "data", "execution_time_ms"],
+            "follow_up_thought_id": ["ACTION_RESULT", "data", "follow_up_thought_id"],
+            # TSASPDMA fields (optional, for TOOL actions)
+            "tool_name": ["TSASPDMA_RESULT", "data", "tool_name"],
+            "tool_parameters": ["TSASPDMA_RESULT", "data", "tool_parameters"],
+        },
+    },
 }
 
 
@@ -196,12 +266,42 @@ def detect_schema_version(
     """
     Detect which schema version a trace belongs to based on its event_types and content.
 
-    V1.8 vs V1.9+: Same event types, but V1.9+ has entropy_level at top level
+    V1.9.3: Has IDMA_RESULT as separate event (7 required events), optional TSASPDMA_RESULT
+    V1.8 vs V1.9+: Same 6 event types, but V1.9+ has entropy_level at top level
     V1.9 vs V1.9.1: V1.9.1 has has_positive_moment field
 
     Returns SchemaVersion.UNKNOWN if no match found.
     """
-    # All versions use the same 6 event types
+    # V1.9.3 detection: IDMA_RESULT as separate event type
+    # This is the distinguishing feature of 1.9.3
+    if "IDMA_RESULT" in event_types:
+        base_required = {
+            "THOUGHT_START",
+            "SNAPSHOT_AND_CONTEXT",
+            "DMA_RESULTS",
+            "ASPDMA_RESULT",
+            "CONSCIENCE_RESULT",
+            "ACTION_RESULT",
+            "IDMA_RESULT",
+        }
+        optional = {"TSASPDMA_RESULT"}  # Only present for TOOL actions
+
+        # Check if we have all required events (optional TSASPDMA_RESULT is OK)
+        if base_required.issubset(event_types):
+            # Check for unexpected event types
+            all_known = base_required | optional
+            unexpected = event_types - all_known
+            if not unexpected:
+                return SchemaVersion.V1_9_3
+            else:
+                logger.warning(
+                    "V1.9.3 trace has unexpected event_types: %s",
+                    unexpected,
+                )
+                # Still treat as V1.9.3 if base requirements met
+                return SchemaVersion.V1_9_3
+
+    # V1.8/V1.9/V1.9.1 all use the same 6 event types
     required_event_types = {
         "THOUGHT_START",
         "SNAPSHOT_AND_CONTEXT",
@@ -355,8 +455,10 @@ def is_scoring_eligible(schema_version: SchemaVersion) -> bool:
     - has_positive_moment for S factor
     - All ethical faculty booleans
     - selection_confidence for I_inc calibration
+
+    V1.9.3 also supports scoring with IDMA_RESULT as separate event.
     """
-    scoring_versions = {SchemaVersion.V1_9_1}
+    scoring_versions = {SchemaVersion.V1_9_1, SchemaVersion.V1_9_3}
     return schema_version in scoring_versions
 
 
