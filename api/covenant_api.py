@@ -1231,14 +1231,17 @@ async def _store_mock_trace(
             mock_models, mock_reason,
             has_positive_moment, has_execution_error, execution_time_ms,
             selection_confidence, is_recursive, follow_up_thought_id, api_bases_used,
-            schema_version
+            schema_version,
+            idma_result, tsaspdma_result,
+            tool_name, tool_parameters, tsaspdma_reasoning, tsaspdma_approved
         ) VALUES (
             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
             $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
             $21, $22, $23, $24, $25, $26, $27, $28, $29, $30,
             $31, $32, $33, $34, $35, $36, $37, $38, $39, $40,
             $41, $42, $43, $44, $45, $46, $47, $48, $49, $50,
-            $51, $52, $53, $54, $55, $56, $57, $58, $59, $60
+            $51, $52, $53, $54, $55, $56, $57, $58, $59, $60,
+            $61, $62, $63, $64, $65, $66
         )
         ON CONFLICT (trace_id) DO NOTHING
         """,
@@ -1302,6 +1305,12 @@ async def _store_mock_trace(
         metadata["follow_up_thought_id"],            # $58
         metadata["api_bases_used"],                  # $59 - array
         metadata["schema_version"],                  # $60 - for scoring eligibility
+        json.dumps(metadata["idma_result"]),         # $61 - V1.9.3 IDMA separate event
+        json.dumps(metadata["tsaspdma_result"]),     # $62 - V1.9.3 TSASPDMA result
+        metadata["tool_name"],                       # $63 - tool name from TSASPDMA
+        json.dumps(metadata["tool_parameters"]),     # $64 - tool parameters
+        metadata["tsaspdma_reasoning"],              # $65 - TSASPDMA reasoning
+        metadata["tsaspdma_approved"],               # $66 - TSASPDMA approval status
     )
 
 
@@ -1384,6 +1393,14 @@ def extract_trace_metadata(trace: CovenantTrace, trace_level: str = "generic") -
         "aspdma_result": None,
         "conscience_result": None,
         "action_result": None,
+        # V1.9.3: IDMA as separate event
+        "idma_result": None,
+        # V1.9.3: TSASPDMA (Tool-Specific ASPDMA) for TOOL actions
+        "tsaspdma_result": None,
+        "tool_name": None,
+        "tool_parameters": None,
+        "tsaspdma_reasoning": None,
+        "tsaspdma_approved": None,
     }
 
     # Extract trace type from task_id if present
@@ -1482,6 +1499,23 @@ def extract_trace_metadata(trace: CovenantTrace, trace_level: str = "generic") -
             # ASPDMA decision metadata
             metadata["selection_confidence"] = data.get("selection_confidence")
             metadata["is_recursive"] = data.get("is_recursive")
+
+        elif event_type == "IDMA_RESULT":
+            # V1.9.3: IDMA as separate event (not nested in DMA_RESULTS)
+            metadata["idma_result"] = data
+            # Extract IDMA fields (same as from DMA_RESULTS.idma but from separate event)
+            metadata["idma_k_eff"] = data.get("k_eff")
+            metadata["idma_correlation_risk"] = data.get("correlation_risk")
+            metadata["idma_fragility_flag"] = data.get("fragility_flag")
+            metadata["idma_phase"] = data.get("phase")
+
+        elif event_type == "TSASPDMA_RESULT":
+            # V1.9.3: Tool-Specific ASPDMA for TOOL actions
+            metadata["tsaspdma_result"] = data
+            metadata["tool_name"] = data.get("tool_name")
+            metadata["tool_parameters"] = data.get("tool_parameters")
+            metadata["tsaspdma_reasoning"] = data.get("reasoning")
+            metadata["tsaspdma_approved"] = data.get("approved")
 
         elif event_type == "CONSCIENCE_RESULT":
             metadata["conscience_result"] = data
@@ -1825,7 +1859,9 @@ async def receive_covenant_events(
                         scrub_signature, scrub_key_id,
                         has_positive_moment, has_execution_error, execution_time_ms,
                         selection_confidence, is_recursive, follow_up_thought_id, api_bases_used,
-                        schema_version
+                        schema_version,
+                        idma_result, tsaspdma_result,
+                        tool_name, tool_parameters, tsaspdma_reasoning, tsaspdma_approved
                     ) VALUES (
                         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
                         $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
@@ -1834,7 +1870,7 @@ async def receive_covenant_events(
                         $41, $42, $43, $44, $45, $46, $47, $48, $49, $50,
                         $51, $52, $53, $54, $55, $56, $57, $58, $59, $60,
                         $61, $62, $63, $64, $65, $66, $67, $68, $69, $70,
-                        $71, $72, $73
+                        $71, $72, $73, $74, $75, $76, $77, $78, $79
                     )
                     ON CONFLICT (trace_id, timestamp) DO NOTHING
                     """,
@@ -1911,6 +1947,12 @@ async def receive_covenant_events(
                     metadata["follow_up_thought_id"],            # $71
                     metadata["api_bases_used"],                  # $72 - array
                     metadata["schema_version"],                  # $73 - for scoring eligibility
+                    json.dumps(metadata["idma_result"]),         # $74 - V1.9.3 IDMA separate event
+                    json.dumps(metadata["tsaspdma_result"]),     # $75 - V1.9.3 TSASPDMA result
+                    metadata["tool_name"],                       # $76 - tool name from TSASPDMA
+                    json.dumps(metadata["tool_parameters"]),     # $77 - tool parameters
+                    metadata["tsaspdma_reasoning"],              # $78 - TSASPDMA reasoning
+                    metadata["tsaspdma_approved"],               # $79 - TSASPDMA approval status
                 )
                 accepted += 1
                 logger.info("Successfully stored trace %s", trace.trace_id)
