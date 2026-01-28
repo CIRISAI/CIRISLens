@@ -1516,8 +1516,10 @@ def extract_trace_metadata(trace: CovenantTrace, trace_level: str = "generic") -
             metadata["tool_name"] = data.get("final_tool_name") or data.get("original_tool_name")
             metadata["tool_parameters"] = data.get("final_parameters") or data.get("original_parameters")
             metadata["tsaspdma_reasoning"] = data.get("tsaspdma_rationale") or data.get("aspdma_rationale")
-            # No explicit approved field - if TSASPDMA_RESULT exists, tool was approved
-            metadata["tsaspdma_approved"] = True
+            # final_action is "tool", "speak", or "ponder" (lowercase enum values)
+            # Only approved if final_action == "tool"
+            final_action = (data.get("final_action") or "").lower()
+            metadata["tsaspdma_approved"] = final_action == "tool"
 
         elif event_type == "CONSCIENCE_RESULT":
             metadata["conscience_result"] = data
