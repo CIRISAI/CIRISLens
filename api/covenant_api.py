@@ -1512,10 +1512,12 @@ def extract_trace_metadata(trace: CovenantTrace, trace_level: str = "generic") -
         elif event_type == "TSASPDMA_RESULT":
             # V1.9.3: Tool-Specific ASPDMA for TOOL actions
             metadata["tsaspdma_result"] = data
-            metadata["tool_name"] = data.get("tool_name")
-            metadata["tool_parameters"] = data.get("tool_parameters")
-            metadata["tsaspdma_reasoning"] = data.get("reasoning")
-            metadata["tsaspdma_approved"] = data.get("approved")
+            # Field names from agent: final_tool_name, final_parameters, tsaspdma_rationale
+            metadata["tool_name"] = data.get("final_tool_name") or data.get("original_tool_name")
+            metadata["tool_parameters"] = data.get("final_parameters") or data.get("original_parameters")
+            metadata["tsaspdma_reasoning"] = data.get("tsaspdma_rationale") or data.get("aspdma_rationale")
+            # No explicit approved field - if TSASPDMA_RESULT exists, tool was approved
+            metadata["tsaspdma_approved"] = True
 
         elif event_type == "CONSCIENCE_RESULT":
             metadata["conscience_result"] = data
