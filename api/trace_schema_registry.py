@@ -259,7 +259,7 @@ SCHEMA_DEFINITIONS: dict[SchemaVersion, dict[str, Any]] = {
 # =============================================================================
 
 
-def detect_schema_version(
+def detect_schema_version(  # noqa: PLR0911, PLR0912
     event_types: set[str],
     components: list[dict[str, Any]] | None = None,
 ) -> SchemaVersion:
@@ -288,18 +288,13 @@ def detect_schema_version(
 
         # Check if we have all required events (optional TSASPDMA_RESULT is OK)
         if base_required.issubset(event_types):
-            # Check for unexpected event types
+            # Check for unexpected event types and log warning if found
             all_known = base_required | optional
             unexpected = event_types - all_known
-            if not unexpected:
-                return SchemaVersion.V1_9_3
-            else:
-                logger.warning(
-                    "V1.9.3 trace has unexpected event_types: %s",
-                    unexpected,
-                )
-                # Still treat as V1.9.3 if base requirements met
-                return SchemaVersion.V1_9_3
+            if unexpected:
+                logger.warning("V1.9.3 trace has unexpected event_types: %s", unexpected)
+            # Treat as V1.9.3 if base requirements met
+            return SchemaVersion.V1_9_3
 
     # V1.8/V1.9/V1.9.1 all use the same 6 event types
     required_event_types = {
