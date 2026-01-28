@@ -1600,17 +1600,22 @@ async def receive_covenant_events(
                     await conn.execute(
                         """
                         INSERT INTO cirislens.malformed_traces (
-                            trace_id, received_at, rejection_reason, raw_data,
-                            source_ip, agent_id_hash
-                        ) VALUES ($1, $2, $3, $4, $5, $6)
+                            record_id, timestamp, trace_id,
+                            detected_event_types, validation_errors, validation_warnings,
+                            component_count, rejection_reason, severity
+                        ) VALUES (
+                            gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8
+                        )
                         ON CONFLICT (trace_id) DO NOTHING
                         """,
-                        trace.trace_id,
                         datetime.now(UTC),
+                        trace.trace_id,
+                        schema_result.detected_event_types,
+                        schema_result.errors,
+                        schema_result.warnings,
+                        len(trace.components),
                         f"Schema validation failed: {schema_result.errors}",
-                        json.dumps([c.model_dump() for c in trace.components]),
-                        None,  # source_ip not available here
-                        trace.agent_id_hash,
+                        "warning",  # Schema mismatch is warning, not critical
                     )
                 except Exception as e:
                     logger.error("Failed to log malformed trace %s: %s", trace.trace_id, e)
