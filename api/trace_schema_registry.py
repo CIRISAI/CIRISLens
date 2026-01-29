@@ -25,6 +25,7 @@ class SchemaVersion(str, Enum):
     V1_9 = "1.9"  # Updated format - entropy/coherence at top level
     V1_9_1 = "1.9.1"  # Adds has_positive_moment, ethical faculty booleans
     V1_9_3 = "1.9.3"  # Adds IDMA_RESULT as separate event, optional TSASPDMA_RESULT
+    CONNECTIVITY = "connectivity"  # Agent startup/shutdown events
     UNKNOWN = "unknown"
 
 
@@ -251,6 +252,19 @@ SCHEMA_DEFINITIONS: dict[SchemaVersion, dict[str, Any]] = {
             "tool_parameters": ["TSASPDMA_RESULT", "data", "tool_parameters"],
         },
     },
+    # Connectivity events - agent startup/shutdown
+    SchemaVersion.CONNECTIVITY: {
+        "description": "Agent connectivity events (startup/shutdown)",
+        "required_event_types": set(),  # Either startup OR shutdown
+        "optional_event_types": {"startup", "shutdown"},
+        "min_components": 1,
+        "max_components": 1,
+        "field_paths": {
+            "agent_name": ["startup", "data", "agent_name"],
+            "agent_id": ["startup", "data", "agent_id"],
+            "timestamp": ["startup", "data", "timestamp"],
+        },
+    },
 }
 
 
@@ -266,12 +280,18 @@ def detect_schema_version(  # noqa: PLR0912
     """
     Detect which schema version a trace belongs to based on its event_types and content.
 
+    CONNECTIVITY: startup/shutdown events (single event type)
     V1.9.3: Has IDMA_RESULT as separate event (7 required events), optional TSASPDMA_RESULT
     V1.8 vs V1.9+: Same 6 event types, but V1.9+ has entropy_level at top level
     V1.9 vs V1.9.1: V1.9.1 has has_positive_moment field
 
     Returns SchemaVersion.UNKNOWN if no match found.
     """
+    # Connectivity events detection: startup or shutdown
+    connectivity_events = {"startup", "shutdown"}
+    if event_types and event_types.issubset(connectivity_events):
+        return SchemaVersion.CONNECTIVITY
+
     # V1.9.3 detection: IDMA_RESULT as separate event type
     # This is the distinguishing feature of 1.9.3
     if "IDMA_RESULT" in event_types:

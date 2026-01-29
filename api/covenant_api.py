@@ -1644,7 +1644,6 @@ async def receive_covenant_events(
                         ) VALUES (
                             gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8
                         )
-                        ON CONFLICT (trace_id) DO NOTHING
                         """,
                         datetime.now(UTC),
                         trace.trace_id,
@@ -1666,6 +1665,48 @@ async def receive_covenant_events(
                 schema_result.schema_version.value,
                 schema_result.detected_event_types,
             )
+
+            # Handle connectivity events separately (startup/shutdown)
+            if schema_result.schema_version == SchemaVersion.CONNECTIVITY:
+                try:
+                    # Extract event data from first component
+                    event_type = schema_result.detected_event_types[0] if schema_result.detected_event_types else "unknown"
+                    event_data = trace.components[0].data if trace.components else {}
+
+                    await conn.execute(
+                        """
+                        INSERT INTO cirislens.connectivity_events (
+                            timestamp, trace_id, event_type,
+                            agent_id, agent_name, agent_id_hash,
+                            event_data, signature, signature_key_id,
+                            consent_timestamp, trace_level
+                        ) VALUES (
+                            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
+                        )
+                        """,
+                        request.batch_timestamp,
+                        trace.trace_id,
+                        event_type,
+                        event_data.get("agent_id") if isinstance(event_data, dict) else None,
+                        event_data.get("agent_name") if isinstance(event_data, dict) else None,
+                        trace.agent_id_hash,
+                        json.dumps(event_data) if event_data else None,
+                        trace.signature,
+                        trace.signature_key_id,
+                        request.consent_timestamp,
+                        request.trace_level,
+                    )
+                    logger.info(
+                        "CONNECTIVITY_EVENT stored: %s type=%s agent=%s",
+                        trace.trace_id,
+                        event_type,
+                        event_data.get("agent_name") if isinstance(event_data, dict) else "unknown",
+                    )
+                    accepted += 1
+                except Exception as e:
+                    logger.error("Failed to store connectivity event %s: %s", trace.trace_id, e)
+                    rejected += 1
+                continue
 
             # Verify signature
             is_valid, error = verify_trace_signature(trace, public_keys)
