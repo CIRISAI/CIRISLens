@@ -4,6 +4,7 @@
 
 use std::collections::HashMap;
 use std::sync::RwLock;
+use std::time::{Duration, Instant};
 
 use base64::{engine::general_purpose, Engine as _};
 use ed25519_dalek::{Signature, VerifyingKey, Verifier};
@@ -11,6 +12,9 @@ use lazy_static::lazy_static;
 use sha2::{Digest, Sha256};
 
 use crate::logging::structured::LogContext;
+
+/// Cache TTL - 5 minutes
+const KEY_CACHE_TTL_SECS: u64 = 300;
 
 /// Signature verification result.
 #[derive(Debug)]
@@ -55,9 +59,19 @@ impl SignatureVerificationResult {
 }
 
 /// Cache for public keys.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct PublicKeyCache {
     keys: HashMap<String, VerifyingKey>,
+    loaded_at: Option<Instant>,
+}
+
+impl Default for PublicKeyCache {
+    fn default() -> Self {
+        Self {
+            keys: HashMap::new(),
+            loaded_at: None,
+        }
+    }
 }
 
 impl PublicKeyCache {
@@ -71,6 +85,27 @@ impl PublicKeyCache {
 
     pub fn key_count(&self) -> usize {
         self.keys.len()
+    }
+
+    /// Check if cache needs refresh (empty or TTL expired).
+    pub fn needs_refresh(&self) -> bool {
+        if self.keys.is_empty() {
+            return true;
+        }
+        match self.loaded_at {
+            Some(loaded_at) => loaded_at.elapsed() > Duration::from_secs(KEY_CACHE_TTL_SECS),
+            None => true,
+        }
+    }
+
+    /// Get cache age in seconds (for logging).
+    pub fn cache_age_secs(&self) -> Option<u64> {
+        self.loaded_at.map(|t| t.elapsed().as_secs())
+    }
+
+    /// Mark cache as freshly loaded.
+    pub fn mark_loaded(&mut self) {
+        self.loaded_at = Some(Instant::now());
     }
 
     pub fn has_key(&self, key_id: &str) -> bool {
@@ -108,6 +143,8 @@ impl PublicKeyCache {
     /// Clear all keys.
     pub fn clear(&mut self) {
         self.keys.clear();
+        self.loaded_at = None;
+        log::info!("PUBLIC_KEY_CACHE_CLEARED");
     }
 }
 

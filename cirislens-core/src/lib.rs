@@ -165,6 +165,73 @@ fn get_loaded_schemas() -> PyResult<Vec<String>> {
     Ok(cache.schema_versions())
 }
 
+/// Load public keys from database into cache.
+///
+/// # Arguments
+/// * `keys` - List of (key_id, public_key_base64) tuples
+#[pyfunction]
+fn load_public_keys_from_db(keys: Vec<(String, String)>) -> PyResult<()> {
+    init_logger();
+
+    let mut cache = validation::signature::get_key_cache_mut();
+    cache.clear();
+
+    let mut loaded = 0;
+    let mut errors = Vec::new();
+
+    for (key_id, public_key_base64) in keys {
+        match cache.load_key(&key_id, &public_key_base64) {
+            Ok(()) => loaded += 1,
+            Err(e) => errors.push(format!("{}: {}", key_id, e)),
+        }
+    }
+
+    cache.mark_loaded();
+
+    log::info!(
+        "PUBLIC_KEY_CACHE_LOADED keys={} errors={}",
+        loaded,
+        errors.len()
+    );
+
+    if !errors.is_empty() {
+        log::warn!("PUBLIC_KEY_LOAD_ERRORS: {:?}", errors);
+    }
+
+    Ok(())
+}
+
+/// Refresh the public key cache.
+#[pyfunction]
+fn refresh_public_key_cache() -> PyResult<()> {
+    init_logger();
+    validation::signature::get_key_cache_mut().clear();
+    Ok(())
+}
+
+/// Get count of loaded public keys.
+#[pyfunction]
+fn get_public_key_count() -> PyResult<usize> {
+    let cache = validation::signature::get_key_cache();
+    Ok(cache.key_count())
+}
+
+/// Check if caches need refresh (TTL expired).
+///
+/// Returns (schema_needs_refresh, keys_need_refresh)
+#[pyfunction]
+fn check_cache_status() -> PyResult<(bool, bool, Option<u64>, Option<u64>)> {
+    let schema_cache = validation::schema::get_schema_cache();
+    let key_cache = validation::signature::get_key_cache();
+
+    Ok((
+        schema_cache.needs_refresh(),
+        key_cache.needs_refresh(),
+        schema_cache.cache_age_secs(),
+        key_cache.cache_age_secs(),
+    ))
+}
+
 /// Python module definition
 #[pymodule]
 fn cirislens_core(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
@@ -172,5 +239,9 @@ fn cirislens_core(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(load_schemas_from_db, m)?)?;
     m.add_function(wrap_pyfunction!(refresh_schema_cache, m)?)?;
     m.add_function(wrap_pyfunction!(get_loaded_schemas, m)?)?;
+    m.add_function(wrap_pyfunction!(load_public_keys_from_db, m)?)?;
+    m.add_function(wrap_pyfunction!(refresh_public_key_cache, m)?)?;
+    m.add_function(wrap_pyfunction!(get_public_key_count, m)?)?;
+    m.add_function(wrap_pyfunction!(check_cache_status, m)?)?;
     Ok(())
 }

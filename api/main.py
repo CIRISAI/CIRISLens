@@ -19,8 +19,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, EmailStr
 
-# Import Covenant API router
-from covenant_api import router as covenant_router
+# Import Covenant API router (V2 - Rust-powered)
+from covenant_api_v2 import router as covenant_router, initialize_rust_caches
 from log_ingest import LogIngestService
 from manager_collector import ManagerCollector
 from migrations import startup_migrations
@@ -350,6 +350,13 @@ async def startup():
             # This will FAIL LOUDLY if required columns are missing
             await startup_migrations(conn, Path("/app/sql"))
             logger.info("All migrations applied and schema validated")
+
+        # Initialize Rust caches (schemas and public keys)
+        try:
+            await initialize_rust_caches()
+            logger.info("Rust caches initialized")
+        except Exception as e:
+            logger.warning(f"Rust cache initialization failed (will retry on first request): {e}")
 
         # Initialize log ingest service
         log_ingest_service = LogIngestService(db_pool)

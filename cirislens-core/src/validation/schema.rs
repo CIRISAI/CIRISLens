@@ -5,10 +5,14 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::RwLock;
+use std::time::{Duration, Instant};
 
 use lazy_static::lazy_static;
 
 use crate::logging::structured::LogContext;
+
+/// Cache TTL - 5 minutes
+const CACHE_TTL_SECS: u64 = 300;
 
 /// Field extraction rule loaded from database.
 #[derive(Debug, Clone)]
@@ -46,11 +50,23 @@ impl SchemaDefinition {
 }
 
 /// In-memory cache for trace schemas.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct SchemaCache {
     schemas: HashMap<String, SchemaDefinition>,
     schemas_by_priority: Vec<SchemaDefinition>,
     loaded: bool,
+    loaded_at: Option<Instant>,
+}
+
+impl Default for SchemaCache {
+    fn default() -> Self {
+        Self {
+            schemas: HashMap::new(),
+            schemas_by_priority: Vec::new(),
+            loaded: false,
+            loaded_at: None,
+        }
+    }
 }
 
 impl SchemaCache {
@@ -60,6 +76,22 @@ impl SchemaCache {
 
     pub fn is_loaded(&self) -> bool {
         self.loaded
+    }
+
+    /// Check if cache needs refresh (not loaded or TTL expired).
+    pub fn needs_refresh(&self) -> bool {
+        if !self.loaded {
+            return true;
+        }
+        match self.loaded_at {
+            Some(loaded_at) => loaded_at.elapsed() > Duration::from_secs(CACHE_TTL_SECS),
+            None => true,
+        }
+    }
+
+    /// Get cache age in seconds (for logging).
+    pub fn cache_age_secs(&self) -> Option<u64> {
+        self.loaded_at.map(|t| t.elapsed().as_secs())
     }
 
     pub fn schema_versions(&self) -> Vec<String> {
@@ -191,6 +223,7 @@ impl SchemaCache {
         self.schemas = defs.iter().map(|d| (d.version.clone(), d.clone())).collect();
         self.schemas_by_priority = defs;
         self.loaded = true;
+        self.loaded_at = Some(Instant::now());
 
         log::info!(
             "SCHEMA_CACHE_LOADED schemas={:?} field_counts={:?}",
@@ -210,6 +243,8 @@ impl SchemaCache {
         self.schemas.clear();
         self.schemas_by_priority.clear();
         self.loaded = false;
+        self.loaded_at = None;
+        log::info!("SCHEMA_CACHE_CLEARED");
     }
 }
 
