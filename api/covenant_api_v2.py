@@ -14,6 +14,7 @@ Key differences from V1:
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 from datetime import UTC, datetime
@@ -1002,15 +1003,13 @@ async def register_public_key(key: PublicKeyCreate) -> dict[str, Any]:
     This is typically called once during initial setup with the
     root public key from seed/root_pub.json.
     """
-    import base64 as b64
-
     db_pool = get_db_pool()
     if db_pool is None:
         raise HTTPException(status_code=503, detail="Database not available")
 
     # Validate the key is valid base64 and correct length for Ed25519
     try:
-        key_bytes = b64.b64decode(key.public_key_base64)
+        key_bytes = base64.b64decode(key.public_key_base64)
         if len(key_bytes) != 32:
             raise HTTPException(
                 status_code=400, detail="Invalid Ed25519 public key length"
