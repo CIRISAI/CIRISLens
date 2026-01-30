@@ -225,6 +225,19 @@ async def initialize_rust_caches() -> None:
 # =============================================================================
 
 
+def to_bool(value: Any) -> bool | None:
+    """Convert string/int/bool to boolean for PostgreSQL."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.lower() in ('true', '1', 'yes')
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return None
+
+
 async def store_production_trace(
     conn: asyncpg.Connection,
     trace_result: dict[str, Any],
@@ -302,19 +315,19 @@ async def store_production_trace(
         metadata.get('pdma_conflicts'),                   # $22
         metadata.get('idma_k_eff'),                       # $23
         metadata.get('idma_correlation_risk'),            # $24
-        metadata.get('idma_fragility_flag'),              # $25
+        to_bool(metadata.get('idma_fragility_flag')),     # $25
         metadata.get('idma_phase'),                       # $26
         metadata.get('action_rationale'),                 # $27
-        metadata.get('conscience_passed'),                # $28
-        metadata.get('action_was_overridden'),            # $29
+        to_bool(metadata.get('conscience_passed')),       # $28
+        to_bool(metadata.get('action_was_overridden')),   # $29
         metadata.get('entropy_level'),                    # $30
         metadata.get('coherence_level'),                  # $31
-        metadata.get('entropy_passed'),                   # $32
-        metadata.get('coherence_passed'),                 # $33
-        metadata.get('optimization_veto_passed'),         # $34
-        metadata.get('epistemic_humility_passed'),        # $35
+        to_bool(metadata.get('entropy_passed')),          # $32
+        to_bool(metadata.get('coherence_passed')),        # $33
+        to_bool(metadata.get('optimization_veto_passed')),  # $34
+        to_bool(metadata.get('epistemic_humility_passed')),  # $35
         metadata.get('selected_action'),                  # $36
-        metadata.get('action_success'),                   # $37
+        to_bool(metadata.get('action_success')),          # $37
         metadata.get('processing_ms'),                    # $38
         metadata.get('tokens_input'),                     # $39
         metadata.get('tokens_output'),                    # $40
@@ -324,18 +337,18 @@ async def store_production_trace(
         metadata.get('models_used'),                      # $44
         signature,                                        # $45
         signature_key_id,                                 # $46
-        metadata.get('signature_verified', False),        # $47
+        to_bool(metadata.get('signature_verified')),      # $47
         request.consent_timestamp,                        # $48
         request.batch_timestamp,                          # $49
         request.trace_level,                              # $50
-        metadata.get('has_positive_moment'),              # $51
-        metadata.get('has_execution_error'),              # $52
+        to_bool(metadata.get('has_positive_moment')),     # $51
+        to_bool(metadata.get('has_execution_error')),     # $52
         metadata.get('execution_time_ms'),                # $53
         metadata.get('selection_confidence'),             # $54
-        metadata.get('is_recursive'),                     # $55
+        to_bool(metadata.get('is_recursive')),            # $55
         json.dumps(metadata.get('idma_result')) if metadata.get('idma_result') else None,  # $56
         json.dumps(metadata.get('tsaspdma_result')) if metadata.get('tsaspdma_result') else None,  # $57
-        metadata.get('tsaspdma_approved'),                # $58
+        to_bool(metadata.get('tsaspdma_approved')),       # $58
     )
 
 
@@ -417,19 +430,19 @@ async def store_mock_trace(
         metadata.get('pdma_conflicts'),                   # $22
         metadata.get('idma_k_eff'),                       # $23
         metadata.get('idma_correlation_risk'),            # $24
-        metadata.get('idma_fragility_flag'),              # $25
+        to_bool(metadata.get('idma_fragility_flag')),     # $25
         metadata.get('idma_phase'),                       # $26
         metadata.get('action_rationale'),                 # $27
-        metadata.get('conscience_passed'),                # $28
-        metadata.get('action_was_overridden'),            # $29
+        to_bool(metadata.get('conscience_passed')),       # $28
+        to_bool(metadata.get('action_was_overridden')),   # $29
         metadata.get('entropy_level'),                    # $30
         metadata.get('coherence_level'),                  # $31
-        metadata.get('entropy_passed'),                   # $32
-        metadata.get('coherence_passed'),                 # $33
-        metadata.get('optimization_veto_passed'),         # $34
-        metadata.get('epistemic_humility_passed'),        # $35
+        to_bool(metadata.get('entropy_passed')),          # $32
+        to_bool(metadata.get('coherence_passed')),        # $33
+        to_bool(metadata.get('optimization_veto_passed')),  # $34
+        to_bool(metadata.get('epistemic_humility_passed')),  # $35
         metadata.get('selected_action'),                  # $36
-        metadata.get('action_success'),                   # $37
+        to_bool(metadata.get('action_success')),          # $37
         metadata.get('processing_ms'),                    # $38
         metadata.get('tokens_input'),                     # $39
         metadata.get('tokens_output'),                    # $40
@@ -439,23 +452,23 @@ async def store_mock_trace(
         metadata.get('models_used'),                      # $44
         signature,                                        # $45
         signature_key_id,                                 # $46
-        metadata.get('signature_verified', False),        # $47
+        to_bool(metadata.get('signature_verified')),      # $47
         request.consent_timestamp,                        # $48
         request.batch_timestamp,                          # $49
         request.trace_level,                              # $50
         metadata.get('mock_models'),                      # $51
         "models_used contains mock",                      # $52
-        metadata.get('has_positive_moment'),              # $53
-        metadata.get('has_execution_error'),              # $54
+        to_bool(metadata.get('has_positive_moment')),     # $53
+        to_bool(metadata.get('has_execution_error')),     # $54
         metadata.get('execution_time_ms'),                # $55
         metadata.get('selection_confidence'),             # $56
-        metadata.get('is_recursive'),                     # $57
+        to_bool(metadata.get('is_recursive')),            # $57
         json.dumps(metadata.get('idma_result')) if metadata.get('idma_result') else None,  # $58
         json.dumps(metadata.get('tsaspdma_result')) if metadata.get('tsaspdma_result') else None,  # $59
         metadata.get('tool_name'),                        # $60
         json.dumps(metadata.get('tool_parameters')) if metadata.get('tool_parameters') else None,  # $61
         metadata.get('tsaspdma_reasoning'),               # $62
-        metadata.get('tsaspdma_approved'),                # $63
+        to_bool(metadata.get('tsaspdma_approved')),       # $63
     )
 
 
