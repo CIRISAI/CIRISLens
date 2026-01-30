@@ -979,3 +979,99 @@ async def get_repository_trace(trace_id: str) -> dict[str, Any]:
                 trace[key] = float(val)
 
         return trace
+
+
+# =============================================================================
+# Public Keys Endpoints
+# =============================================================================
+
+
+class PublicKeyCreate(BaseModel):
+    """Request model for registering a public key."""
+
+    key_id: str
+    public_key_base64: str
+    description: str | None = None
+
+
+@router.post("/public-keys")
+async def register_public_key(key: PublicKeyCreate) -> dict[str, Any]:
+    """
+    Register a public key for trace signature verification.
+
+    This is typically called once during initial setup with the
+    root public key from seed/root_pub.json.
+    """
+    import base64 as b64
+
+    db_pool = get_db_pool()
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    # Validate the key is valid base64 and correct length for Ed25519
+    try:
+        key_bytes = b64.b64decode(key.public_key_base64)
+        if len(key_bytes) != 32:
+            raise HTTPException(
+                status_code=400, detail="Invalid Ed25519 public key length"
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=400, detail=f"Invalid base64 encoding: {e}"
+        ) from e
+
+    async with db_pool.acquire() as conn:
+        try:
+            await conn.execute(
+                """
+                INSERT INTO cirislens.covenant_public_keys (
+                    key_id, public_key_base64, description
+                ) VALUES ($1, $2, $3)
+                ON CONFLICT (key_id) DO UPDATE
+                SET public_key_base64 = $2, description = $3
+                """,
+                key.key_id,
+                key.public_key_base64,
+                key.description,
+            )
+            # Reload keys into Rust cache
+            await load_public_keys_into_rust_cache(conn)
+        except Exception as e:
+            logger.error("Failed to register public key: %s", e)
+            raise HTTPException(status_code=500, detail="Failed to register key") from e
+
+    logger.info("Registered public key: %s", key.key_id)
+    return {"status": "registered", "key_id": key.key_id}
+
+
+@router.get("/public-keys")
+async def list_public_keys() -> dict[str, Any]:
+    """List registered public keys (without the actual key values)."""
+    db_pool = get_db_pool()
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT key_id, algorithm, description, created_at, expires_at, revoked_at
+            FROM cirislens.covenant_public_keys
+            ORDER BY created_at DESC
+            """
+        )
+
+        keys = [
+            {
+                "key_id": row["key_id"],
+                "algorithm": row["algorithm"],
+                "description": row["description"],
+                "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+                "expires_at": row["expires_at"].isoformat() if row["expires_at"] else None,
+                "revoked": row["revoked_at"] is not None,
+            }
+            for row in rows
+        ]
+
+        return {"keys": keys, "count": len(keys)}
