@@ -49,7 +49,7 @@ def get_db_pool() -> asyncpg.Pool | None:
 
 
 # =============================================================================
-# Pydantic Models
+# Pydantic Models (matching V1 format for backwards compatibility)
 # =============================================================================
 
 
@@ -62,25 +62,39 @@ class TraceComponent(BaseModel):
     signature_key_id: str | None = None
 
 
-class TraceEvent(BaseModel):
-    """A complete trace event with components."""
+class CovenantTrace(BaseModel):
+    """Complete signed reasoning trace from an agent."""
     trace_id: str
+    thought_id: str | None = None
+    task_id: str | None = None
+    agent_id_hash: str | None = None
+    started_at: str | None = None
+    completed_at: str | None = None
     components: list[TraceComponent]
+    signature: str  # Base64-encoded Ed25519 signature
+    signature_key_id: str  # e.g., "agent-xxx"
+
+
+class CovenantTraceEvent(BaseModel):
+    """Wrapper for a trace event."""
+    event_type: str = "complete_trace"
+    trace: CovenantTrace
 
 
 class CorrelationMetadata(BaseModel):
-    """Optional correlation metadata for trace batches."""
-    session_id: str | None = None
-    task_chain_id: str | None = None
-    parent_trace_id: str | None = None
+    """Optional metadata for correlation analysis."""
+    deployment_region: str | None = None
+    deployment_type: str | None = None
+    agent_role: str | None = None
+    agent_template: str | None = None
 
 
 class CovenantEventsRequest(BaseModel):
     """Request body for trace ingestion."""
-    events: list[TraceEvent]
+    events: list[CovenantTraceEvent]
     batch_timestamp: datetime
-    consent_timestamp: datetime | None = None
-    trace_level: str = "detailed"
+    consent_timestamp: datetime
+    trace_level: str = "generic"
     correlation_metadata: CorrelationMetadata | None = None
 
 
@@ -433,9 +447,17 @@ async def receive_covenant_events(request: CovenantEventsRequest) -> dict[str, A
         await ensure_caches_fresh(conn)
 
         # Convert events to JSON strings for Rust
+        # Note: events are wrapped in CovenantTraceEvent which has a .trace field
         events_json = [
             json.dumps({
-                'trace_id': event.trace_id,
+                'trace_id': event.trace.trace_id,
+                'thought_id': event.trace.thought_id,
+                'task_id': event.trace.task_id,
+                'agent_id_hash': event.trace.agent_id_hash,
+                'started_at': event.trace.started_at,
+                'completed_at': event.trace.completed_at,
+                'signature': event.trace.signature,
+                'signature_key_id': event.trace.signature_key_id,
                 'components': [
                     {
                         'event_type': c.event_type,
@@ -444,7 +466,7 @@ async def receive_covenant_events(request: CovenantEventsRequest) -> dict[str, A
                         'signature': c.signature,
                         'signature_key_id': c.signature_key_id,
                     }
-                    for c in event.components
+                    for c in event.trace.components
                 ]
             })
             for event in request.events
