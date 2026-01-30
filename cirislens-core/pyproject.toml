@@ -26,8 +26,8 @@ classifiers = [
 [tool.maturin]
 # Build settings
 features = ["pyo3/extension-module"]
-python-source = "python"
 module-name = "cirislens_core"
+# Pure Rust extension - no Python source directory needed
 
 # Strip symbols for smaller binary
 strip = true
