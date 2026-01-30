@@ -97,6 +97,25 @@ class CovenantEventsRequest(BaseModel):
     correlation_metadata: CorrelationMetadata | None = None
 
 
+# WBD Deferral Events (simpler format sent by agents)
+class WBDEvent(BaseModel):
+    """A WBD deferral event from an agent."""
+    event_type: str
+    timestamp: str
+    agent_id: str
+    thought_id: str | None = None
+    task_id: str | None = None
+    reason: str | None = None
+    defer_until: str | None = None
+
+
+class WBDEventsRequest(BaseModel):
+    """Request body for WBD deferral events."""
+    events: list[WBDEvent]
+    batch_timestamp: datetime
+    consent_timestamp: datetime | None = None
+
+
 # =============================================================================
 # Cache Management
 # =============================================================================
@@ -514,8 +533,55 @@ async def store_batch_metadata(
 
 
 # =============================================================================
-# API Endpoint
+# API Endpoints
 # =============================================================================
+
+
+@router.post("/wbd/events")
+async def receive_wbd_events(request: WBDEventsRequest) -> dict[str, Any]:
+    """
+    Receive WBD (Wisdom-Based Deferral) events from agents.
+
+    These are simpler events indicating an agent deferred a decision.
+    """
+    db_pool = get_db_pool()
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    accepted = 0
+    errors = []
+
+    async with db_pool.acquire() as conn:
+        for event in request.events:
+            try:
+                await conn.execute("""
+                    INSERT INTO cirislens.wbd_deferrals (
+                        agent_id, trigger_type, trigger_description,
+                        thought_id, task_id, defer_until,
+                        created_at
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+                    ON CONFLICT DO NOTHING
+                """,
+                    event.agent_id,
+                    event.event_type,
+                    event.reason,
+                    event.thought_id,
+                    event.task_id,
+                    event.defer_until,
+                    datetime.fromisoformat(event.timestamp.replace('Z', '+00:00')) if event.timestamp else datetime.now(UTC),
+                )
+                accepted += 1
+            except Exception as e:
+                logger.error("Failed to store WBD event: %s", e)
+                errors.append(str(e))
+
+    logger.info("WBD events: received=%d accepted=%d", len(request.events), accepted)
+    return {
+        "status": "ok" if not errors else "partial",
+        "received": len(request.events),
+        "accepted": accepted,
+        "errors": errors if errors else None,
+    }
 
 
 @router.post("/events")
@@ -533,7 +599,7 @@ async def receive_covenant_events(request: Request) -> dict[str, Any]:
 
     Python handles async database storage.
     """
-    # Parse and validate request manually to log any errors
+    # Parse and validate request manually to detect event type
     body = await request.body()
     try:
         raw_data = json.loads(body)
@@ -541,17 +607,59 @@ async def receive_covenant_events(request: Request) -> dict[str, Any]:
         logger.error("Failed to parse request JSON: %s", e)
         raise HTTPException(status_code=422, detail=f"Invalid JSON: {e}")
 
-    # Log the structure for debugging
+    # Detect event type from first event
     if raw_data.get('events'):
         first_event = raw_data['events'][0]
-        logger.info("Request structure - event keys: %s", list(first_event.keys()))
-        if 'trace' in first_event:
-            logger.info("Request structure - trace keys: %s", list(first_event['trace'].keys()))
-            if first_event['trace'].get('components'):
-                first_comp = first_event['trace']['components'][0]
-                logger.info("Request structure - component keys: %s", list(first_comp.keys()))
 
-    # Validate with Pydantic
+        # Check if this is a WBD deferral event (has defer_until or reason, no trace)
+        if 'defer_until' in first_event or ('reason' in first_event and 'trace' not in first_event):
+            logger.info("Detected WBD deferral events, routing to WBD handler")
+            try:
+                wbd_request = WBDEventsRequest.model_validate(raw_data)
+            except Exception as e:
+                logger.error("WBD validation failed: %s", e)
+                raise HTTPException(status_code=422, detail=str(e))
+
+            # Handle WBD events inline
+            db_pool = get_db_pool()
+            if db_pool is None:
+                raise HTTPException(status_code=503, detail="Database not available")
+
+            accepted = 0
+            errors = []
+            async with db_pool.acquire() as conn:
+                for event in wbd_request.events:
+                    try:
+                        await conn.execute("""
+                            INSERT INTO cirislens.wbd_deferrals (
+                                agent_id, trigger_type, trigger_description,
+                                thought_id, task_id, defer_until,
+                                created_at
+                            ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+                            ON CONFLICT DO NOTHING
+                        """,
+                            event.agent_id,
+                            event.event_type,
+                            event.reason,
+                            event.thought_id,
+                            event.task_id,
+                            event.defer_until,
+                            datetime.fromisoformat(event.timestamp.replace('Z', '+00:00')) if event.timestamp else datetime.now(UTC),
+                        )
+                        accepted += 1
+                    except Exception as e:
+                        logger.error("Failed to store WBD event: %s", e)
+                        errors.append(str(e))
+
+            logger.info("WBD events: received=%d accepted=%d", len(wbd_request.events), accepted)
+            return {
+                "status": "ok" if not errors else "partial",
+                "received": len(wbd_request.events),
+                "accepted": accepted,
+                "errors": errors if errors else None,
+            }
+
+    # Validate as trace events
     try:
         validated_request = CovenantEventsRequest.model_validate(raw_data)
     except Exception as e:
