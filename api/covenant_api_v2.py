@@ -238,6 +238,26 @@ def to_bool(value: Any) -> bool | None:
     return None
 
 
+def to_list(value: Any) -> list[str] | None:
+    """Convert string/list to list for PostgreSQL TEXT[] columns."""
+    if value is None:
+        return None
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        # Handle JSON string representation like '["item1", "item2"]'
+        if value.startswith('['):
+            try:
+                parsed = json.loads(value)
+                if isinstance(parsed, list):
+                    return parsed
+            except json.JSONDecodeError:
+                pass
+        # Single value - wrap in list
+        return [value]
+    return None
+
+
 async def store_production_trace(
     conn: asyncpg.Connection,
     trace_result: dict[str, Any],
@@ -334,7 +354,7 @@ async def store_production_trace(
         metadata.get('tokens_total'),                     # $41
         metadata.get('cost_cents'),                       # $42
         metadata.get('llm_calls'),                        # $43
-        metadata.get('models_used'),                      # $44
+        to_list(metadata.get('models_used')),              # $44
         signature,                                        # $45
         signature_key_id,                                 # $46
         to_bool(metadata.get('signature_verified')),      # $47
@@ -449,7 +469,7 @@ async def store_mock_trace(
         metadata.get('tokens_total'),                     # $41
         metadata.get('cost_cents'),                       # $42
         metadata.get('llm_calls'),                        # $43
-        metadata.get('models_used'),                      # $44
+        to_list(metadata.get('models_used')),              # $44
         signature,                                        # $45
         signature_key_id,                                 # $46
         to_bool(metadata.get('signature_verified')),      # $47
