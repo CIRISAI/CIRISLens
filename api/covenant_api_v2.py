@@ -93,7 +93,7 @@ class CovenantEventsRequest(BaseModel):
     """Request body for trace ingestion."""
     events: list[CovenantTraceEvent]
     batch_timestamp: datetime
-    consent_timestamp: datetime | None = None
+    consent_timestamp: datetime
     trace_level: str = "generic"
     correlation_metadata: CorrelationMetadata | None = None
 
