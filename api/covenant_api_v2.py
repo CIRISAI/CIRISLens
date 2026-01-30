@@ -212,99 +212,112 @@ async def store_production_trace(
     trace_result: dict[str, Any],
     request: CovenantEventsRequest,
 ) -> None:
-    """Store accepted trace in covenant_traces table."""
+    """Store accepted trace in covenant_traces table.
+
+    Uses actual database column names that match the production schema.
+    """
     metadata = trace_result.get('extracted_metadata', {})
 
-    # Build the INSERT with all 79 columns from storage/queries.rs
+    # Get signature info from the original event
+    event = next(
+        (e for e in request.events if e.trace.trace_id == trace_result['trace_id']),
+        None
+    )
+    signature = event.trace.signature if event else metadata.get('signature')
+    signature_key_id = event.trace.signature_key_id if event else metadata.get('signature_key_id')
+
     await conn.execute("""
         INSERT INTO cirislens.covenant_traces (
-            trace_id, timestamp, trace_level, schema_version,
-            batch_timestamp, consent_timestamp,
+            trace_id, thought_id, task_id,
+            agent_id_hash, agent_name,
+            trace_type, cognitive_state, thought_type, thought_depth,
+            started_at, completed_at,
+            thought_start, snapshot_and_context, dma_results,
+            aspdma_result, conscience_result, action_result,
+            csdma_plausibility_score, dsdma_domain_alignment, dsdma_domain,
+            pdma_stakeholders, pdma_conflicts,
+            idma_k_eff, idma_correlation_risk, idma_fragility_flag, idma_phase,
+            action_rationale,
+            conscience_passed, action_was_overridden,
+            entropy_level, coherence_level,
+            entropy_passed, coherence_passed,
+            optimization_veto_passed, epistemic_humility_passed,
+            selected_action, action_success, processing_ms,
+            tokens_input, tokens_output, tokens_total,
+            cost_cents, llm_calls, models_used,
             signature, signature_key_id, signature_verified,
-            pii_scrubbed, original_content_hash,
-            thought_id, thought_type, thought_depth, task_id, task_description, started_at,
-            agent_name, cognitive_state,
-            csdma_plausibility, csdma_confidence, dsdma_alignment, dsdma_confidence,
-            pdma_stakeholder_score, pdma_conflict_detected,
-            idma_k_eff, idma_correlation_risk, idma_fragility_flag, idma_phase, idma_confidence,
-            selected_action, action_rationale, aspdma_confidence,
-            tool_name, tool_parameters, tsaspdma_reasoning, tsaspdma_approved,
-            conscience_passed, conscience_override, conscience_override_reason,
-            epistemic_humility, entropy_awareness, coherence_alignment,
-            action_success, action_type, tokens_used, cost_usd, completed_at,
-            positive_moment, models_used, api_bases_used,
-            dma_results, aspdma_result, idma_result, tsaspdma_result,
-            conscience_result, action_result,
-            initial_context, system_snapshot, gathered_context
+            consent_timestamp, timestamp, trace_level,
+            has_positive_moment, has_execution_error, execution_time_ms,
+            selection_confidence, is_recursive,
+            idma_result, tsaspdma_result,
+            tool_name, tool_parameters, tsaspdma_reasoning, tsaspdma_approved
         ) VALUES (
             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
             $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
             $21, $22, $23, $24, $25, $26, $27, $28, $29, $30,
             $31, $32, $33, $34, $35, $36, $37, $38, $39, $40,
             $41, $42, $43, $44, $45, $46, $47, $48, $49, $50,
-            $51, $52, $53, $54, $55, $56, $57, $58, $59, $60
+            $51, $52, $53, $54, $55, $56, $57, $58
         ) ON CONFLICT (trace_id) DO NOTHING
     """,
-        trace_result['trace_id'],
-        datetime.now(UTC),
-        request.trace_level,
-        trace_result.get('schema_version'),
-        request.batch_timestamp,
-        request.consent_timestamp,
-        metadata.get('signature'),
-        metadata.get('signature_key_id'),
-        metadata.get('signature_verified', False),
-        metadata.get('pii_scrubbed', False),
-        metadata.get('original_content_hash'),
-        metadata.get('thought_id'),
-        metadata.get('thought_type'),
-        metadata.get('thought_depth'),
-        metadata.get('task_id'),
-        metadata.get('task_description'),
-        metadata.get('started_at'),
-        metadata.get('agent_name'),
-        metadata.get('cognitive_state'),
-        metadata.get('csdma_plausibility'),
-        metadata.get('csdma_confidence'),
-        metadata.get('dsdma_alignment'),
-        metadata.get('dsdma_confidence'),
-        metadata.get('pdma_stakeholder_score'),
-        metadata.get('pdma_conflict_detected'),
-        metadata.get('idma_k_eff'),
-        metadata.get('idma_correlation_risk'),
-        metadata.get('idma_fragility_flag'),
-        metadata.get('idma_phase'),
-        metadata.get('idma_confidence'),
-        metadata.get('selected_action'),
-        metadata.get('action_rationale'),
-        metadata.get('aspdma_confidence'),
-        metadata.get('tool_name'),
-        metadata.get('tool_parameters'),
-        metadata.get('tsaspdma_reasoning'),
-        metadata.get('tsaspdma_approved'),
-        metadata.get('conscience_passed'),
-        metadata.get('conscience_override'),
-        metadata.get('conscience_override_reason'),
-        metadata.get('epistemic_humility'),
-        metadata.get('entropy_awareness'),
-        metadata.get('coherence_alignment'),
-        metadata.get('action_success'),
-        metadata.get('action_type'),
-        metadata.get('tokens_used'),
-        metadata.get('cost_usd'),
-        metadata.get('completed_at'),
-        metadata.get('positive_moment'),
-        metadata.get('models_used'),
-        metadata.get('api_bases_used'),
-        metadata.get('dma_results'),
-        metadata.get('aspdma_result'),
-        metadata.get('idma_result'),
-        metadata.get('tsaspdma_result'),
-        metadata.get('conscience_result'),
-        metadata.get('action_result'),
-        metadata.get('initial_context'),
-        metadata.get('system_snapshot'),
-        metadata.get('gathered_context'),
+        trace_result['trace_id'],                         # $1
+        metadata.get('thought_id'),                       # $2
+        metadata.get('task_id'),                          # $3
+        metadata.get('agent_id_hash'),                    # $4
+        metadata.get('agent_name'),                       # $5
+        metadata.get('trace_type'),                       # $6
+        metadata.get('cognitive_state'),                  # $7
+        metadata.get('thought_type'),                     # $8
+        metadata.get('thought_depth'),                    # $9
+        metadata.get('started_at'),                       # $10
+        metadata.get('completed_at'),                     # $11
+        json.dumps(metadata.get('thought_start')) if metadata.get('thought_start') else None,  # $12
+        json.dumps(metadata.get('snapshot_and_context')) if metadata.get('snapshot_and_context') else None,  # $13
+        json.dumps(metadata.get('dma_results')) if metadata.get('dma_results') else None,  # $14
+        json.dumps(metadata.get('aspdma_result')) if metadata.get('aspdma_result') else None,  # $15
+        json.dumps(metadata.get('conscience_result')) if metadata.get('conscience_result') else None,  # $16
+        json.dumps(metadata.get('action_result')) if metadata.get('action_result') else None,  # $17
+        metadata.get('csdma_plausibility_score'),         # $18
+        metadata.get('dsdma_domain_alignment'),           # $19
+        metadata.get('dsdma_domain'),                     # $20
+        metadata.get('pdma_stakeholders'),                # $21
+        metadata.get('pdma_conflicts'),                   # $22
+        metadata.get('idma_k_eff'),                       # $23
+        metadata.get('idma_correlation_risk'),            # $24
+        metadata.get('idma_fragility_flag'),              # $25
+        metadata.get('idma_phase'),                       # $26
+        metadata.get('action_rationale'),                 # $27
+        metadata.get('conscience_passed'),                # $28
+        metadata.get('action_was_overridden'),            # $29
+        metadata.get('entropy_level'),                    # $30
+        metadata.get('coherence_level'),                  # $31
+        metadata.get('entropy_passed'),                   # $32
+        metadata.get('coherence_passed'),                 # $33
+        metadata.get('optimization_veto_passed'),         # $34
+        metadata.get('epistemic_humility_passed'),        # $35
+        metadata.get('selected_action'),                  # $36
+        metadata.get('action_success'),                   # $37
+        metadata.get('processing_ms'),                    # $38
+        metadata.get('tokens_input'),                     # $39
+        metadata.get('tokens_output'),                    # $40
+        metadata.get('tokens_total'),                     # $41
+        metadata.get('cost_cents'),                       # $42
+        metadata.get('llm_calls'),                        # $43
+        metadata.get('models_used'),                      # $44
+        signature,                                        # $45
+        signature_key_id,                                 # $46
+        metadata.get('signature_verified', False),        # $47
+        request.consent_timestamp,                        # $48
+        request.batch_timestamp,                          # $49
+        request.trace_level,                              # $50
+        metadata.get('has_positive_moment'),              # $51
+        metadata.get('has_execution_error'),              # $52
+        metadata.get('execution_time_ms'),                # $53
+        metadata.get('selection_confidence'),             # $54
+        metadata.get('is_recursive'),                     # $55
+        json.dumps(metadata.get('idma_result')) if metadata.get('idma_result') else None,  # $56
+        json.dumps(metadata.get('tsaspdma_result')) if metadata.get('tsaspdma_result') else None,  # $57
+        metadata.get('tsaspdma_approved'),                # $58
     )
 
 
@@ -313,28 +326,117 @@ async def store_mock_trace(
     trace_result: dict[str, Any],
     request: CovenantEventsRequest,
 ) -> None:
-    """Store mock trace in covenant_traces_mock table."""
-    # Same structure as production, different table
+    """Store mock trace in covenant_traces_mock table.
+
+    Uses same column schema as production traces.
+    """
     metadata = trace_result.get('extracted_metadata', {})
+
+    event = next(
+        (e for e in request.events if e.trace.trace_id == trace_result['trace_id']),
+        None
+    )
+    signature = event.trace.signature if event else metadata.get('signature')
+    signature_key_id = event.trace.signature_key_id if event else metadata.get('signature_key_id')
 
     await conn.execute("""
         INSERT INTO cirislens.covenant_traces_mock (
-            trace_id, timestamp, trace_level, schema_version,
-            batch_timestamp, consent_timestamp,
-            thought_id, agent_name, selected_action, action_success
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-        ON CONFLICT (trace_id) DO NOTHING
+            trace_id, thought_id, task_id,
+            agent_id_hash, agent_name,
+            trace_type, cognitive_state, thought_type, thought_depth,
+            started_at, completed_at,
+            thought_start, snapshot_and_context, dma_results,
+            aspdma_result, conscience_result, action_result,
+            csdma_plausibility_score, dsdma_domain_alignment, dsdma_domain,
+            pdma_stakeholders, pdma_conflicts,
+            idma_k_eff, idma_correlation_risk, idma_fragility_flag, idma_phase,
+            action_rationale,
+            conscience_passed, action_was_overridden,
+            entropy_level, coherence_level,
+            entropy_passed, coherence_passed,
+            optimization_veto_passed, epistemic_humility_passed,
+            selected_action, action_success, processing_ms,
+            tokens_input, tokens_output, tokens_total,
+            cost_cents, llm_calls, models_used,
+            signature, signature_key_id, signature_verified,
+            consent_timestamp, timestamp, trace_level,
+            mock_models, mock_reason,
+            has_positive_moment, has_execution_error, execution_time_ms,
+            selection_confidence, is_recursive,
+            idma_result, tsaspdma_result,
+            tool_name, tool_parameters, tsaspdma_reasoning, tsaspdma_approved
+        ) VALUES (
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+            $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
+            $21, $22, $23, $24, $25, $26, $27, $28, $29, $30,
+            $31, $32, $33, $34, $35, $36, $37, $38, $39, $40,
+            $41, $42, $43, $44, $45, $46, $47, $48, $49, $50,
+            $51, $52, $53, $54, $55, $56, $57, $58, $59, $60,
+            $61, $62
+        ) ON CONFLICT (trace_id) DO NOTHING
     """,
-        trace_result['trace_id'],
-        datetime.now(UTC),
-        request.trace_level,
-        trace_result.get('schema_version'),
-        request.batch_timestamp,
-        request.consent_timestamp,
-        metadata.get('thought_id'),
-        metadata.get('agent_name'),
-        metadata.get('selected_action'),
-        metadata.get('action_success'),
+        trace_result['trace_id'],                         # $1
+        metadata.get('thought_id'),                       # $2
+        metadata.get('task_id'),                          # $3
+        metadata.get('agent_id_hash'),                    # $4
+        metadata.get('agent_name'),                       # $5
+        metadata.get('trace_type'),                       # $6
+        metadata.get('cognitive_state'),                  # $7
+        metadata.get('thought_type'),                     # $8
+        metadata.get('thought_depth'),                    # $9
+        metadata.get('started_at'),                       # $10
+        metadata.get('completed_at'),                     # $11
+        json.dumps(metadata.get('thought_start')) if metadata.get('thought_start') else None,  # $12
+        json.dumps(metadata.get('snapshot_and_context')) if metadata.get('snapshot_and_context') else None,  # $13
+        json.dumps(metadata.get('dma_results')) if metadata.get('dma_results') else None,  # $14
+        json.dumps(metadata.get('aspdma_result')) if metadata.get('aspdma_result') else None,  # $15
+        json.dumps(metadata.get('conscience_result')) if metadata.get('conscience_result') else None,  # $16
+        json.dumps(metadata.get('action_result')) if metadata.get('action_result') else None,  # $17
+        metadata.get('csdma_plausibility_score'),         # $18
+        metadata.get('dsdma_domain_alignment'),           # $19
+        metadata.get('dsdma_domain'),                     # $20
+        metadata.get('pdma_stakeholders'),                # $21
+        metadata.get('pdma_conflicts'),                   # $22
+        metadata.get('idma_k_eff'),                       # $23
+        metadata.get('idma_correlation_risk'),            # $24
+        metadata.get('idma_fragility_flag'),              # $25
+        metadata.get('idma_phase'),                       # $26
+        metadata.get('action_rationale'),                 # $27
+        metadata.get('conscience_passed'),                # $28
+        metadata.get('action_was_overridden'),            # $29
+        metadata.get('entropy_level'),                    # $30
+        metadata.get('coherence_level'),                  # $31
+        metadata.get('entropy_passed'),                   # $32
+        metadata.get('coherence_passed'),                 # $33
+        metadata.get('optimization_veto_passed'),         # $34
+        metadata.get('epistemic_humility_passed'),        # $35
+        metadata.get('selected_action'),                  # $36
+        metadata.get('action_success'),                   # $37
+        metadata.get('processing_ms'),                    # $38
+        metadata.get('tokens_input'),                     # $39
+        metadata.get('tokens_output'),                    # $40
+        metadata.get('tokens_total'),                     # $41
+        metadata.get('cost_cents'),                       # $42
+        metadata.get('llm_calls'),                        # $43
+        metadata.get('models_used'),                      # $44
+        signature,                                        # $45
+        signature_key_id,                                 # $46
+        metadata.get('signature_verified', False),        # $47
+        request.consent_timestamp,                        # $48
+        request.batch_timestamp,                          # $49
+        request.trace_level,                              # $50
+        metadata.get('mock_models'),                      # $51
+        "models_used contains mock",                      # $52
+        metadata.get('has_positive_moment'),              # $53
+        metadata.get('has_execution_error'),              # $54
+        metadata.get('execution_time_ms'),                # $55
+        metadata.get('selection_confidence'),             # $56
+        metadata.get('is_recursive'),                     # $57
+        json.dumps(metadata.get('idma_result')) if metadata.get('idma_result') else None,  # $58
+        json.dumps(metadata.get('tsaspdma_result')) if metadata.get('tsaspdma_result') else None,  # $59
+        metadata.get('tool_name'),                        # $60
+        json.dumps(metadata.get('tool_parameters')) if metadata.get('tool_parameters') else None,  # $61
+        metadata.get('tsaspdma_approved'),                # $62
     )
 
 
