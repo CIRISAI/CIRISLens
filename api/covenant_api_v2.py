@@ -308,7 +308,7 @@ async def store_production_trace(
             $21, $22, $23, $24, $25, $26, $27, $28, $29, $30,
             $31, $32, $33, $34, $35, $36, $37, $38, $39, $40,
             $41, $42, $43, $44, $45, $46, $47, $48, $49, $50,
-            $51, $52, $53, $54, $55, $56, $57, $58
+            $51, $52, $53, $54, $55, $56, $57, $58, $59, $60, $61
         ) ON CONFLICT (trace_id) DO NOTHING
     """,
         trace_result['trace_id'],                         # $1
@@ -354,7 +354,7 @@ async def store_production_trace(
         metadata.get('tokens_total'),                     # $41
         metadata.get('cost_cents'),                       # $42
         metadata.get('llm_calls'),                        # $43
-        to_list(metadata.get('models_used')),              # $44
+        to_list(metadata.get('models_used')),             # $44
         signature,                                        # $45
         signature_key_id,                                 # $46
         to_bool(metadata.get('signature_verified')),      # $47
@@ -368,7 +368,10 @@ async def store_production_trace(
         to_bool(metadata.get('is_recursive')),            # $55
         json.dumps(metadata.get('idma_result')) if metadata.get('idma_result') else None,  # $56
         json.dumps(metadata.get('tsaspdma_result')) if metadata.get('tsaspdma_result') else None,  # $57
-        to_bool(metadata.get('tsaspdma_approved')),       # $58
+        metadata.get('tool_name'),                        # $58
+        json.dumps(metadata.get('tool_parameters')) if metadata.get('tool_parameters') else None,  # $59
+        metadata.get('tsaspdma_reasoning'),               # $60
+        to_bool(metadata.get('tsaspdma_approved')),       # $61
     )
 
 
