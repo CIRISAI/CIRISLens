@@ -390,7 +390,7 @@ async def store_mock_trace(
             $31, $32, $33, $34, $35, $36, $37, $38, $39, $40,
             $41, $42, $43, $44, $45, $46, $47, $48, $49, $50,
             $51, $52, $53, $54, $55, $56, $57, $58, $59, $60,
-            $61, $62
+            $61, $62, $63
         ) ON CONFLICT (trace_id) DO NOTHING
     """,
         trace_result['trace_id'],                         # $1
@@ -454,7 +454,8 @@ async def store_mock_trace(
         json.dumps(metadata.get('tsaspdma_result')) if metadata.get('tsaspdma_result') else None,  # $59
         metadata.get('tool_name'),                        # $60
         json.dumps(metadata.get('tool_parameters')) if metadata.get('tool_parameters') else None,  # $61
-        metadata.get('tsaspdma_approved'),                # $62
+        metadata.get('tsaspdma_reasoning'),               # $62
+        metadata.get('tsaspdma_approved'),                # $63
     )
 
 
