@@ -703,6 +703,17 @@ async def receive_covenant_events(request: Request) -> dict[str, Any]:  # noqa: 
     try:
         validated_request = CovenantEventsRequest.model_validate(raw_data)
     except Exception as e:
+        error_str = str(e)
+        # Check for missing consent - this is a compliance requirement
+        if "consent_timestamp" in error_str:
+            logger.error(
+                "TRACE_REJECTED_NO_CONSENT: Trace batch rejected - consent_timestamp is required. "
+                "Agents must provide explicit consent timestamp for trace storage."
+            )
+            raise HTTPException(
+                status_code=422,
+                detail="consent_timestamp is required - traces cannot be stored without explicit consent"
+            ) from e
         logger.error("Pydantic validation failed: %s", e)
         raise HTTPException(status_code=422, detail=str(e)) from e
 
