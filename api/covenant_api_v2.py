@@ -518,29 +518,8 @@ async def store_batch_metadata(
 # =============================================================================
 
 
-@router.post("/events/debug")
-async def debug_covenant_events(request: Request) -> dict[str, Any]:
-    """Debug endpoint to see raw request body."""
-    body = await request.body()
-    try:
-        data = json.loads(body)
-        # Log first event structure
-        if data.get('events'):
-            first_event = data['events'][0]
-            logger.info("Debug - First event keys: %s", list(first_event.keys()))
-            if 'trace' in first_event:
-                logger.info("Debug - Trace keys: %s", list(first_event['trace'].keys()))
-                if first_event['trace'].get('components'):
-                    first_comp = first_event['trace']['components'][0]
-                    logger.info("Debug - First component keys: %s", list(first_comp.keys()))
-        return {"status": "debug", "keys": list(data.keys()), "event_count": len(data.get('events', []))}
-    except Exception as e:
-        logger.error("Debug parse error: %s", e)
-        return {"error": str(e)}
-
-
 @router.post("/events")
-async def receive_covenant_events(request: CovenantEventsRequest) -> dict[str, Any]:
+async def receive_covenant_events(request: Request) -> dict[str, Any]:
     """
     Receive and process covenant trace events.
 
@@ -554,6 +533,31 @@ async def receive_covenant_events(request: CovenantEventsRequest) -> dict[str, A
 
     Python handles async database storage.
     """
+    # Parse and validate request manually to log any errors
+    body = await request.body()
+    try:
+        raw_data = json.loads(body)
+    except json.JSONDecodeError as e:
+        logger.error("Failed to parse request JSON: %s", e)
+        raise HTTPException(status_code=422, detail=f"Invalid JSON: {e}")
+
+    # Log the structure for debugging
+    if raw_data.get('events'):
+        first_event = raw_data['events'][0]
+        logger.info("Request structure - event keys: %s", list(first_event.keys()))
+        if 'trace' in first_event:
+            logger.info("Request structure - trace keys: %s", list(first_event['trace'].keys()))
+            if first_event['trace'].get('components'):
+                first_comp = first_event['trace']['components'][0]
+                logger.info("Request structure - component keys: %s", list(first_comp.keys()))
+
+    # Validate with Pydantic
+    try:
+        validated_request = CovenantEventsRequest.model_validate(raw_data)
+    except Exception as e:
+        logger.error("Pydantic validation failed: %s", e)
+        raise HTTPException(status_code=422, detail=str(e))
+
     if not RUST_AVAILABLE:
         raise HTTPException(
             status_code=503,
@@ -590,16 +594,16 @@ async def receive_covenant_events(request: CovenantEventsRequest) -> dict[str, A
                     for c in event.trace.components
                 ]
             })
-            for event in request.events
+            for event in validated_request.events
         ]
 
         # Process batch in Rust
         result = cirislens_core.process_trace_batch(
             events=events_json,
-            batch_timestamp=request.batch_timestamp.isoformat(),
-            consent_timestamp=request.consent_timestamp.isoformat() if request.consent_timestamp else None,
-            trace_level=request.trace_level,
-            correlation_metadata=json.dumps(request.correlation_metadata.model_dump(exclude_none=True)) if request.correlation_metadata else None,
+            batch_timestamp=validated_request.batch_timestamp.isoformat(),
+            consent_timestamp=validated_request.consent_timestamp.isoformat() if validated_request.consent_timestamp else None,
+            trace_level=validated_request.trace_level,
+            correlation_metadata=json.dumps(validated_request.correlation_metadata.model_dump(exclude_none=True)) if validated_request.correlation_metadata else None,
         )
 
         accepted = 0
@@ -613,13 +617,13 @@ async def receive_covenant_events(request: CovenantEventsRequest) -> dict[str, A
             try:
                 if trace_result.get('accepted', False):
                     if destination == 'production':
-                        await store_production_trace(conn, trace_result, request)
+                        await store_production_trace(conn, trace_result, validated_request)
                         accepted += 1
                     elif destination == 'mock':
-                        await store_mock_trace(conn, trace_result, request)
+                        await store_mock_trace(conn, trace_result, validated_request)
                         accepted += 1
                     elif destination == 'connectivity':
-                        await store_connectivity_event(conn, trace_result, request)
+                        await store_connectivity_event(conn, trace_result, validated_request)
                         accepted += 1
                 else:
                     rejected += 1
@@ -640,18 +644,18 @@ async def receive_covenant_events(request: CovenantEventsRequest) -> dict[str, A
                 errors.append(f"{trace_result.get('trace_id')}: Storage error - {e}")
 
         # Store batch metadata
-        await store_batch_metadata(conn, request, accepted, rejected, errors)
+        await store_batch_metadata(conn, validated_request, accepted, rejected, errors)
 
     logger.info(
         "Covenant events batch: received=%d accepted=%d rejected=%d",
-        len(request.events),
+        len(validated_request.events),
         accepted,
         rejected,
     )
 
     response: dict[str, Any] = {
         "status": "ok" if rejected == 0 else "partial",
-        "received": len(request.events),
+        "received": len(validated_request.events),
         "accepted": accepted,
         "rejected": rejected,
         "batch_id": result.get('batch_id'),
