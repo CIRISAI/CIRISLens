@@ -607,13 +607,15 @@ async def receive_covenant_events(request: Request) -> dict[str, Any]:  # noqa: 
         logger.error("Failed to parse request JSON: %s", e)
         raise HTTPException(status_code=422, detail=f"Invalid JSON: {e}") from e
 
-    # Detect event type from first event
-    if raw_data.get('events'):
-        first_event = raw_data['events'][0]
+    # Detect event type - check if ANY event has 'trace' key (signature of trace events)
+    events = raw_data.get('events', [])
+    has_trace_events = any('trace' in event for event in events)
 
-        # Check if this is a WBD deferral event (has defer_until or reason, no trace)
-        if 'defer_until' in first_event or ('reason' in first_event and 'trace' not in first_event):
-            logger.info("Detected WBD deferral events, routing to WBD handler")
+    # Only route to WBD if NO events have 'trace' key and first event looks like WBD
+    if events and not has_trace_events:
+        first_event = events[0]
+        if 'defer_until' in first_event or 'reason' in first_event or first_event.get('event_type') in ('wbd_deferral', 'WBD_DEFERRAL'):
+            logger.info("Detected WBD deferral events (no trace keys), routing to WBD handler")
             try:
                 wbd_request = WBDEventsRequest.model_validate(raw_data)
             except Exception as e:
@@ -825,3 +827,118 @@ async def get_cache_status() -> dict[str, Any]:
             "age_seconds": key_age,
         },
     }
+
+
+# =============================================================================
+# Repository Endpoints (for ciris.ai/explore-a-trace)
+# =============================================================================
+
+
+@router.get("/repository/traces")
+async def list_repository_traces(
+    public_sample: bool = False,
+    agent_id: str | None = None,
+    domain: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> dict[str, Any]:
+    """
+    List covenant traces for the public repository.
+
+    For ciris.ai/explore-a-trace, use public_sample=true to get curated traces.
+    """
+    db_pool = get_db_pool()
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    # Build query
+    query = """
+        SELECT trace_id, timestamp, agent_name, agent_id_hash,
+               thought_id, task_id, trace_type, trace_level,
+               cognitive_state, thought_type, thought_depth,
+               started_at, completed_at,
+               csdma_plausibility_score, dsdma_domain_alignment, dsdma_domain,
+               selected_action, action_success, action_was_overridden,
+               idma_k_eff, idma_fragility_flag,
+               conscience_passed, entropy_passed, coherence_passed,
+               tokens_total, cost_cents, models_used,
+               signature_verified
+        FROM cirislens.covenant_traces
+        WHERE 1=1
+    """
+    params: list[Any] = []
+    param_idx = 1
+
+    if public_sample:
+        query += f" AND public_sample = ${param_idx}"
+        params.append(True)
+        param_idx += 1
+
+    if agent_id:
+        query += f" AND agent_id_hash = ${param_idx}"
+        params.append(agent_id)
+        param_idx += 1
+
+    if domain:
+        query += f" AND dsdma_domain = ${param_idx}"
+        params.append(domain)
+        param_idx += 1
+
+    query += f" ORDER BY timestamp DESC LIMIT ${param_idx} OFFSET ${param_idx + 1}"
+    params.extend([limit, offset])
+
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch(query, *params)
+
+        traces = []
+        for row in rows:
+            trace = dict(row)
+            # Convert types for JSON serialization
+            for key, val in trace.items():
+                if hasattr(val, 'isoformat'):
+                    trace[key] = val.isoformat()
+                elif hasattr(val, '__float__'):
+                    trace[key] = float(val)
+            traces.append(trace)
+
+        # Get total count
+        count_query = "SELECT COUNT(*) FROM cirislens.covenant_traces WHERE 1=1"
+        count_params: list[Any] = []
+        if public_sample:
+            count_query += " AND public_sample = $1"
+            count_params.append(True)
+
+        total = await conn.fetchval(count_query, *count_params) if count_params else await conn.fetchval(count_query)
+
+    return {
+        "traces": traces,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+@router.get("/repository/traces/{trace_id}")
+async def get_repository_trace(trace_id: str) -> dict[str, Any]:
+    """Get a single trace by ID."""
+    db_pool = get_db_pool()
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM cirislens.covenant_traces WHERE trace_id = $1",
+            trace_id,
+        )
+
+        if not row:
+            raise HTTPException(status_code=404, detail="Trace not found")
+
+        trace = dict(row)
+        for key, val in trace.items():
+            if hasattr(val, 'isoformat'):
+                trace[key] = val.isoformat()
+            elif hasattr(val, '__float__'):
+                trace[key] = float(val)
+
+        return trace
