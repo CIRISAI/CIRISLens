@@ -1,0 +1,307 @@
+{
+  "version": "1.9.1",
+  "description": "Full trace format with SNAPSHOT_AND_CONTEXT, IDMA embedded in DMA_RESULTS",
+  "status": "supported",
+  "signature_event_types": [
+    "THOUGHT_START",
+    "SNAPSHOT_AND_CONTEXT",
+    "DMA_RESULTS",
+    "ASPDMA_RESULT",
+    "CONSCIENCE_RESULT",
+    "ACTION_RESULT"
+  ],
+  "required_event_types": [
+    "THOUGHT_START",
+    "DMA_RESULTS",
+    "ASPDMA_RESULT",
+    "ACTION_RESULT"
+  ],
+  "optional_event_types": [
+    "SNAPSHOT_AND_CONTEXT",
+    "CONSCIENCE_RESULT"
+  ],
+  "field_extractions": {
+    "THOUGHT_START": {
+      "thought_id": {
+        "path": "thought_id",
+        "type": "string",
+        "required": true,
+        "db_column": "thought_id"
+      },
+      "thought_type": {
+        "path": "thought_type",
+        "type": "string",
+        "required": false,
+        "db_column": "thought_type"
+      },
+      "thought_depth": {
+        "path": "depth",
+        "type": "int",
+        "required": false,
+        "db_column": "thought_depth"
+      },
+      "task_id": {
+        "path": "task_id",
+        "type": "string",
+        "required": false,
+        "db_column": "task_id"
+      },
+      "task_description": {
+        "path": "task_description",
+        "type": "string",
+        "required": false,
+        "db_column": "task_description"
+      },
+      "started_at": {
+        "path": "started_at",
+        "type": "timestamp",
+        "required": false,
+        "db_column": "started_at"
+      }
+    },
+    "SNAPSHOT_AND_CONTEXT": {
+      "agent_name": {
+        "path": "system_snapshot.agent_profile.name",
+        "type": "string",
+        "required": false,
+        "db_column": "agent_name"
+      },
+      "cognitive_state": {
+        "path": "system_snapshot.cognitive_state",
+        "type": "string",
+        "required": false,
+        "db_column": "cognitive_state"
+      },
+      "initial_context": {
+        "path": "initial_context",
+        "type": "json",
+        "required": false,
+        "db_column": "initial_context"
+      },
+      "system_snapshot": {
+        "path": "system_snapshot",
+        "type": "json",
+        "required": false,
+        "db_column": "system_snapshot"
+      },
+      "gathered_context": {
+        "path": "gathered_context",
+        "type": "json",
+        "required": false,
+        "db_column": "gathered_context"
+      }
+    },
+    "DMA_RESULTS": {
+      "csdma_plausibility": {
+        "path": "csdma.plausibility_score",
+        "type": "float",
+        "required": false,
+        "db_column": "csdma_plausibility"
+      },
+      "csdma_confidence": {
+        "path": "csdma.confidence",
+        "type": "float",
+        "required": false,
+        "db_column": "csdma_confidence"
+      },
+      "csdma_reasoning": {
+        "path": "csdma.reasoning",
+        "type": "string",
+        "required": false,
+        "db_column": "csdma_reasoning"
+      },
+      "dsdma_alignment": {
+        "path": "dsdma.domain_alignment",
+        "type": "float",
+        "required": false,
+        "db_column": "dsdma_alignment"
+      },
+      "dsdma_confidence": {
+        "path": "dsdma.confidence",
+        "type": "float",
+        "required": false,
+        "db_column": "dsdma_confidence"
+      },
+      "dsdma_reasoning": {
+        "path": "dsdma.reasoning",
+        "type": "string",
+        "required": false,
+        "db_column": "dsdma_reasoning"
+      },
+      "pdma_stakeholder_score": {
+        "path": "pdma.stakeholder_impact_score",
+        "type": "float",
+        "required": false,
+        "db_column": "pdma_stakeholder_score"
+      },
+      "pdma_conflict_detected": {
+        "path": "pdma.conflict_detected",
+        "type": "boolean",
+        "required": false,
+        "db_column": "pdma_conflict_detected"
+      },
+      "pdma_reasoning": {
+        "path": "pdma.reasoning",
+        "type": "string",
+        "required": false,
+        "db_column": "pdma_reasoning"
+      },
+      "idma_k_eff": {
+        "path": "idma.k_eff",
+        "type": "float",
+        "required": false,
+        "db_column": "idma_k_eff"
+      },
+      "idma_correlation_risk": {
+        "path": "idma.correlation_risk",
+        "type": "float",
+        "required": false,
+        "db_column": "idma_correlation_risk"
+      },
+      "idma_fragility_flag": {
+        "path": "idma.fragility_flag",
+        "type": "boolean",
+        "required": false,
+        "db_column": "idma_fragility_flag"
+      },
+      "idma_phase": {
+        "path": "idma.phase",
+        "type": "string",
+        "required": false,
+        "db_column": "idma_phase"
+      },
+      "dma_results": {
+        "path": "",
+        "type": "json",
+        "required": false,
+        "db_column": "dma_results"
+      }
+    },
+    "ASPDMA_RESULT": {
+      "selected_action": {
+        "path": "selected_action",
+        "type": "string",
+        "required": false,
+        "db_column": "selected_action"
+      },
+      "action_rationale": {
+        "path": "rationale",
+        "type": "string",
+        "required": false,
+        "db_column": "action_rationale"
+      },
+      "aspdma_confidence": {
+        "path": "confidence",
+        "type": "float",
+        "required": false,
+        "db_column": "aspdma_confidence"
+      },
+      "aspdma_result": {
+        "path": "",
+        "type": "json",
+        "required": false,
+        "db_column": "aspdma_result"
+      }
+    },
+    "CONSCIENCE_RESULT": {
+      "conscience_passed": {
+        "path": "passed",
+        "type": "boolean",
+        "required": false,
+        "db_column": "conscience_passed"
+      },
+      "conscience_override": {
+        "path": "override",
+        "type": "boolean",
+        "required": false,
+        "db_column": "conscience_override"
+      },
+      "conscience_override_reason": {
+        "path": "override_reason",
+        "type": "string",
+        "required": false,
+        "db_column": "conscience_override_reason"
+      },
+      "epistemic_humility": {
+        "path": "ethical_faculties.epistemic_humility",
+        "type": "boolean",
+        "required": false,
+        "db_column": "epistemic_humility"
+      },
+      "entropy_awareness": {
+        "path": "ethical_faculties.entropy_awareness",
+        "type": "boolean",
+        "required": false,
+        "db_column": "entropy_awareness"
+      },
+      "coherence_alignment": {
+        "path": "ethical_faculties.coherence_alignment",
+        "type": "boolean",
+        "required": false,
+        "db_column": "coherence_alignment"
+      },
+      "conscience_result": {
+        "path": "",
+        "type": "json",
+        "required": false,
+        "db_column": "conscience_result"
+      }
+    },
+    "ACTION_RESULT": {
+      "action_success": {
+        "path": "success",
+        "type": "boolean",
+        "required": false,
+        "db_column": "action_success"
+      },
+      "action_type": {
+        "path": "action_type",
+        "type": "string",
+        "required": false,
+        "db_column": "action_type"
+      },
+      "tokens_used": {
+        "path": "tokens_used",
+        "type": "int",
+        "required": false,
+        "db_column": "tokens_used"
+      },
+      "cost_usd": {
+        "path": "cost_usd",
+        "type": "float",
+        "required": false,
+        "db_column": "cost_usd"
+      },
+      "models_used": {
+        "path": "models_used",
+        "type": "json",
+        "required": false,
+        "db_column": "models_used"
+      },
+      "api_bases_used": {
+        "path": "api_bases_used",
+        "type": "json",
+        "required": false,
+        "db_column": "api_bases_used"
+      },
+      "completed_at": {
+        "path": "completed_at",
+        "type": "timestamp",
+        "required": false,
+        "db_column": "completed_at"
+      },
+      "positive_moment": {
+        "path": "positive_moment",
+        "type": "boolean",
+        "required": false,
+        "db_column": "positive_moment"
+      },
+      "action_result": {
+        "path": "",
+        "type": "json",
+        "required": false,
+        "db_column": "action_result"
+      }
+    }
+  }
+}

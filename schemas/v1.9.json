@@ -1,0 +1,134 @@
+{
+  "version": "1.9",
+  "description": "Trace format with ASPDMA and CONSCIENCE but no SNAPSHOT",
+  "status": "deprecated",
+  "signature_event_types": [
+    "THOUGHT_START",
+    "DMA_RESULTS",
+    "ASPDMA_RESULT",
+    "CONSCIENCE_RESULT",
+    "ACTION_RESULT"
+  ],
+  "required_event_types": [
+    "THOUGHT_START",
+    "DMA_RESULTS",
+    "ASPDMA_RESULT",
+    "CONSCIENCE_RESULT",
+    "ACTION_RESULT"
+  ],
+  "optional_event_types": [],
+  "field_extractions": {
+    "THOUGHT_START": {
+      "thought_id": {
+        "path": "thought_id",
+        "type": "string",
+        "required": true,
+        "db_column": "thought_id"
+      },
+      "thought_type": {
+        "path": "thought_type",
+        "type": "string",
+        "required": false,
+        "db_column": "thought_type"
+      },
+      "task_id": {
+        "path": "task_id",
+        "type": "string",
+        "required": false,
+        "db_column": "task_id"
+      },
+      "task_description": {
+        "path": "task_description",
+        "type": "string",
+        "required": false,
+        "db_column": "task_description"
+      }
+    },
+    "DMA_RESULTS": {
+      "csdma_plausibility": {
+        "path": "csdma.plausibility_score",
+        "type": "float",
+        "required": false,
+        "db_column": "csdma_plausibility"
+      },
+      "dsdma_alignment": {
+        "path": "dsdma.domain_alignment",
+        "type": "float",
+        "required": false,
+        "db_column": "dsdma_alignment"
+      },
+      "pdma_stakeholder_score": {
+        "path": "pdma.stakeholder_impact_score",
+        "type": "float",
+        "required": false,
+        "db_column": "pdma_stakeholder_score"
+      },
+      "dma_results": {
+        "path": "",
+        "type": "json",
+        "required": false,
+        "db_column": "dma_results"
+      }
+    },
+    "ASPDMA_RESULT": {
+      "selected_action": {
+        "path": "selected_action",
+        "type": "string",
+        "required": false,
+        "db_column": "selected_action"
+      },
+      "action_rationale": {
+        "path": "rationale",
+        "type": "string",
+        "required": false,
+        "db_column": "action_rationale"
+      },
+      "aspdma_result": {
+        "path": "",
+        "type": "json",
+        "required": false,
+        "db_column": "aspdma_result"
+      }
+    },
+    "CONSCIENCE_RESULT": {
+      "conscience_passed": {
+        "path": "passed",
+        "type": "boolean",
+        "required": false,
+        "db_column": "conscience_passed"
+      },
+      "conscience_result": {
+        "path": "",
+        "type": "json",
+        "required": false,
+        "db_column": "conscience_result"
+      }
+    },
+    "ACTION_RESULT": {
+      "action_success": {
+        "path": "success",
+        "type": "boolean",
+        "required": false,
+        "db_column": "action_success"
+      },
+      "tokens_used": {
+        "path": "tokens_used",
+        "type": "int",
+        "required": false,
+        "db_column": "tokens_used"
+      },
+      "cost_usd": {
+        "path": "cost_usd",
+        "type": "float",
+        "required": false,
+        "db_column": "cost_usd"
+      },
+      "action_result": {
+        "path": "",
+        "type": "json",
+        "required": false,
+        "db_column": "action_result"
+      }
+    }
+  }
+}

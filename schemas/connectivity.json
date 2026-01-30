@@ -1,0 +1,83 @@
+{
+  "version": "connectivity",
+  "description": "Agent startup/shutdown connectivity events",
+  "status": "current",
+  "special_handling": true,
+  "signature_event_types": [
+    "startup",
+    "shutdown"
+  ],
+  "required_event_types": null,
+  "optional_event_types": null,
+  "match_mode": "any",
+  "routing": {
+    "destination_table": "connectivity_events",
+    "skip_standard_processing": true
+  },
+  "field_extractions": {
+    "startup": {
+      "event_type": {
+        "path": "event_type",
+        "type": "string",
+        "required": true,
+        "db_column": "event_type"
+      },
+      "agent_id": {
+        "path": "agent_id",
+        "type": "string",
+        "required": false,
+        "db_column": "agent_id"
+      },
+      "agent_name": {
+        "path": "agent_name",
+        "type": "string",
+        "required": false,
+        "db_column": "agent_name"
+      },
+      "agent_id_hash": {
+        "path": "agent_id_hash",
+        "type": "string",
+        "required": false,
+        "db_column": "agent_id_hash"
+      },
+      "event_data": {
+        "path": "",
+        "type": "json",
+        "required": false,
+        "db_column": "event_data"
+      }
+    },
+    "shutdown": {
+      "event_type": {
+        "path": "event_type",
+        "type": "string",
+        "required": true,
+        "db_column": "event_type"
+      },
+      "agent_id": {
+        "path": "agent_id",
+        "type": "string",
+        "required": false,
+        "db_column": "agent_id"
+      },
+      "agent_name": {
+        "path": "agent_name",
+        "type": "string",
+        "required": false,
+        "db_column": "agent_name"
+      },
+      "agent_id_hash": {
+        "path": "agent_id_hash",
+        "type": "string",
+        "required": false,
+        "db_column": "agent_id_hash"
+      },
+      "event_data": {
+        "path": "",
+        "type": "json",
+        "required": false,
+        "db_column": "event_data"
+      }
+    }
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "repository": "CIRISLens Trace Schema Repository",
+  "version": "1.0.0",
+  "current_version": "1.9.3",
+  "last_updated": "2026-01-29T00:00:00Z",
+  "schemas": [
+    {
+      "version": "1.9.3",
+      "url": "v1.9.3.json",
+      "status": "current",
+      "description": "Full trace format with separate IDMA_RESULT event and TSASPDMA support"
+    },
+    {
+      "version": "1.9.1",
+      "url": "v1.9.1.json",
+      "status": "supported",
+      "description": "Full trace format with SNAPSHOT_AND_CONTEXT, IDMA embedded in DMA_RESULTS"
+    },
+    {
+      "version": "1.9",
+      "url": "v1.9.json",
+      "status": "deprecated",
+      "description": "Trace format with ASPDMA and CONSCIENCE but no SNAPSHOT"
+    },
+    {
+      "version": "1.8",
+      "url": "v1.8.json",
+      "status": "deprecated",
+      "description": "Legacy trace format without SNAPSHOT_AND_CONTEXT or separate IDMA"
+    },
+    {
+      "version": "connectivity",
+      "url": "connectivity.json",
+      "status": "current",
+      "description": "Agent startup/shutdown connectivity events"
+    }
+  ]
+}

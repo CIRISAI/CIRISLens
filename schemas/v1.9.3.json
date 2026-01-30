@@ -1,0 +1,419 @@
+{
+  "version": "1.9.3",
+  "description": "Full trace format with separate IDMA_RESULT event and TSASPDMA support",
+  "status": "current",
+  "signature_event_types": [
+    "THOUGHT_START",
+    "SNAPSHOT_AND_CONTEXT",
+    "DMA_RESULTS",
+    "IDMA_RESULT",
+    "ASPDMA_RESULT",
+    "CONSCIENCE_RESULT",
+    "ACTION_RESULT"
+  ],
+  "required_event_types": [
+    "THOUGHT_START",
+    "DMA_RESULTS",
+    "IDMA_RESULT",
+    "ASPDMA_RESULT",
+    "ACTION_RESULT"
+  ],
+  "optional_event_types": [
+    "SNAPSHOT_AND_CONTEXT",
+    "CONSCIENCE_RESULT",
+    "TSASPDMA_RESULT"
+  ],
+  "field_extractions": {
+    "THOUGHT_START": {
+      "thought_id": {
+        "path": "thought_id",
+        "type": "string",
+        "required": true,
+        "db_column": "thought_id",
+        "description": "Unique identifier for this thought"
+      },
+      "thought_type": {
+        "path": "thought_type",
+        "type": "string",
+        "required": false,
+        "db_column": "thought_type",
+        "description": "Type of thought (e.g., action, reflection)"
+      },
+      "thought_depth": {
+        "path": "depth",
+        "type": "int",
+        "required": false,
+        "db_column": "thought_depth",
+        "description": "Recursion depth of thought"
+      },
+      "task_id": {
+        "path": "task_id",
+        "type": "string",
+        "required": false,
+        "db_column": "task_id",
+        "description": "Associated task identifier"
+      },
+      "task_description": {
+        "path": "task_description",
+        "type": "string",
+        "required": false,
+        "db_column": "task_description",
+        "description": "Description of the task"
+      },
+      "started_at": {
+        "path": "started_at",
+        "type": "timestamp",
+        "required": false,
+        "db_column": "started_at",
+        "description": "Timestamp when thought started"
+      }
+    },
+    "SNAPSHOT_AND_CONTEXT": {
+      "agent_name": {
+        "path": "system_snapshot.agent_profile.name",
+        "type": "string",
+        "required": false,
+        "db_column": "agent_name",
+        "description": "Name of the agent"
+      },
+      "cognitive_state": {
+        "path": "system_snapshot.cognitive_state",
+        "type": "string",
+        "required": false,
+        "db_column": "cognitive_state",
+        "description": "Current cognitive state"
+      },
+      "initial_context": {
+        "path": "initial_context",
+        "type": "json",
+        "required": false,
+        "db_column": "initial_context",
+        "description": "Initial context data"
+      },
+      "system_snapshot": {
+        "path": "system_snapshot",
+        "type": "json",
+        "required": false,
+        "db_column": "system_snapshot",
+        "description": "Full system snapshot"
+      },
+      "gathered_context": {
+        "path": "gathered_context",
+        "type": "json",
+        "required": false,
+        "db_column": "gathered_context",
+        "description": "Gathered context data"
+      }
+    },
+    "DMA_RESULTS": {
+      "csdma_plausibility": {
+        "path": "csdma.plausibility_score",
+        "type": "float",
+        "required": false,
+        "db_column": "csdma_plausibility",
+        "description": "CSDMA plausibility score"
+      },
+      "csdma_confidence": {
+        "path": "csdma.confidence",
+        "type": "float",
+        "required": false,
+        "db_column": "csdma_confidence",
+        "description": "CSDMA confidence level"
+      },
+      "csdma_reasoning": {
+        "path": "csdma.reasoning",
+        "type": "string",
+        "required": false,
+        "db_column": "csdma_reasoning",
+        "description": "CSDMA reasoning text"
+      },
+      "dsdma_alignment": {
+        "path": "dsdma.domain_alignment",
+        "type": "float",
+        "required": false,
+        "db_column": "dsdma_alignment",
+        "description": "DSDMA domain alignment score"
+      },
+      "dsdma_confidence": {
+        "path": "dsdma.confidence",
+        "type": "float",
+        "required": false,
+        "db_column": "dsdma_confidence",
+        "description": "DSDMA confidence level"
+      },
+      "dsdma_reasoning": {
+        "path": "dsdma.reasoning",
+        "type": "string",
+        "required": false,
+        "db_column": "dsdma_reasoning",
+        "description": "DSDMA reasoning text"
+      },
+      "pdma_stakeholder_score": {
+        "path": "pdma.stakeholder_impact_score",
+        "type": "float",
+        "required": false,
+        "db_column": "pdma_stakeholder_score",
+        "description": "PDMA stakeholder impact score"
+      },
+      "pdma_conflict_detected": {
+        "path": "pdma.conflict_detected",
+        "type": "boolean",
+        "required": false,
+        "db_column": "pdma_conflict_detected",
+        "description": "Whether PDMA detected a conflict"
+      },
+      "pdma_reasoning": {
+        "path": "pdma.reasoning",
+        "type": "string",
+        "required": false,
+        "db_column": "pdma_reasoning",
+        "description": "PDMA reasoning text"
+      },
+      "dma_results": {
+        "path": "",
+        "type": "json",
+        "required": false,
+        "db_column": "dma_results",
+        "description": "Full DMA results object"
+      }
+    },
+    "IDMA_RESULT": {
+      "idma_k_eff": {
+        "path": "k_eff",
+        "type": "float",
+        "required": false,
+        "db_column": "idma_k_eff",
+        "description": "IDMA effective correlation coefficient"
+      },
+      "idma_correlation_risk": {
+        "path": "correlation_risk",
+        "type": "float",
+        "required": false,
+        "db_column": "idma_correlation_risk",
+        "description": "IDMA correlation risk score"
+      },
+      "idma_fragility_flag": {
+        "path": "fragility_flag",
+        "type": "boolean",
+        "required": false,
+        "db_column": "idma_fragility_flag",
+        "description": "IDMA fragility flag"
+      },
+      "idma_phase": {
+        "path": "phase",
+        "type": "string",
+        "required": false,
+        "db_column": "idma_phase",
+        "description": "IDMA phase identifier"
+      },
+      "idma_confidence": {
+        "path": "confidence",
+        "type": "float",
+        "required": false,
+        "db_column": "idma_confidence",
+        "description": "IDMA confidence level"
+      },
+      "idma_reasoning": {
+        "path": "reasoning",
+        "type": "string",
+        "required": false,
+        "db_column": "idma_reasoning",
+        "description": "IDMA reasoning text"
+      },
+      "idma_result": {
+        "path": "",
+        "type": "json",
+        "required": false,
+        "db_column": "idma_result",
+        "description": "Full IDMA result object"
+      }
+    },
+    "ASPDMA_RESULT": {
+      "selected_action": {
+        "path": "selected_action",
+        "type": "string",
+        "required": false,
+        "db_column": "selected_action",
+        "description": "Action selected by ASPDMA"
+      },
+      "action_rationale": {
+        "path": "rationale",
+        "type": "string",
+        "required": false,
+        "db_column": "action_rationale",
+        "description": "Rationale for selected action"
+      },
+      "aspdma_confidence": {
+        "path": "confidence",
+        "type": "float",
+        "required": false,
+        "db_column": "aspdma_confidence",
+        "description": "ASPDMA confidence level"
+      },
+      "aspdma_result": {
+        "path": "",
+        "type": "json",
+        "required": false,
+        "db_column": "aspdma_result",
+        "description": "Full ASPDMA result object"
+      }
+    },
+    "TSASPDMA_RESULT": {
+      "tool_name": {
+        "path": "final_tool_name",
+        "type": "string",
+        "required": false,
+        "db_column": "tool_name",
+        "description": "Name of the tool being evaluated",
+        "fallback_paths": ["original_tool_name"]
+      },
+      "tool_parameters": {
+        "path": "final_parameters",
+        "type": "json",
+        "required": false,
+        "db_column": "tool_parameters",
+        "description": "Tool parameters",
+        "fallback_paths": ["original_parameters"]
+      },
+      "tsaspdma_reasoning": {
+        "path": "tsaspdma_rationale",
+        "type": "string",
+        "required": false,
+        "db_column": "tsaspdma_reasoning",
+        "description": "TSASPDMA reasoning for approval/rejection",
+        "fallback_paths": ["aspdma_rationale"]
+      },
+      "tsaspdma_approved": {
+        "path": "final_action",
+        "type": "string",
+        "required": false,
+        "db_column": "tsaspdma_approved",
+        "description": "Whether tool use was approved (final_action=tool)",
+        "transform": "equals_tool"
+      },
+      "tsaspdma_result": {
+        "path": "",
+        "type": "json",
+        "required": false,
+        "db_column": "tsaspdma_result",
+        "description": "Full TSASPDMA result object"
+      }
+    },
+    "CONSCIENCE_RESULT": {
+      "conscience_passed": {
+        "path": "passed",
+        "type": "boolean",
+        "required": false,
+        "db_column": "conscience_passed",
+        "description": "Whether conscience check passed"
+      },
+      "conscience_override": {
+        "path": "override",
+        "type": "boolean",
+        "required": false,
+        "db_column": "conscience_override",
+        "description": "Whether conscience was overridden"
+      },
+      "conscience_override_reason": {
+        "path": "override_reason",
+        "type": "string",
+        "required": false,
+        "db_column": "conscience_override_reason",
+        "description": "Reason for conscience override"
+      },
+      "epistemic_humility": {
+        "path": "ethical_faculties.epistemic_humility",
+        "type": "boolean",
+        "required": false,
+        "db_column": "epistemic_humility",
+        "description": "Epistemic humility faculty"
+      },
+      "entropy_awareness": {
+        "path": "ethical_faculties.entropy_awareness",
+        "type": "boolean",
+        "required": false,
+        "db_column": "entropy_awareness",
+        "description": "Entropy awareness faculty"
+      },
+      "coherence_alignment": {
+        "path": "ethical_faculties.coherence_alignment",
+        "type": "boolean",
+        "required": false,
+        "db_column": "coherence_alignment",
+        "description": "Coherence alignment faculty"
+      },
+      "conscience_result": {
+        "path": "",
+        "type": "json",
+        "required": false,
+        "db_column": "conscience_result",
+        "description": "Full conscience result object"
+      }
+    },
+    "ACTION_RESULT": {
+      "action_success": {
+        "path": "success",
+        "type": "boolean",
+        "required": false,
+        "db_column": "action_success",
+        "description": "Whether action succeeded"
+      },
+      "action_type": {
+        "path": "action_type",
+        "type": "string",
+        "required": false,
+        "db_column": "action_type",
+        "description": "Type of action taken"
+      },
+      "tokens_used": {
+        "path": "tokens_used",
+        "type": "int",
+        "required": false,
+        "db_column": "tokens_used",
+        "description": "Number of tokens used"
+      },
+      "cost_usd": {
+        "path": "cost_usd",
+        "type": "float",
+        "required": false,
+        "db_column": "cost_usd",
+        "description": "Cost in USD"
+      },
+      "models_used": {
+        "path": "models_used",
+        "type": "json",
+        "required": false,
+        "db_column": "models_used",
+        "description": "Models used for this action"
+      },
+      "api_bases_used": {
+        "path": "api_bases_used",
+        "type": "json",
+        "required": false,
+        "db_column": "api_bases_used",
+        "description": "API bases used"
+      },
+      "completed_at": {
+        "path": "completed_at",
+        "type": "timestamp",
+        "required": false,
+        "db_column": "completed_at",
+        "description": "Timestamp when action completed"
+      },
+      "positive_moment": {
+        "path": "positive_moment",
+        "type": "boolean",
+        "required": false,
+        "db_column": "positive_moment",
+        "description": "Whether this was a positive moment"
+      },
+      "action_result": {
+        "path": "",
+        "type": "json",
+        "required": false,
+        "db_column": "action_result",
+        "description": "Full action result object"
+      }
+    }
+  }
+}

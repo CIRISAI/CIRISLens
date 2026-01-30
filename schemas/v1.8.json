@@ -1,0 +1,72 @@
+{
+  "version": "1.8",
+  "description": "Legacy trace format without SNAPSHOT_AND_CONTEXT or separate IDMA",
+  "status": "deprecated",
+  "signature_event_types": [
+    "THOUGHT_START",
+    "DMA_RESULTS",
+    "ACTION_RESULT"
+  ],
+  "required_event_types": [
+    "THOUGHT_START",
+    "DMA_RESULTS",
+    "ACTION_RESULT"
+  ],
+  "optional_event_types": [],
+  "field_extractions": {
+    "THOUGHT_START": {
+      "thought_id": {
+        "path": "thought_id",
+        "type": "string",
+        "required": true,
+        "db_column": "thought_id"
+      },
+      "thought_type": {
+        "path": "thought_type",
+        "type": "string",
+        "required": false,
+        "db_column": "thought_type"
+      },
+      "task_id": {
+        "path": "task_id",
+        "type": "string",
+        "required": false,
+        "db_column": "task_id"
+      }
+    },
+    "DMA_RESULTS": {
+      "csdma_plausibility": {
+        "path": "csdma.plausibility_score",
+        "type": "float",
+        "required": false,
+        "db_column": "csdma_plausibility"
+      },
+      "dsdma_alignment": {
+        "path": "dsdma.domain_alignment",
+        "type": "float",
+        "required": false,
+        "db_column": "dsdma_alignment"
+      },
+      "dma_results": {
+        "path": "",
+        "type": "json",
+        "required": false,
+        "db_column": "dma_results"
+      }
+    },
+    "ACTION_RESULT": {
+      "action_success": {
+        "path": "success",
+        "type": "boolean",
+        "required": false,
+        "db_column": "action_success"
+      },
+      "action_result": {
+        "path": "",
+        "type": "json",
+        "required": false,
+        "db_column": "action_result"
+      }
+    }
+  }
+}
