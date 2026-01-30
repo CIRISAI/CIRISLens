@@ -54,12 +54,11 @@ def get_db_pool() -> asyncpg.Pool | None:
 
 
 class TraceComponent(BaseModel):
-    """A component within a trace event."""
-    event_type: str
-    timestamp: str | None = None
-    data: dict[str, Any] = Field(default_factory=dict)
-    signature: str | None = None
-    signature_key_id: str | None = None
+    """Individual trace component (one of 6 types)."""
+    component_type: str  # observation, context, rationale, conscience, action
+    event_type: str  # THOUGHT_START, SNAPSHOT_AND_CONTEXT, etc.
+    timestamp: str  # ISO timestamp
+    data: dict[str, Any]
 
 
 class CovenantTrace(BaseModel):
@@ -562,11 +561,10 @@ async def receive_covenant_events(request: CovenantEventsRequest) -> dict[str, A
                 'signature_key_id': event.trace.signature_key_id,
                 'components': [
                     {
+                        'component_type': c.component_type,
                         'event_type': c.event_type,
                         'timestamp': c.timestamp,
                         'data': c.data,
-                        'signature': c.signature,
-                        'signature_key_id': c.signature_key_id,
                     }
                     for c in event.trace.components
                 ]
