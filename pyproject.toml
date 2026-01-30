@@ -141,6 +141,9 @@ ignore = [
     "S110",      # try-except-pass for websocket cleanup
     "RUF006",    # Fire-and-forget tasks for collector restart
 ]
+"api/ciris_scoring.py" = [
+    "S608",      # SQL injection false positive - BENCHMARK_FILTER is a constant, not user input
+]
 "api/manager_collector.py" = [
     "S501",      # verify=False for internal services behind Cloudflare
 ]

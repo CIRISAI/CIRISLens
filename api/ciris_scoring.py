@@ -77,6 +77,11 @@ PARAMS = {
     "coherence_window_days": 30,
 }
 
+# SQL filter to exclude benchmark/test traffic from scoring
+# Benchmark traces have "benchmark" in their idma_result JSON
+# Note: This is a constant, not user input - SQL injection warnings (S608) are false positives
+BENCHMARK_FILTER = "AND (idma_result IS NULL OR idma_result::text NOT ILIKE '%benchmark%')"
+
 
 # ============================================================================
 # Data Classes
@@ -227,7 +232,7 @@ async def calculate_factor_C(
     - K_contradiction: Rate of conscience overrides
     """
     # Query for identity stability and contradiction rate
-    query = """
+    query = f"""
     SELECT
         COUNT(*) as total_traces,
         SUM(CASE WHEN action_was_overridden THEN 1 ELSE 0 END) as override_count,
@@ -236,6 +241,7 @@ async def calculate_factor_C(
     WHERE agent_name = $1
       AND timestamp BETWEEN $2 AND $3
       AND selected_action = ANY($4)
+      {BENCHMARK_FILTER}
     """
 
     non_exempt_list = ["SPEAK", "TOOL", "MEMORIZE", "FORGET",
@@ -293,7 +299,7 @@ async def calculate_factor_I_int(
     - I_chain: Signature verification rate
     - I_coverage: Field completeness rate
     """
-    query = """
+    query = f"""
     SELECT
         COUNT(*) as total_traces,
         SUM(CASE WHEN signature_verified THEN 1 ELSE 0 END) as verified_count,
@@ -314,6 +320,7 @@ async def calculate_factor_I_int(
     FROM cirislens.covenant_traces
     WHERE agent_name = $1
       AND timestamp BETWEEN $2 AND $3
+      {BENCHMARK_FILTER}
     """
 
     row = await conn.fetchrow(query, agent_name, window_start, window_end)
@@ -368,7 +375,7 @@ async def calculate_factor_R(
     # Get baseline statistics (older window)
     baseline_start = window_start - timedelta(days=PARAMS["baseline_window_days"])
 
-    baseline_query = """
+    baseline_query = f"""
     SELECT
         AVG(csdma_plausibility_score) as baseline_csdma,
         STDDEV(csdma_plausibility_score) as std_csdma,
@@ -378,6 +385,7 @@ async def calculate_factor_R(
     WHERE agent_name = $1
       AND timestamp BETWEEN $2 AND $3
       AND selected_action = ANY($4)
+      {BENCHMARK_FILTER}
     """
 
     non_exempt_list = ["SPEAK", "TOOL", "MEMORIZE", "FORGET",
@@ -387,7 +395,7 @@ async def calculate_factor_R(
     baseline = await conn.fetchrow(baseline_query, agent_name, baseline_start, window_start, non_exempt_list)
 
     # Get recent statistics
-    recent_query = """
+    recent_query = f"""
     SELECT
         COUNT(*) as total_traces,
         AVG(csdma_plausibility_score) as recent_csdma,
@@ -397,6 +405,7 @@ async def calculate_factor_R(
     WHERE agent_name = $1
       AND timestamp BETWEEN $2 AND $3
       AND selected_action = ANY($4)
+      {BENCHMARK_FILTER}
     """
 
     recent = await conn.fetchrow(recent_query, agent_name, window_start, window_end, non_exempt_list)
@@ -456,7 +465,7 @@ async def calculate_factor_I_inc(
     - U_unsafe: Unsafe action rate under uncertainty
     """
     # Calculate ECE and unsafe action rate
-    query = """
+    query = f"""
     WITH calibration_buckets AS (
         SELECT
             FLOOR(csdma_plausibility_score * 10) / 10 as confidence_bucket,
@@ -469,6 +478,7 @@ async def calculate_factor_I_inc(
           AND csdma_plausibility_score IS NOT NULL
           AND action_success IS NOT NULL
           AND selected_action = ANY($4)
+          {BENCHMARK_FILTER}
         GROUP BY FLOOR(csdma_plausibility_score * 10) / 10
     )
     SELECT
@@ -484,7 +494,7 @@ async def calculate_factor_I_inc(
     ece_row = await conn.fetchrow(query, agent_name, window_start, window_end, non_exempt_list)
 
     # Query for unsafe actions (high entropy + failure)
-    unsafe_query = """
+    unsafe_query = f"""
     SELECT
         COUNT(*) as total,
         SUM(CASE WHEN entropy_level > 0.5 AND action_success = false THEN 1 ELSE 0 END) as unsafe_failures
@@ -492,6 +502,7 @@ async def calculate_factor_I_inc(
     WHERE agent_name = $1
       AND timestamp BETWEEN $2 AND $3
       AND selected_action = ANY($4)
+      {BENCHMARK_FILTER}
     """
 
     unsafe_row = await conn.fetchrow(unsafe_query, agent_name, window_start, window_end, non_exempt_list)
@@ -551,7 +562,7 @@ async def calculate_factor_S(
                        "HandlerActionType.MEMORIZE", "HandlerActionType.FORGET"]
 
     # Query for coherence signals with decay
-    coherence_query = """
+    coherence_query = f"""
     SELECT
         COUNT(*) as total_traces,
         AVG(
@@ -563,6 +574,7 @@ async def calculate_factor_S(
     WHERE agent_name = $1
       AND timestamp BETWEEN $2 AND $3
       AND selected_action = ANY($6)
+      {BENCHMARK_FILTER}
     """
 
     coherence_row = await conn.fetchrow(
@@ -576,7 +588,7 @@ async def calculate_factor_S(
     )
 
     # Query for positive moments and ethical faculty pass rates
-    enhancement_query = """
+    enhancement_query = f"""
     SELECT
         COUNT(*) as total,
         SUM(CASE WHEN has_positive_moment THEN 1 ELSE 0 END) as positive_moments,
@@ -598,6 +610,7 @@ async def calculate_factor_S(
     WHERE agent_name = $1
       AND timestamp BETWEEN $2 AND $3
       AND selected_action = ANY($4)
+      {BENCHMARK_FILTER}
     """
 
     enhance_row = await conn.fetchrow(
@@ -684,13 +697,14 @@ async def calculate_ciris_score(
     )
 
     # Get trace counts
-    count_query = """
+    count_query = f"""
     SELECT
         COUNT(*) as total,
         SUM(CASE WHEN selected_action = ANY($4) THEN 1 ELSE 0 END) as non_exempt
     FROM cirislens.covenant_traces
     WHERE agent_name = $1
       AND timestamp BETWEEN $2 AND $3
+      {BENCHMARK_FILTER}
     """
 
     non_exempt_list = ["SPEAK", "TOOL", "MEMORIZE", "FORGET",
@@ -761,12 +775,13 @@ async def get_fleet_scores(
     window_end = datetime.now(UTC)
     window_start = window_end - timedelta(days=window_days)
 
-    # Get all agents with traces in window
-    agents_query = """
+    # Get all agents with traces in window (excluding benchmark traffic)
+    agents_query = f"""
     SELECT DISTINCT agent_name
     FROM cirislens.covenant_traces
     WHERE timestamp BETWEEN $1 AND $2
       AND agent_name IS NOT NULL
+      {BENCHMARK_FILTER}
     """
 
     rows = await conn.fetch(agents_query, window_start, window_end)
