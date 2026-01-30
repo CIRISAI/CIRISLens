@@ -1,8 +1,37 @@
 # CIRISLens API Docker Image
-# Multi-stage build for smaller production images
+# Multi-stage build with Rust extension support
 
 # ============================================
-# Stage 1: Build stage
+# Stage 1: Rust builder for cirislens-core
+# ============================================
+FROM python:3.11-slim AS rust-builder
+
+WORKDIR /build
+
+# Install Rust toolchain and build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    build-essential \
+    pkg-config \
+    libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Rust via rustup
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+ENV PATH="/root/.cargo/bin:$PATH"
+
+# Install maturin for building PyO3 extensions
+RUN pip install --no-cache-dir maturin>=1.4
+
+# Copy Rust crate source
+COPY cirislens-core/ /build/cirislens-core/
+
+# Build the Rust extension wheel
+WORKDIR /build/cirislens-core
+RUN maturin build --release --strip --out /build/wheels
+
+# ============================================
+# Stage 2: Python builder
 # ============================================
 FROM python:3.11-slim AS builder
 
@@ -24,8 +53,12 @@ RUN pip install --no-cache-dir --upgrade pip wheel && \
     pip install --no-cache-dir -r requirements.txt && \
     python -m spacy download en_core_web_sm
 
+# Copy and install the Rust extension wheel
+COPY --from=rust-builder /build/wheels/*.whl /tmp/
+RUN pip install --no-cache-dir /tmp/*.whl
+
 # ============================================
-# Stage 2: Production stage
+# Stage 3: Production stage
 # ============================================
 FROM python:3.11-slim AS production
 
@@ -61,6 +94,9 @@ COPY api/ .
 # Copy SQL migrations
 COPY sql/ /app/sql/
 
+# Copy schema definitions
+COPY schemas/ /app/schemas/
+
 # Create non-root user for security
 RUN useradd --create-home --shell /bin/bash --uid 1000 cirislens && \
     chown -R cirislens:cirislens /app
@@ -78,7 +114,7 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
 CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT} --workers ${WORKERS} --access-log --proxy-headers"]
 
 # ============================================
-# Stage 3: Development stage (optional)
+# Stage 4: Development stage (optional)
 # ============================================
 FROM production AS development
 

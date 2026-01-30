@@ -1,0 +1,36 @@
+[build-system]
+requires = ["maturin>=1.4,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "cirislens-core"
+version = "0.1.0"
+description = "High-performance trace ingestion pipeline for CIRISLens"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [
+    {name = "CIRIS Team", email = "team@ciris.ai"}
+]
+keywords = ["rust", "pyo3", "trace", "ingestion", "security"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Rust",
+]
+
+[tool.maturin]
+# Build settings
+features = ["pyo3/extension-module"]
+python-source = "python"
+module-name = "cirislens_core"
+
+# Strip symbols for smaller binary
+strip = true
+
+# Optimize for release
+profile = "release"

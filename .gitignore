@@ -92,3 +92,13 @@ api/__pycache__/
 # Generated files
 *.pyc
 *.pyo
+
+# Rust
+target/
+Cargo.lock
+cirislens-core/target/
+**/*.rs.bk
+
+# Maturin build artifacts
+cirislens-core/wheels/
+cirislens-core/*.whl
