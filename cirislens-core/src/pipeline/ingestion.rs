@@ -276,6 +276,8 @@ fn validate_schema(trace: &Value, ctx: &LogContext) -> SchemaValidationResult {
 /// Verify trace signature.
 ///
 /// Extracts signature and key_id from trace and verifies against loaded public keys.
+/// The canonical message is the components array serialized with sorted keys,
+/// matching the Python implementation.
 fn verify_trace_signature(
     trace: &Value,
     ctx: &LogContext,
@@ -287,12 +289,21 @@ fn verify_trace_signature(
     match (signature, key_id) {
         (Some(sig), Some(kid)) => {
             // Build canonical message for verification
-            // The message is the trace content without the signature field
-            let mut trace_copy = trace.clone();
-            if let Some(obj) = trace_copy.as_object_mut() {
-                obj.remove("signature");
-            }
-            let canonical_message = serde_json::to_string(&trace_copy).unwrap_or_default();
+            // The message is ONLY the components array, serialized with sorted keys
+            // This matches the Python: json.dumps([c.model_dump() for c in trace.components], sort_keys=True)
+            let components = trace.get("components");
+
+            let canonical_message = match components {
+                Some(c) => sort_and_serialize(c),
+                None => {
+                    log::warn!("{} SIGNATURE_NO_COMPONENTS", ctx);
+                    return crate::validation::signature::SignatureVerificationResult {
+                        verified: false,
+                        key_id: Some(kid.to_string()),
+                        error: Some("No components array for signature verification".to_string()),
+                    };
+                }
+            };
 
             verify_signature(&canonical_message, sig, kid, ctx)
         }
@@ -308,6 +319,36 @@ fn verify_trace_signature(
                 error: Some("Signature present but key_id missing".to_string()),
             }
         }
+    }
+}
+
+/// Serialize JSON value with sorted keys (recursive).
+/// This matches Python's json.dumps(..., sort_keys=True) behavior.
+fn sort_and_serialize(value: &Value) -> String {
+    match value {
+        Value::Object(map) => {
+            // Sort keys and recursively process values
+            let mut sorted: Vec<_> = map.iter().collect();
+            sorted.sort_by(|a, b| a.0.cmp(b.0));
+
+            let pairs: Vec<String> = sorted
+                .iter()
+                .map(|(k, v)| format!("\"{}\":{}", k, sort_and_serialize(v)))
+                .collect();
+
+            format!("{{{}}}", pairs.join(","))
+        }
+        Value::Array(arr) => {
+            let items: Vec<String> = arr.iter().map(sort_and_serialize).collect();
+            format!("[{}]", items.join(","))
+        }
+        Value::String(s) => {
+            // Properly escape the string for JSON
+            serde_json::to_string(s).unwrap_or_else(|_| format!("\"{}\"", s))
+        }
+        Value::Number(n) => n.to_string(),
+        Value::Bool(b) => b.to_string(),
+        Value::Null => "null".to_string(),
     }
 }
 
