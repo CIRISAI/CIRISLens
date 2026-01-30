@@ -177,18 +177,17 @@ pub fn verify_signature(
 ) -> SignatureVerificationResult {
     let cache = get_key_cache();
 
-    // Check if we have any keys loaded
+    // Check if we have any keys loaded - this is a configuration error if empty
     if cache.is_empty() {
-        log::warn!(
-            "{} SIGNATURE_SKIP reason=no_keys_loaded key_id={}",
+        log::error!(
+            "{} SIGNATURE_VERIFY_FAILED reason=no_keys_loaded key_id={}",
             ctx,
             key_id
         );
-        // No keys = accept without verification (unverified mode)
         return SignatureVerificationResult {
             verified: false,
             key_id: Some(key_id.to_string()),
-            error: Some("No public keys loaded - unverified mode".to_string()),
+            error: Some("No public keys loaded - cannot verify signature".to_string()),
         };
     }
 

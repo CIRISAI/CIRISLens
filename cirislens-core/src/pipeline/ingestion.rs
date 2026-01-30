@@ -17,8 +17,10 @@ use serde_json::Value;
 use crate::extraction::metadata::extract_trace_metadata;
 use crate::logging::structured::LogContext;
 use crate::routing::decision::{determine_routing, RoutingDecision};
+use crate::security::pii::scrub_pii;
 use crate::security::sanitizer::sanitize_trace;
 use crate::validation::schema::{get_schema_cache, SchemaValidationResult};
+use crate::validation::signature::verify_signature;
 
 use super::context::BatchContext;
 
@@ -151,15 +153,46 @@ fn process_single_trace(batch_ctx: &BatchContext, event_json: &str) -> TraceResu
     }
 
     // [3] SIGNATURE VERIFICATION
-    // TODO: Implement signature verification
-    // For now, we skip this step and accept all traces
+    // Signatures are REQUIRED for trace integrity - no bypass
+    let signature_result = verify_trace_signature(&trace, &log_ctx);
+
+    if !signature_result.verified {
+        log::warn!(
+            "{} SIGNATURE_REJECTED key_id={:?} reason={:?}",
+            log_ctx,
+            signature_result.key_id,
+            signature_result.error
+        );
+        return TraceResult {
+            trace_id,
+            destination: "malformed".to_string(),
+            schema_version: Some(schema_version),
+            accepted: false,
+            rejection_reason: signature_result.error,
+            extracted_metadata: HashMap::new(),
+        };
+    }
 
     // [4] PII SCRUBBING (full_traces level only)
-    // TODO: Implement PII scrubbing
-    // For now, we skip this step
+    let trace_to_process = if trace_ctx.trace_level == "full_traces" {
+        log::info!("{} PII_SCRUB_START level=full_traces", log_ctx);
+        let (scrubbed, pii_result) = scrub_pii(&trace, &log_ctx);
+        if pii_result.total_entities() > 0 {
+            log::info!(
+                "{} PII_SCRUBBED total_entities={} fields_modified={}",
+                log_ctx,
+                pii_result.total_entities(),
+                pii_result.fields_modified
+            );
+        }
+        scrubbed
+    } else {
+        log::debug!("{} PII_SKIPPED level={}", log_ctx, trace_ctx.trace_level);
+        trace.clone()
+    };
 
     // [5] SECURITY SANITIZATION
-    let sanitized_trace = sanitize_trace(&trace, &log_ctx);
+    let sanitized_trace = sanitize_trace(&trace_to_process, &log_ctx);
 
     // [6] METADATA EXTRACTION
     let extracted_metadata = extract_trace_metadata(&sanitized_trace, &schema_version, &log_ctx);
@@ -237,6 +270,44 @@ fn validate_schema(trace: &Value, ctx: &LogContext) -> SchemaValidationResult {
             &format!("No matching schema for events: {:?}", all_events),
             all_events,
         ),
+    }
+}
+
+/// Verify trace signature.
+///
+/// Extracts signature and key_id from trace and verifies against loaded public keys.
+fn verify_trace_signature(
+    trace: &Value,
+    ctx: &LogContext,
+) -> crate::validation::signature::SignatureVerificationResult {
+    // Extract signature fields
+    let signature = trace.get("signature").and_then(|v| v.as_str());
+    let key_id = trace.get("signature_key_id").and_then(|v| v.as_str());
+
+    match (signature, key_id) {
+        (Some(sig), Some(kid)) => {
+            // Build canonical message for verification
+            // The message is the trace content without the signature field
+            let mut trace_copy = trace.clone();
+            if let Some(obj) = trace_copy.as_object_mut() {
+                obj.remove("signature");
+            }
+            let canonical_message = serde_json::to_string(&trace_copy).unwrap_or_default();
+
+            verify_signature(&canonical_message, sig, kid, ctx)
+        }
+        (None, _) => {
+            log::debug!("{} SIGNATURE_MISSING", ctx);
+            crate::validation::signature::SignatureVerificationResult::no_signature()
+        }
+        (Some(_), None) => {
+            log::warn!("{} SIGNATURE_KEY_ID_MISSING", ctx);
+            crate::validation::signature::SignatureVerificationResult {
+                verified: false,
+                key_id: None,
+                error: Some("Signature present but key_id missing".to_string()),
+            }
+        }
     }
 }
 
