@@ -19,7 +19,7 @@ import logging
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 if TYPE_CHECKING:
@@ -516,6 +516,27 @@ async def store_batch_metadata(
 # =============================================================================
 # API Endpoint
 # =============================================================================
+
+
+@router.post("/events/debug")
+async def debug_covenant_events(request: Request) -> dict[str, Any]:
+    """Debug endpoint to see raw request body."""
+    body = await request.body()
+    try:
+        data = json.loads(body)
+        # Log first event structure
+        if data.get('events'):
+            first_event = data['events'][0]
+            logger.info("Debug - First event keys: %s", list(first_event.keys()))
+            if 'trace' in first_event:
+                logger.info("Debug - Trace keys: %s", list(first_event['trace'].keys()))
+                if first_event['trace'].get('components'):
+                    first_comp = first_event['trace']['components'][0]
+                    logger.info("Debug - First component keys: %s", list(first_comp.keys()))
+        return {"status": "debug", "keys": list(data.keys()), "event_count": len(data.get('events', []))}
+    except Exception as e:
+        logger.error("Debug parse error: %s", e)
+        return {"error": str(e)}
 
 
 @router.post("/events")
