@@ -21,7 +21,6 @@ from pydantic import BaseModel
 
 from api.db import get_db_pool
 from api.schema_sync import (
-    SyncResult,
     fetch_schemas_from_remote,
     get_schema_cache,
     initialize_schema_cache,

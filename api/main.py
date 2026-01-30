@@ -19,8 +19,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, EmailStr
 
+from covenant_api_v2 import initialize_rust_caches
+
 # Import Covenant API router (V2 - Rust-powered)
-from covenant_api_v2 import router as covenant_router, initialize_rust_caches
+from covenant_api_v2 import router as covenant_router
 from log_ingest import LogIngestService
 from manager_collector import ManagerCollector
 from migrations import startup_migrations

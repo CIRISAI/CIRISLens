@@ -20,7 +20,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 if TYPE_CHECKING:
     import asyncpg
@@ -44,7 +44,7 @@ _cache_refresh_lock = asyncio.Lock()
 
 def get_db_pool() -> asyncpg.Pool | None:
     """Get the database pool from main module."""
-    import main
+    import main  # noqa: PLC0415 - Intentional to avoid circular import
     return main.db_pool
 
 
@@ -585,7 +585,7 @@ async def receive_wbd_events(request: WBDEventsRequest) -> dict[str, Any]:
 
 
 @router.post("/events")
-async def receive_covenant_events(request: Request) -> dict[str, Any]:
+async def receive_covenant_events(request: Request) -> dict[str, Any]:  # noqa: PLR0912, PLR0915
     """
     Receive and process covenant trace events.
 
@@ -605,7 +605,7 @@ async def receive_covenant_events(request: Request) -> dict[str, Any]:
         raw_data = json.loads(body)
     except json.JSONDecodeError as e:
         logger.error("Failed to parse request JSON: %s", e)
-        raise HTTPException(status_code=422, detail=f"Invalid JSON: {e}")
+        raise HTTPException(status_code=422, detail=f"Invalid JSON: {e}") from e
 
     # Detect event type from first event
     if raw_data.get('events'):
@@ -618,7 +618,7 @@ async def receive_covenant_events(request: Request) -> dict[str, Any]:
                 wbd_request = WBDEventsRequest.model_validate(raw_data)
             except Exception as e:
                 logger.error("WBD validation failed: %s", e)
-                raise HTTPException(status_code=422, detail=str(e))
+                raise HTTPException(status_code=422, detail=str(e)) from e
 
             # Handle WBD events inline
             db_pool = get_db_pool()
@@ -664,7 +664,7 @@ async def receive_covenant_events(request: Request) -> dict[str, Any]:
         validated_request = CovenantEventsRequest.model_validate(raw_data)
     except Exception as e:
         logger.error("Pydantic validation failed: %s", e)
-        raise HTTPException(status_code=422, detail=str(e))
+        raise HTTPException(status_code=422, detail=str(e)) from e
 
     if not RUST_AVAILABLE:
         raise HTTPException(

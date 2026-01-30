@@ -16,8 +16,10 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 import aiohttp
 
@@ -119,9 +121,8 @@ class SchemaCache:
                         event_types,
                     )
                     return schema
-            else:
-                # All signature events must be present (superset check)
-                if event_types >= signature_events:
+            # All signature events must be present (superset check)
+            elif event_types >= signature_events:
                     logger.info(
                         "SCHEMA_MATCHED version=%s events=%s signature=%s",
                         schema.version,
@@ -225,7 +226,7 @@ def load_schemas_from_directory(schema_dir: Path) -> list[SchemaDefinition]:
         return schemas
 
     try:
-        with open(index_path) as f:
+        with index_path.open() as f:
             index = json.load(f)
 
         for schema_meta in index.get("schemas", []):
@@ -241,7 +242,7 @@ def load_schemas_from_directory(schema_dir: Path) -> list[SchemaDefinition]:
                 continue
 
             try:
-                with open(schema_path) as f:
+                with schema_path.open() as f:
                     schema_data = json.load(f)
 
                 # Override status from index if provided
