@@ -72,7 +72,7 @@ PARAMS = {
     "min_traces": 30,
 
     # Time windows
-    "default_window_days": 7,
+    "default_window_days": 30,
     "baseline_window_days": 30,
     "coherence_window_days": 30,
 }
