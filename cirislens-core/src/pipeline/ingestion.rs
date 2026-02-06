@@ -305,6 +305,15 @@ fn verify_trace_signature(
                 }
             };
 
+            // Debug logging: show message hash and preview for troubleshooting
+            let msg_hash = crate::validation::signature::compute_hash(&canonical_message);
+            let msg_len = canonical_message.len();
+            let msg_preview: String = canonical_message.chars().take(200).collect();
+            log::debug!(
+                "{} SIGNATURE_CANONICAL_MESSAGE key_id={} len={} hash={} preview={}",
+                ctx, kid, msg_len, msg_hash, msg_preview
+            );
+
             verify_signature(&canonical_message, sig, kid, ctx)
         }
         (None, _) => {
