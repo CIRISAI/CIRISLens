@@ -331,10 +331,68 @@ fn verify_trace_signature(
     }
 }
 
+/// Check if a value is "empty" (null, empty string, empty array, empty object).
+fn is_empty_value(value: &Value) -> bool {
+    match value {
+        Value::Null => true,
+        Value::String(s) => s.is_empty(),
+        Value::Array(arr) => arr.is_empty(),
+        Value::Object(map) => map.is_empty(),
+        _ => false,
+    }
+}
+
+/// Recursively strip empty values from a JSON value.
+fn strip_empty(value: &Value) -> Option<Value> {
+    match value {
+        Value::Object(map) => {
+            let filtered: serde_json::Map<String, Value> = map
+                .iter()
+                .filter_map(|(k, v)| {
+                    if is_empty_value(v) {
+                        None
+                    } else {
+                        strip_empty(v).map(|stripped| (k.clone(), stripped))
+                    }
+                })
+                .collect();
+            if filtered.is_empty() {
+                None
+            } else {
+                Some(Value::Object(filtered))
+            }
+        }
+        Value::Array(arr) => {
+            let filtered: Vec<Value> = arr
+                .iter()
+                .filter_map(|v| {
+                    if is_empty_value(v) {
+                        None
+                    } else {
+                        strip_empty(v)
+                    }
+                })
+                .collect();
+            if filtered.is_empty() {
+                None
+            } else {
+                Some(Value::Array(filtered))
+            }
+        }
+        _ => Some(value.clone()),
+    }
+}
+
 /// Serialize JSON value with sorted keys (recursive).
-/// This matches Python's json.dumps(..., sort_keys=True) behavior.
-/// Python default separators are (', ', ': ') - space after comma and colon.
+/// Uses compact JSON (no spaces) and strips empty values to match agent's _strip_empty().
 fn sort_and_serialize(value: &Value) -> String {
+    // First strip empty values
+    let stripped = strip_empty(value).unwrap_or(Value::Null);
+    sort_and_serialize_inner(&stripped)
+}
+
+/// Inner serialization function (after stripping).
+fn sort_and_serialize_inner(value: &Value) -> String {
     match value {
         Value::Object(map) => {
             // Sort keys and recursively process values
@@ -343,14 +401,14 @@ fn sort_and_serialize(value: &Value) -> String {
 
             let pairs: Vec<String> = sorted
                 .iter()
-                .map(|(k, v)| format!("\"{}\": {}", k, sort_and_serialize(v)))
+                .map(|(k, v)| format!("\"{}\":{}", k, sort_and_serialize_inner(v)))
                 .collect();
 
-            format!("{{{}}}", pairs.join(", "))
+            format!("{{{}}}", pairs.join(","))
         }
         Value::Array(arr) => {
-            let items: Vec<String> = arr.iter().map(sort_and_serialize).collect();
-            format!("[{}]", items.join(", "))
+            let items: Vec<String> = arr.iter().map(sort_and_serialize_inner).collect();
+            format!("[{}]", items.join(","))
         }
         Value::String(s) => {
             // Properly escape the string for JSON
