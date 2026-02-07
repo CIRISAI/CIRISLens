@@ -333,6 +333,7 @@ fn verify_trace_signature(
 
 /// Serialize JSON value with sorted keys (recursive).
 /// This matches Python's json.dumps(..., sort_keys=True) behavior.
+/// Python default separators are (', ', ': ') - space after comma and colon.
 fn sort_and_serialize(value: &Value) -> String {
     match value {
         Value::Object(map) => {
@@ -342,14 +343,14 @@ fn sort_and_serialize(value: &Value) -> String {
 
             let pairs: Vec<String> = sorted
                 .iter()
-                .map(|(k, v)| format!("\"{}\":{}", k, sort_and_serialize(v)))
+                .map(|(k, v)| format!("\"{}\": {}", k, sort_and_serialize(v)))
                 .collect();
 
-            format!("{{{}}}", pairs.join(","))
+            format!("{{{}}}", pairs.join(", "))
         }
         Value::Array(arr) => {
             let items: Vec<String> = arr.iter().map(sort_and_serialize).collect();
-            format!("[{}]", items.join(","))
+            format!("[{}]", items.join(", "))
         }
         Value::String(s) => {
             // Properly escape the string for JSON
