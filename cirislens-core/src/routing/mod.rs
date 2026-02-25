@@ -1,8 +1,8 @@
 //! Routing decision module.
 //!
 //! Determines where traces should be stored:
-//! - Production table (covenant_traces)
-//! - Mock table (covenant_traces_mock)
+//! - Production table (accord_traces)
+//! - Mock table (accord_traces_mock)
 //! - Connectivity events table
 //! - Malformed traces table
 

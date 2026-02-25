@@ -318,54 +318,64 @@ SELECT compress_chunk(c) FROM show_chunks('cirislens.agent_metrics', older_than 
 - **Sanitize data in collector, not dashboards**
 - **Use read-only datasources where possible**
 
-## CIRIS Covenant 1.0b Compliance Infrastructure
+## CIRIS Accord 1.0b Compliance Infrastructure
 
-CIRISLens provides the observability infrastructure required by the CIRIS Covenant for transparency, accountability, and audit trails.
+> **Note**: "Accord" replaces "Covenant" in CIRIS 2.0 naming. The `/api/v1/covenant/*`
+> endpoints remain available for backward compatibility but are deprecated.
 
-### Covenant API Endpoints
+CIRISLens provides the observability infrastructure required by the CIRIS Accord for transparency, accountability, and audit trails.
+
+### Accord API Endpoints
 
 ```
-POST   /api/v1/covenant/wbd/deferrals          # Record WBD event
-GET    /api/v1/covenant/wbd/deferrals          # List WBD events
-PUT    /api/v1/covenant/wbd/deferrals/{id}/resolve
+# Primary endpoints (use these for new code)
+POST   /api/v1/accord/wbd/deferrals          # Record WBD event
+GET    /api/v1/accord/wbd/deferrals          # List WBD events
+PUT    /api/v1/accord/wbd/deferrals/{id}/resolve
 
-POST   /api/v1/covenant/pdma/events            # Record PDMA decision
-GET    /api/v1/covenant/pdma/events
-PUT    /api/v1/covenant/pdma/events/{id}/outcomes
+POST   /api/v1/accord/pdma/events            # Record PDMA decision
+GET    /api/v1/accord/pdma/events
+PUT    /api/v1/accord/pdma/events/{id}/outcomes
 
-POST   /api/v1/covenant/creator-ledger         # Log creation (tamper-evident)
-GET    /api/v1/covenant/creator-ledger
+POST   /api/v1/accord/creator-ledger         # Log creation (tamper-evident)
+GET    /api/v1/accord/creator-ledger
 
-POST   /api/v1/covenant/sunset-ledger          # Initiate decommissioning
-GET    /api/v1/covenant/sunset-ledger
-PUT    /api/v1/covenant/sunset-ledger/{id}/progress
+POST   /api/v1/accord/sunset-ledger          # Initiate decommissioning
+GET    /api/v1/accord/sunset-ledger
+PUT    /api/v1/accord/sunset-ledger/{id}/progress
 
-GET    /api/v1/covenant/compliance/status      # Agent compliance status
-GET    /api/v1/covenant/compliance/summary     # Aggregate compliance
+GET    /api/v1/accord/compliance/status      # Agent compliance status
+GET    /api/v1/accord/compliance/summary     # Aggregate compliance
+
+# Deprecated endpoints (backward-compatible, will be removed in future)
+# /api/v1/covenant/* → same routes as above, forwarded to /api/v1/accord/*
 ```
 
-### Covenant Database Tables
+### Accord Database Tables
 
-| Table | Purpose | Covenant Reference |
-|-------|---------|-------------------|
+| Table | Purpose | Accord Reference |
+|-------|---------|-----------------|
 | `wbd_deferrals` | Wisdom-Based Deferral tracking | Section II, Ch 3 |
 | `pdma_events` | PDMA decision rationale chains | Section II, Ch 2 |
 | `creator_ledger` | Tamper-evident creation accountability | Section VI, Ch 3 |
 | `sunset_ledger` | Decommissioning protocol tracking | Section VIII, Ch 4 |
+| `accord_traces` | Signed reasoning traces (renamed from covenant_traces) | - |
+| `accord_public_keys` | Ed25519 public keys (renamed from covenant_public_keys) | - |
 
-### Agent Covenant Fields
+### Agent Accord Fields
 
 The `cirislens.agents` table includes:
 - `sentience_probability` (0.0-1.0)
 - `autonomy_level` (1-5)
 - `stewardship_tier` (1-5)
-- `covenant_version` (e.g., "1.0b")
+- `accord_version` (e.g., "1.0b", formerly covenant_version)
 - `pdma_enabled`, `wbd_enabled` (boolean)
 - `total_pdma_events`, `total_wbd_deferrals` (counters)
 
 ### Migration
 
-Run `sql/010_covenant_compliance.sql` to create Covenant tables.
+Run `sql/010_covenant_compliance.sql` to create base Accord tables.
+Run `sql/022_covenant_to_accord.sql` to rename tables (creates backward-compatible views).
 
 ## CIRISProxy Integration
 
@@ -403,11 +413,14 @@ Analyzes Ed25519-signed reasoning traces from CIRIS agents to detect:
 ### API Endpoints
 
 ```
-GET    /api/v1/covenant/coherence-ratchet/alerts     # List anomaly alerts
-POST   /api/v1/covenant/coherence-ratchet/run        # Trigger detection manually
-PUT    /api/v1/covenant/coherence-ratchet/alerts/{id}/acknowledge
-PUT    /api/v1/covenant/coherence-ratchet/alerts/{id}/resolve
-GET    /api/v1/covenant/coherence-ratchet/stats      # Detection statistics
+# Primary endpoints (use these for new code)
+GET    /api/v1/accord/coherence-ratchet/alerts     # List anomaly alerts
+POST   /api/v1/accord/coherence-ratchet/run        # Trigger detection manually
+PUT    /api/v1/accord/coherence-ratchet/alerts/{id}/acknowledge
+PUT    /api/v1/accord/coherence-ratchet/alerts/{id}/resolve
+GET    /api/v1/accord/coherence-ratchet/stats      # Detection statistics
+
+# Deprecated: /api/v1/covenant/coherence-ratchet/* still works for backward compat
 ```
 
 ### Detection Thresholds
@@ -423,11 +436,14 @@ GET    /api/v1/covenant/coherence-ratchet/stats      # Detection statistics
 
 | Table | Purpose |
 |-------|---------|
-| `covenant_traces` | Stores signed reasoning traces with denormalized DMA scores |
+| `accord_traces` | Stores signed reasoning traces with denormalized DMA scores |
 | `coherence_ratchet_alerts` | Persisted anomaly alerts with lifecycle tracking |
-| `covenant_public_keys` | Ed25519 public keys for signature verification |
+| `accord_public_keys` | Ed25519 public keys for signature verification |
 | `lens_signing_keys` | CIRISLens signing keys for PII scrubbing operations |
 | `case_law_candidates` | Staging table for traces evaluated for case law compendium |
+
+> **Note**: Tables were renamed from `covenant_*` to `accord_*`. Backward-compatible
+> views with the old names are created by migration 022.
 
 ### Grafana Dashboard
 
@@ -441,8 +457,8 @@ The "Coherence Ratchet Detection" dashboard (`dashboards/coherence_ratchet.json`
 ### Running Detection Manually
 
 ```bash
-# Via API
-curl -X POST https://agents.ciris.ai/lens/api/v1/covenant/coherence-ratchet/run
+# Via API (use accord endpoint)
+curl -X POST https://agents.ciris.ai/lens/api/v1/accord/coherence-ratchet/run
 
 # The scheduler runs automatically:
 # - Cross-agent divergence: daily
@@ -455,6 +471,7 @@ curl -X POST https://agents.ciris.ai/lens/api/v1/covenant/coherence-ratchet/run
 ### Migration
 
 Run `sql/011_covenant_traces.sql` to create Coherence Ratchet tables.
+Run `sql/022_covenant_to_accord.sql` to rename tables to accord_*.
 
 ### FSD Documentation
 
@@ -462,7 +479,7 @@ Run `sql/011_covenant_traces.sql` to create Coherence Ratchet tables.
 - [Coherence Ratchet Detection](FSD/coherence_ratchet_detection.md) - Detection mechanisms
 - [CIRIS Scoring Specification](FSD/ciris_scoring_specification.md) - Scoring methodology
 
-## Covenant Trace Levels
+## Accord Trace Levels
 
 Agents can emit traces at three privacy-tiered levels, controlled by opt-in consent:
 
@@ -502,7 +519,7 @@ Agents can emit traces at three privacy-tiered levels, controlled by opt-in cons
 ### Trace Submission Endpoint
 
 ```
-POST /api/v1/covenant/traces
+POST /api/v1/accord/events
 Content-Type: application/json
 
 {
@@ -613,7 +630,7 @@ DEBUG: Skipping mock trace trace-123 (models: ["llama4scout (mock)"])
 | Module | Tests | Coverage |
 |--------|-------|----------|
 | Coherence Ratchet | 49 | Detection algorithms |
-| Covenant API | 38 | Trace ingestion, IDMA, metadata |
+| Accord API | 38 | Trace ingestion, IDMA, metadata |
 | PII Scrubber | 64 | NER, regex, envelope, signing |
 | Status/Health | 28 | Service status collection |
 | Log Ingest | 28 | Log sanitization, storage |

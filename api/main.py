@@ -19,10 +19,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, EmailStr
 
-from covenant_api_v2 import initialize_rust_caches
+from accord_api_v2 import initialize_rust_caches
 
-# Import Covenant API router (V2 - Rust-powered)
-from covenant_api_v2 import router as covenant_router
+# Import Accord API routers (primary)
+from accord_api import router as accord_v1_router  # Non-Rust version
+from accord_api_v2 import router as accord_v2_router  # Rust-powered version
+
+# Import deprecated Covenant API routers for backward compatibility
+from covenant_api import router as covenant_v1_router  # Non-Rust version (deprecated)
+from covenant_api_v2 import router as covenant_v2_router  # Rust-powered version (deprecated)
 from log_ingest import LogIngestService
 from manager_collector import ManagerCollector
 from migrations import startup_migrations
@@ -65,8 +70,13 @@ app.add_middleware(
 )
 
 
-# Include Covenant API router for CIRIS Covenant 1.0b compliance
-app.include_router(covenant_router)
+# Include Accord API routers (primary)
+app.include_router(accord_v1_router)
+app.include_router(accord_v2_router)
+
+# Include deprecated Covenant API routers for backward compatibility
+app.include_router(covenant_v1_router)
+app.include_router(covenant_v2_router)
 
 # Include Scoring API router for CIRIS Capacity Scores
 app.include_router(scoring_router)

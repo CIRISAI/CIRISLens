@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from api.covenant_api import (
+from api.accord_api import (
     AccessLevel,
     TraceAccessContext,
     build_access_scope_filter,
@@ -235,8 +235,8 @@ class TestRepositoryEndpoints:
             }
         ]
 
-        with patch("api.covenant_api.get_db_pool", return_value=pool):
-            from api.covenant_api import list_repository_traces
+        with patch("api.accord_api.get_db_pool", return_value=pool):
+            from api.accord_api import list_repository_traces
 
             result = await list_repository_traces(
                 access_level=AccessLevel.PUBLIC,
@@ -255,10 +255,10 @@ class TestRepositoryEndpoints:
         """Test that setting public sample requires full access."""
         pool, conn = mock_db_pool
 
-        with patch("api.covenant_api.get_db_pool", return_value=pool):
+        with patch("api.accord_api.get_db_pool", return_value=pool):
             from fastapi import HTTPException
 
-            from api.covenant_api import (
+            from api.accord_api import (
                 PublicSampleRequest,
                 set_trace_public_sample,
             )
@@ -279,8 +279,8 @@ class TestRepositoryEndpoints:
         pool, conn = mock_db_pool
         conn.execute.return_value = "UPDATE 1"
 
-        with patch("api.covenant_api.get_db_pool", return_value=pool):
-            from api.covenant_api import (
+        with patch("api.accord_api.get_db_pool", return_value=pool):
+            from api.accord_api import (
                 PublicSampleRequest,
                 set_trace_public_sample,
             )
@@ -300,10 +300,10 @@ class TestRepositoryEndpoints:
         """Test that setting partner access requires full access."""
         pool, conn = mock_db_pool
 
-        with patch("api.covenant_api.get_db_pool", return_value=pool):
+        with patch("api.accord_api.get_db_pool", return_value=pool):
             from fastapi import HTTPException
 
-            from api.covenant_api import (
+            from api.accord_api import (
                 PartnerAccessRequest,
                 set_trace_partner_access,
             )
@@ -324,8 +324,8 @@ class TestRepositoryEndpoints:
         pool, conn = mock_db_pool
         conn.fetchval.return_value = ["existing_partner"]
 
-        with patch("api.covenant_api.get_db_pool", return_value=pool):
-            from api.covenant_api import (
+        with patch("api.accord_api.get_db_pool", return_value=pool):
+            from api.accord_api import (
                 PartnerAccessRequest,
                 set_trace_partner_access,
             )
@@ -349,8 +349,8 @@ class TestRepositoryEndpoints:
         pool, conn = mock_db_pool
         conn.fetchval.return_value = ["partner_a", "partner_b"]
 
-        with patch("api.covenant_api.get_db_pool", return_value=pool):
-            from api.covenant_api import (
+        with patch("api.accord_api.get_db_pool", return_value=pool):
+            from api.accord_api import (
                 PartnerAccessRequest,
                 set_trace_partner_access,
             )
@@ -393,8 +393,8 @@ class TestRepositoryEndpoints:
             [],
         ]
 
-        with patch("api.covenant_api.get_db_pool", return_value=pool):
-            from api.covenant_api import get_repository_statistics
+        with patch("api.accord_api.get_db_pool", return_value=pool):
+            from api.accord_api import get_repository_statistics
 
             result = await get_repository_statistics(
                 access_level=AccessLevel.PUBLIC,

@@ -120,11 +120,11 @@ class TestRunAllMigrations:
 
 
 class TestRequiredSchema:
-    def test_has_covenant_traces(self):
-        assert "cirislens.covenant_traces" in REQUIRED_SCHEMA
+    def test_has_accord_traces(self):
+        assert "cirislens.accord_traces" in REQUIRED_SCHEMA
 
     def test_has_pii_scrubbing_columns(self):
-        traces_cols = REQUIRED_SCHEMA["cirislens.covenant_traces"]
+        traces_cols = REQUIRED_SCHEMA["cirislens.accord_traces"]
         assert "original_content_hash" in traces_cols
         assert "pii_scrubbed" in traces_cols
         assert "scrub_timestamp" in traces_cols

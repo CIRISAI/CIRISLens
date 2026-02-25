@@ -154,7 +154,7 @@ fn process_single_trace(batch_ctx: &BatchContext, event_json: &str) -> TraceResu
 
     // [3] SIGNATURE VERIFICATION
     // Signatures are REQUIRED for trace integrity - no bypass
-    let signature_result = verify_trace_signature(&trace, &log_ctx);
+    let signature_result = verify_trace_signature(&trace, &trace_ctx.trace_level, &log_ctx);
 
     if !signature_result.verified {
         log::warn!(
@@ -195,7 +195,19 @@ fn process_single_trace(batch_ctx: &BatchContext, event_json: &str) -> TraceResu
     let sanitized_trace = sanitize_trace(&trace_to_process, &log_ctx);
 
     // [6] METADATA EXTRACTION
-    let extracted_metadata = extract_trace_metadata(&sanitized_trace, &schema_version, &log_ctx);
+    let mut extracted_metadata = extract_trace_metadata(&sanitized_trace, &schema_version, &log_ctx);
+
+    // Add signature verification result to metadata
+    extracted_metadata.insert(
+        "signature_verified".to_string(),
+        signature_result.verified.to_string(),
+    );
+    if let Some(ref key_id) = signature_result.key_id {
+        extracted_metadata.insert(
+            "signature_key_id".to_string(),
+            key_id.clone(),
+        );
+    }
 
     // [7] MOCK DETECTION & ROUTING
     let routing = determine_routing(&extracted_metadata, &trace_ctx.trace_level, &log_ctx);
@@ -276,10 +288,14 @@ fn validate_schema(trace: &Value, ctx: &LogContext) -> SchemaValidationResult {
 /// Verify trace signature.
 ///
 /// Extracts signature and key_id from trace and verifies against loaded public keys.
-/// The canonical message is the components array serialized with sorted keys,
-/// matching the Python implementation.
+///
+/// Supports three formats:
+/// - 1.9.9+: Wrapper object {"components": [...], "trace_level": "..."}, compact JSON, sorted keys
+/// - 1.9.7+: Components array only, compact JSON with strip_empty
+/// - Pre-1.9.7: Components array only, JSON with spaces, no stripping
 fn verify_trace_signature(
     trace: &Value,
+    batch_trace_level: &str,
     ctx: &LogContext,
 ) -> crate::validation::signature::SignatureVerificationResult {
     // Extract signature fields
@@ -288,13 +304,9 @@ fn verify_trace_signature(
 
     match (signature, key_id) {
         (Some(sig), Some(kid)) => {
-            // Build canonical message for verification
-            // The message is ONLY the components array, serialized with sorted keys
-            // This matches the Python: json.dumps([c.model_dump() for c in trace.components], sort_keys=True)
-            let components = trace.get("components");
-
-            let canonical_message = match components {
-                Some(c) => sort_and_serialize(c),
+            // Get components array
+            let components = match trace.get("components") {
+                Some(c) => c,
                 None => {
                     log::warn!("{} SIGNATURE_NO_COMPONENTS", ctx);
                     return crate::validation::signature::SignatureVerificationResult {
@@ -305,16 +317,73 @@ fn verify_trace_signature(
                 }
             };
 
-            // Logging: show message hash and preview for troubleshooting signature mismatches
-            let msg_hash = crate::validation::signature::compute_hash(&canonical_message);
-            let msg_len = canonical_message.len();
-            let msg_preview: String = canonical_message.chars().take(200).collect();
+            // Use batch-level trace_level for 1.9.9 format (from API request, not trace object)
+            let trace_level = batch_trace_level;
+
+            // Try 1.9.9 format first: {"components": [...], "trace_level": "..."}
+            // Compact JSON with sorted keys, no stripping
+            let canonical_199 = build_199_canonical(components, trace_level);
+            let hash_199 = crate::validation::signature::compute_hash(&canonical_199);
+            let hash_199_short: String = hash_199.chars().take(16).collect();
+            let preview_start: String = canonical_199.chars().take(300).collect();
             log::info!(
-                "{} SIGNATURE_CANONICAL_MESSAGE key_id={} len={} hash={} preview={}...",
-                ctx, kid, msg_len, msg_hash, msg_preview
+                "{} SIGNATURE_199_DEBUG key_id={} level={} len={} hash={} preview={}",
+                ctx, kid, trace_level, canonical_199.len(), hash_199_short, preview_start
             );
 
-            verify_signature(&canonical_message, sig, kid, ctx)
+            let result_199 = verify_signature(&canonical_199, sig, kid, ctx);
+            if result_199.verified {
+                log::info!(
+                    "{} SIGNATURE_VERIFIED format=1.9.9 key_id={} len={} hash={}",
+                    ctx, kid, canonical_199.len(), hash_199_short
+                );
+                return result_199;
+            }
+
+            // Try 1.9.7 format (compact + strip_empty, components only)
+            let canonical_197 = sort_and_serialize(components);
+            let hash_197 = crate::validation::signature::compute_hash(&canonical_197);
+            log::debug!(
+                "{} SIGNATURE_TRY_FORMAT format=1.9.7 key_id={} len={} hash={}",
+                ctx, kid, canonical_197.len(), hash_197
+            );
+
+            let result_197 = verify_signature(&canonical_197, sig, kid, ctx);
+            if result_197.verified {
+                log::info!(
+                    "{} SIGNATURE_VERIFIED format=1.9.7 key_id={} len={} hash={}",
+                    ctx, kid, canonical_197.len(), hash_197
+                );
+                return result_197;
+            }
+
+            // Try pre-1.9.7 format (with spaces, no stripping, components only)
+            let canonical_pre197 = sort_and_serialize_legacy(components);
+            let hash_pre197 = crate::validation::signature::compute_hash(&canonical_pre197);
+            log::debug!(
+                "{} SIGNATURE_TRY_FORMAT format=pre-1.9.7 key_id={} len={} hash={}",
+                ctx, kid, canonical_pre197.len(), hash_pre197
+            );
+
+            let result_pre197 = verify_signature(&canonical_pre197, sig, kid, ctx);
+            if result_pre197.verified {
+                log::info!(
+                    "{} SIGNATURE_VERIFIED format=pre-1.9.7 key_id={} len={} hash={}",
+                    ctx, kid, canonical_pre197.len(), hash_pre197
+                );
+                return result_pre197;
+            }
+
+            // All formats failed - log details for troubleshooting
+            let preview_199: String = canonical_199.chars().take(200).collect();
+            log::warn!(
+                "{} SIGNATURE_VERIFICATION_FAILED key_id={} tried_formats=[1.9.9,1.9.7,pre-1.9.7] \
+                 hash_199={} hash_197={} hash_pre197={} preview_199={}...",
+                ctx, kid, hash_199_short, hash_197, hash_pre197, preview_199
+            );
+
+            // Return the 1.9.9 result (most recent format)
+            result_199
         }
         (None, _) => {
             log::debug!("{} SIGNATURE_MISSING", ctx);
@@ -412,6 +481,76 @@ fn sort_and_serialize_inner(value: &Value) -> String {
         }
         Value::String(s) => {
             // Properly escape the string for JSON
+            serde_json::to_string(s).unwrap_or_else(|_| format!("\"{}\"", s))
+        }
+        Value::Number(n) => n.to_string(),
+        Value::Bool(b) => b.to_string(),
+        Value::Null => "null".to_string(),
+    }
+}
+
+/// Serialize JSON value with sorted keys for pre-1.9.7 format.
+/// Uses spaces after `:` and `,` and does NOT strip empty values.
+/// This matches Python's default: json.dumps(obj, sort_keys=True)
+fn sort_and_serialize_legacy(value: &Value) -> String {
+    match value {
+        Value::Object(map) => {
+            // Sort keys and recursively process values
+            let mut sorted: Vec<_> = map.iter().collect();
+            sorted.sort_by(|a, b| a.0.cmp(b.0));
+
+            let pairs: Vec<String> = sorted
+                .iter()
+                .map(|(k, v)| format!("\"{}\": {}", k, sort_and_serialize_legacy(v)))
+                .collect();
+
+            format!("{{{}}}", pairs.join(", "))
+        }
+        Value::Array(arr) => {
+            let items: Vec<String> = arr.iter().map(sort_and_serialize_legacy).collect();
+            format!("[{}]", items.join(", "))
+        }
+        Value::String(s) => {
+            // Properly escape the string for JSON
+            serde_json::to_string(s).unwrap_or_else(|_| format!("\"{}\"", s))
+        }
+        Value::Number(n) => n.to_string(),
+        Value::Bool(b) => b.to_string(),
+        Value::Null => "null".to_string(),
+    }
+}
+
+/// Build 1.9.9 canonical message format.
+/// Wrapper object: {"components": [...], "trace_level": "..."}
+/// Compact JSON with sorted keys, NO stripping of empty values.
+/// Matches Python: json.dumps(payload, sort_keys=True, separators=(",", ":"))
+fn build_199_canonical(components: &Value, trace_level: &str) -> String {
+    // Serialize components with sorted keys, compact format, no stripping
+    let components_str = sort_and_serialize_compact(components);
+    // Build wrapper object with sorted keys: "components" comes before "trace_level"
+    format!("{{\"components\":{},\"trace_level\":\"{}\"}}", components_str, trace_level)
+}
+
+/// Serialize JSON value with sorted keys, compact format (no spaces).
+/// Does NOT strip empty values - keeps nulls, empty strings, etc.
+fn sort_and_serialize_compact(value: &Value) -> String {
+    match value {
+        Value::Object(map) => {
+            let mut sorted: Vec<_> = map.iter().collect();
+            sorted.sort_by(|a, b| a.0.cmp(b.0));
+
+            let pairs: Vec<String> = sorted
+                .iter()
+                .map(|(k, v)| format!("\"{}\":{}", k, sort_and_serialize_compact(v)))
+                .collect();
+
+            format!("{{{}}}", pairs.join(","))
+        }
+        Value::Array(arr) => {
+            let items: Vec<String> = arr.iter().map(sort_and_serialize_compact).collect();
+            format!("[{}]", items.join(","))
+        }
+        Value::String(s) => {
             serde_json::to_string(s).unwrap_or_else(|_| format!("\"{}\"", s))
         }
         Value::Number(n) => n.to_string(),

@@ -3,7 +3,7 @@
 //! Generates SQL queries for trace storage.
 //! Actual execution is handled by Python (asyncpg).
 
-/// Get the list of columns for covenant_traces table.
+/// Get the list of columns for accord_traces table.
 ///
 /// Returns tuples of (column_name, parameter_placeholder).
 pub fn get_trace_columns() -> Vec<(&'static str, &'static str)> {
@@ -82,14 +82,14 @@ pub fn get_trace_columns() -> Vec<(&'static str, &'static str)> {
     ]
 }
 
-/// Build INSERT query for covenant_traces.
+/// Build INSERT query for accord_traces.
 pub fn build_trace_insert() -> String {
     let columns = get_trace_columns();
     let col_names: Vec<&str> = columns.iter().map(|(name, _)| *name).collect();
     let placeholders: Vec<&str> = columns.iter().map(|(_, ph)| *ph).collect();
 
     format!(
-        "INSERT INTO cirislens.covenant_traces ({}) VALUES ({}) ON CONFLICT (trace_id) DO NOTHING",
+        "INSERT INTO cirislens.accord_traces ({}) VALUES ({}) ON CONFLICT (trace_id) DO NOTHING",
         col_names.join(", "),
         placeholders.join(", ")
     )
@@ -122,7 +122,7 @@ mod tests {
     #[test]
     fn test_trace_insert_query() {
         let query = build_trace_insert();
-        assert!(query.contains("INSERT INTO cirislens.covenant_traces"));
+        assert!(query.contains("INSERT INTO cirislens.accord_traces"));
         assert!(query.contains("trace_id"));
         assert!(query.contains("ON CONFLICT"));
     }

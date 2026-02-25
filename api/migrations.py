@@ -12,11 +12,12 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# Required columns that MUST exist for the covenant API to function
+# Required columns that MUST exist for the accord API to function
 # If any are missing, startup should FAIL LOUDLY
-# Only include tables that are strictly required for covenant traces
+# Only include tables that are strictly required for accord traces
+# Note: covenant_traces view exists for backward compat, but accord_traces is primary
 REQUIRED_SCHEMA = {
-    "cirislens.covenant_traces": [
+    "cirislens.accord_traces": [
         "trace_id",
         "timestamp",
         "original_content_hash",
