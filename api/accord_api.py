@@ -1093,7 +1093,7 @@ async def load_public_keys() -> dict[str, bytes]:
 
 
 def verify_trace_signature(
-    trace: AccordTrace, public_keys: dict[str, bytes]
+    trace: AccordTrace, public_keys: dict[str, bytes], trace_level: str = "generic"
 ) -> tuple[bool, str | None]:
     """
     Verify Ed25519 signature on a trace.
@@ -1130,16 +1130,34 @@ def verify_trace_signature(
         verify_key = VerifyKey(public_keys[trace.signature_key_id])
 
         # Construct canonical message (JSON of components, sorted keys)
+        # Must match agent's format: compact JSON with empty values stripped
+        def strip_empty(obj):
+            """Remove None, empty strings, empty lists/dicts recursively."""
+            if isinstance(obj, dict):
+                return {k: strip_empty(v) for k, v in obj.items()
+                        if v is not None and v != "" and v != [] and v != {}}
+            elif isinstance(obj, list):
+                return [strip_empty(item) for item in obj if item is not None]
+            return obj
+
+        components_data = [strip_empty(c.model_dump()) for c in trace.components]
+        # Agent signs envelope: {"components": [...], "trace_level": "..."}
+        signed_payload = {
+            "components": components_data,
+            "trace_level": trace_level,
+        }
+        # Compact JSON: no spaces after separators
         message = json.dumps(
-            [c.model_dump() for c in trace.components], sort_keys=True
+            signed_payload, sort_keys=True, separators=(',', ':')
         ).encode()
 
         # Debug logging for signature verification
-        logger.debug(
-            "Verifying trace %s: sig_len=%d, msg_len=%d, key_id=%s",
-            trace.trace_id, len(signature), len(message), trace.signature_key_id
+        import hashlib
+        msg_hash = hashlib.sha256(message).hexdigest()[:16]
+        logger.info(
+            "CANONICAL_MSG %s: len=%d hash=%s msg=%s",
+            trace.trace_id, len(message), msg_hash, message[:300].decode()
         )
-        logger.debug("Message hash (first 100 chars): %s", message[:100].decode())
 
         # Verify signature
         verify_key.verify(message, signature)
@@ -1711,7 +1729,7 @@ async def receive_accord_events(
                 continue
 
             # Verify signature
-            is_valid, error = verify_trace_signature(trace, public_keys)
+            is_valid, error = verify_trace_signature(trace, public_keys, request.trace_level)
 
             if not is_valid and public_keys:
                 rejected += 1
