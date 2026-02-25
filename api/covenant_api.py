@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter
 
 # Import everything from the new accord module
 try:
@@ -205,7 +205,7 @@ router = APIRouter(prefix="/api/v1/covenant", tags=["covenant-deprecated"])
 
 
 @router.post("/events")
-async def receive_covenant_events(request: Request) -> dict[str, Any]:
+async def receive_covenant_events(request: CovenantEventsRequest) -> dict[str, Any]:
     """
     DEPRECATED: Use /api/v1/accord/events instead.
 
