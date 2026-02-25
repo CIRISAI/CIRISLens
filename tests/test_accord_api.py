@@ -12,10 +12,10 @@ from datetime import UTC, datetime
 import pytest
 
 from api.accord_api import (
-    CorrelationMetadata,
     AccordEventsRequest,
     AccordTrace,
     AccordTraceEvent,
+    CorrelationMetadata,
     TraceComponent,
     _is_mock_trace,
     extract_trace_metadata,

@@ -48,7 +48,7 @@ _cache_refresh_lock = asyncio.Lock()
 
 def get_db_pool() -> asyncpg.Pool | None:
     """Get the database pool from main module."""
-    import main  # noqa: PLC0415 - Intentional to avoid circular import
+    import main
     return main.db_pool
 
 
@@ -626,7 +626,7 @@ async def receive_wbd_events(request: WBDEventsRequest) -> dict[str, Any]:
 
 
 @router.post("/events")
-async def receive_accord_events(request: Request) -> dict[str, Any]:  # noqa: PLR0912, PLR0915
+async def receive_accord_events(request: Request) -> dict[str, Any]:
     """
     Receive and process accord trace events.
 

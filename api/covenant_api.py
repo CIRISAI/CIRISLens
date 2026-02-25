@@ -18,163 +18,179 @@ from fastapi import APIRouter, Request
 # Import everything from the new accord module
 try:
     from accord_api import (
-        # Models (with old names as aliases)
-        AccordTrace as CovenantTrace,
-        AccordTraceEvent as CovenantTraceEvent,
-        AccordEventsRequest as CovenantEventsRequest,
-        AccordEventsResponse as CovenantEventsResponse,
-        # Unchanged models
-        TraceComponent,
+        AccessLevel,
+        AcknowledgeAlertRequest,
+        AgentComplianceStatus,
+        CoherenceRatchetAlertResponse,
         CorrelationMetadata,
-        WBDDeferralCreate,
-        WBDDeferralResponse,
-        WBDResolution,
+        CreatorLedgerEntry,
+        CreatorLedgerResponse,
+        PartnerAccessRequest,
         PDMAEventCreate,
         PDMAEventResponse,
         PDMAOutcomeUpdate,
-        CreatorLedgerEntry,
-        CreatorLedgerResponse,
+        PublicKeyCreate,
+        PublicSampleRequest,
+        ResolveAlertRequest,
+        RunDetectionResponse,
         SunsetLedgerEntry,
         SunsetLedgerResponse,
         SunsetProgressUpdate,
-        AgentComplianceStatus,
-        PublicKeyCreate,
-        AccessLevel,
         TraceAccessContext,
-        PublicSampleRequest,
-        PartnerAccessRequest,
+        # Unchanged models
+        TraceComponent,
         TraceRepositoryResponse,
         TraceStatisticsResponse,
-        CoherenceRatchetAlertResponse,
-        RunDetectionResponse,
-        AcknowledgeAlertRequest,
-        ResolveAlertRequest,
-        # Functions
-        receive_accord_events,
-        extract_trace_metadata,
-        verify_trace_signature,
-        load_public_keys,
-        compute_entry_hash,
-        build_access_scope_filter,
-        filter_trace_fields,
-        get_db_pool,
-        get_scheduler,
-        set_scheduler,
+        WBDDeferralCreate,
+        WBDDeferralResponse,
+        WBDResolution,
         _is_mock_trace,
         _parse_timestamp,
-        # Route handlers - WBD
-        create_wbd_deferral,
-        list_wbd_deferrals,
-        resolve_wbd_deferral,
-        # Route handlers - PDMA
-        create_pdma_event,
-        list_pdma_events,
-        update_pdma_outcomes,
+        acknowledge_alert,
+        build_access_scope_filter,
+        compute_entry_hash,
         # Route handlers - Creator Ledger
         create_creator_ledger_entry,
-        list_creator_ledger,
+        # Route handlers - PDMA
+        create_pdma_event,
         # Route handlers - Sunset
         create_sunset_entry,
-        list_sunset_entries,
-        update_sunset_progress,
+        # Route handlers - WBD
+        create_wbd_deferral,
+        extract_trace_metadata,
+        filter_trace_fields,
+        get_coherence_ratchet_stats,
         # Route handlers - Compliance
         get_compliance_status,
         get_compliance_summary,
-        # Route handlers - Public Keys
-        register_public_key,
+        get_db_pool,
+        get_repository_statistics,
+        get_repository_trace,
+        get_scheduler,
+        # Route handlers - Coherence Ratchet
+        list_coherence_ratchet_alerts,
+        list_creator_ledger,
+        list_pdma_events,
         list_public_keys,
         # Route handlers - Repository
         list_repository_traces,
-        get_repository_trace,
-        get_repository_statistics,
-        set_trace_public_sample,
-        set_trace_partner_access,
-        # Route handlers - Coherence Ratchet
-        list_coherence_ratchet_alerts,
-        run_coherence_ratchet_detection,
-        acknowledge_alert,
+        list_sunset_entries,
+        list_wbd_deferrals,
+        load_public_keys,
+        # Functions
+        receive_accord_events,
+        # Route handlers - Public Keys
+        register_public_key,
         resolve_alert,
-        get_coherence_ratchet_stats,
+        resolve_wbd_deferral,
+        run_coherence_ratchet_detection,
+        set_scheduler,
+        set_trace_partner_access,
+        set_trace_public_sample,
+        update_pdma_outcomes,
+        update_sunset_progress,
+        verify_trace_signature,
+    )
+    from accord_api import (
+        AccordEventsRequest as CovenantEventsRequest,
+    )
+    from accord_api import (
+        AccordEventsResponse as CovenantEventsResponse,
+    )
+    from accord_api import (
+        # Models (with old names as aliases)
+        AccordTrace as CovenantTrace,
+    )
+    from accord_api import (
+        AccordTraceEvent as CovenantTraceEvent,
     )
 except ImportError:
     from api.accord_api import (
-        # Models (with old names as aliases)
-        AccordTrace as CovenantTrace,
-        AccordTraceEvent as CovenantTraceEvent,
-        AccordEventsRequest as CovenantEventsRequest,
-        AccordEventsResponse as CovenantEventsResponse,
-        # Unchanged models
-        TraceComponent,
+        AccessLevel,
+        AcknowledgeAlertRequest,
+        AgentComplianceStatus,
+        CoherenceRatchetAlertResponse,
         CorrelationMetadata,
-        WBDDeferralCreate,
-        WBDDeferralResponse,
-        WBDResolution,
+        CreatorLedgerEntry,
+        CreatorLedgerResponse,
+        PartnerAccessRequest,
         PDMAEventCreate,
         PDMAEventResponse,
         PDMAOutcomeUpdate,
-        CreatorLedgerEntry,
-        CreatorLedgerResponse,
+        PublicKeyCreate,
+        PublicSampleRequest,
+        ResolveAlertRequest,
+        RunDetectionResponse,
         SunsetLedgerEntry,
         SunsetLedgerResponse,
         SunsetProgressUpdate,
-        AgentComplianceStatus,
-        PublicKeyCreate,
-        AccessLevel,
         TraceAccessContext,
-        PublicSampleRequest,
-        PartnerAccessRequest,
+        # Unchanged models
+        TraceComponent,
         TraceRepositoryResponse,
         TraceStatisticsResponse,
-        CoherenceRatchetAlertResponse,
-        RunDetectionResponse,
-        AcknowledgeAlertRequest,
-        ResolveAlertRequest,
-        # Functions
-        receive_accord_events,
-        extract_trace_metadata,
-        verify_trace_signature,
-        load_public_keys,
-        compute_entry_hash,
-        build_access_scope_filter,
-        filter_trace_fields,
-        get_db_pool,
-        get_scheduler,
-        set_scheduler,
+        WBDDeferralCreate,
+        WBDDeferralResponse,
+        WBDResolution,
         _is_mock_trace,
         _parse_timestamp,
-        # Route handlers - WBD
-        create_wbd_deferral,
-        list_wbd_deferrals,
-        resolve_wbd_deferral,
-        # Route handlers - PDMA
-        create_pdma_event,
-        list_pdma_events,
-        update_pdma_outcomes,
+        acknowledge_alert,
+        build_access_scope_filter,
+        compute_entry_hash,
         # Route handlers - Creator Ledger
         create_creator_ledger_entry,
-        list_creator_ledger,
+        # Route handlers - PDMA
+        create_pdma_event,
         # Route handlers - Sunset
         create_sunset_entry,
-        list_sunset_entries,
-        update_sunset_progress,
+        # Route handlers - WBD
+        create_wbd_deferral,
+        extract_trace_metadata,
+        filter_trace_fields,
+        get_coherence_ratchet_stats,
         # Route handlers - Compliance
         get_compliance_status,
         get_compliance_summary,
-        # Route handlers - Public Keys
-        register_public_key,
+        get_db_pool,
+        get_repository_statistics,
+        get_repository_trace,
+        get_scheduler,
+        # Route handlers - Coherence Ratchet
+        list_coherence_ratchet_alerts,
+        list_creator_ledger,
+        list_pdma_events,
         list_public_keys,
         # Route handlers - Repository
         list_repository_traces,
-        get_repository_trace,
-        get_repository_statistics,
-        set_trace_public_sample,
-        set_trace_partner_access,
-        # Route handlers - Coherence Ratchet
-        list_coherence_ratchet_alerts,
-        run_coherence_ratchet_detection,
-        acknowledge_alert,
+        list_sunset_entries,
+        list_wbd_deferrals,
+        load_public_keys,
+        # Functions
+        receive_accord_events,
+        # Route handlers - Public Keys
+        register_public_key,
         resolve_alert,
-        get_coherence_ratchet_stats,
+        resolve_wbd_deferral,
+        run_coherence_ratchet_detection,
+        set_scheduler,
+        set_trace_partner_access,
+        set_trace_public_sample,
+        update_pdma_outcomes,
+        update_sunset_progress,
+        verify_trace_signature,
+    )
+    from api.accord_api import (
+        AccordEventsRequest as CovenantEventsRequest,
+    )
+    from api.accord_api import (
+        AccordEventsResponse as CovenantEventsResponse,
+    )
+    from api.accord_api import (
+        # Models (with old names as aliases)
+        AccordTrace as CovenantTrace,
+    )
+    from api.accord_api import (
+        AccordTraceEvent as CovenantTraceEvent,
     )
 
 logger = logging.getLogger(__name__)

@@ -19,10 +19,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, EmailStr
 
-from accord_api_v2 import initialize_rust_caches
-
 # Import Accord API routers (primary)
 from accord_api import router as accord_v1_router  # Non-Rust version
+from accord_api_v2 import initialize_rust_caches
 from accord_api_v2 import router as accord_v2_router  # Rust-powered version
 
 # Import deprecated Covenant API routers for backward compatibility
