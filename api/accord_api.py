@@ -1480,10 +1480,12 @@ def extract_trace_metadata(trace: AccordTrace, trace_level: str = "generic") -> 
         elif event_type == "SNAPSHOT_AND_CONTEXT":
             metadata["snapshot_and_context"] = data
             metadata["cognitive_state"] = data.get("cognitive_state")
-            # Extract agent name from system_snapshot
-            sys_snapshot = data.get("system_snapshot", {})
-            agent_identity = sys_snapshot.get("agent_identity", {})
-            metadata["agent_name"] = agent_identity.get("agent_id")
+            # Extract agent name - check top level first, then fall back to agent_identity
+            metadata["agent_name"] = data.get("agent_name")
+            if not metadata["agent_name"]:
+                sys_snapshot = data.get("system_snapshot", {})
+                agent_identity = sys_snapshot.get("agent_identity", {})
+                metadata["agent_name"] = agent_identity.get("agent_name") or agent_identity.get("agent_id")
 
         elif event_type == "DMA_RESULTS":
             metadata["dma_results"] = data
