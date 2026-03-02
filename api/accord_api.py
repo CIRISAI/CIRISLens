@@ -1135,7 +1135,7 @@ def verify_trace_signature(
             """Remove None, empty strings, empty lists/dicts recursively."""
             if isinstance(obj, dict):
                 return {k: strip_empty(v) for k, v in obj.items()
-                        if v is not None and v != "" and v != [] and v != {}}
+                        if v is not None and v not in ("", [], {})}
             elif isinstance(obj, list):
                 return [strip_empty(item) for item in obj if item is not None]
             return obj
