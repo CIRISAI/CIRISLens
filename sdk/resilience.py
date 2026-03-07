@@ -240,7 +240,10 @@ class ExponentialBackoff:
         """Calculate delay for a given attempt number."""
         import random
 
-        base_delay = self.config.initial_delay * (self.config.multiplier**attempt)
+        # Cap attempt to prevent overflow in exponential calculation
+        # With multiplier=2.0, attempt=20 gives 2^20 = 1M which is safe
+        safe_attempt = min(attempt, 20)
+        base_delay = self.config.initial_delay * (self.config.multiplier**safe_attempt)
         capped_delay = min(base_delay, self.config.max_delay)
 
         # Add jitter

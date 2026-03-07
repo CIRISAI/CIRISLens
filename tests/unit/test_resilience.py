@@ -211,6 +211,18 @@ class TestExponentialBackoff:
         assert backoff.next_delay() == 1.0  # First call
         assert backoff.current_delay == 2.0  # Now it's incremented
 
+    def test_no_overflow_on_high_attempts(self):
+        """Backoff does not overflow even with very high attempt counts."""
+        config = BackoffConfig(initial_delay=1.0, max_delay=300.0, multiplier=2.0, jitter=0)
+        backoff = ExponentialBackoff(config=config)
+
+        # Simulate many failures - this would cause OverflowError without fix
+        for _ in range(1000):
+            delay = backoff.next_delay()
+
+        # Delay should be capped at max_delay
+        assert delay == config.max_delay
+
 
 class TestResilientClient:
     """Tests for ResilientClient class."""
