@@ -145,7 +145,7 @@ class CIRISScore:
                 },
                 "R": {
                     "score": round(self.R.score, 4),
-                    "components": {k: round(v, 4) for k, v in self.R.components.items()},
+                    "components": {k: round(v, 4) if isinstance(v, float) else v for k, v in self.R.components.items()},
                     "trace_count": self.R.trace_count,
                     "confidence": self.R.confidence,
                 },

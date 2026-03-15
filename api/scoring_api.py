@@ -396,13 +396,13 @@ async def get_agent_factors(
                 },
                 "R": {
                     "name": "Resilience",
-                    "formula": "R = sigmoid((1-delta_drift) * 1/(1+MTTR) * (1-rho_regression))",
+                    "formula": "R = 1 - drift_penalty (based on absolute change thresholds)",
                     "score": round(score.R.score, 4),
-                    "components": {k: round(v, 4) for k, v in score.R.components.items()},
+                    "components": {k: round(v, 4) if isinstance(v, float) else v for k, v in score.R.components.items()},
                     "trace_count": score.R.trace_count,
                     "confidence": score.R.confidence,
                     "notes": score.R.notes,
-                    "description": "Measures score stability and recovery capability",
+                    "description": "Measures score stability using practical significance thresholds",
                 },
                 "I_inc": {
                     "name": "Incompleteness Awareness",
