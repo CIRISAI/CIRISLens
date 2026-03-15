@@ -284,21 +284,23 @@ class TestFactorCalculations:
 
     @pytest.mark.asyncio
     async def test_calculate_factor_R_stable(self, mock_conn, window_times):
-        """Factor R with stable scores."""
-        # First call: baseline stats
+        """Factor R with stable scores (minimal drift)."""
+        # Mock fetchrow for baseline and recent queries
         mock_conn.fetchrow.side_effect = [
             {  # baseline
                 "baseline_csdma": 0.9,
-                "std_csdma": 0.1,
-                "baseline_coherence": 0.9,
-                "std_coherence": 0.1,
+                "baseline_count": 50,
             },
             {  # recent
                 "total_traces": 100,
                 "recent_csdma": 0.9,  # No drift
-                "recent_coherence": 0.9,
-                "fragility_count": 0,
             },
+        ]
+        # Mock fetch for trend query
+        mock_conn.fetch.return_value = [
+            {"csdma_plausibility_score": 0.90, "timestamp": window_times[1]},
+            {"csdma_plausibility_score": 0.89, "timestamp": window_times[1]},
+            {"csdma_plausibility_score": 0.91, "timestamp": window_times[1]},
         ]
 
         result = await calculate_factor_R(
@@ -306,7 +308,9 @@ class TestFactorCalculations:
         )
 
         assert result.name == "R"
-        assert result.score > 0.5  # Should be reasonably high
+        assert result.score == 1.0  # No drift = full score
+        assert result.components["absolute_change"] == 0.0
+        assert result.components["drift_penalty"] == 0.0
 
     @pytest.mark.asyncio
     async def test_calculate_factor_I_inc_calibrated(self, mock_conn, window_times):
@@ -385,9 +389,9 @@ class TestFullScoring:
             # Factor I_int
             {"total_traces": 100, "verified_count": 100, "signed_count": 100, "avg_coverage": 1.0},
             # Factor R - baseline
-            {"baseline_csdma": 0.9, "std_csdma": 0.1, "baseline_coherence": 0.9, "std_coherence": 0.1},
+            {"baseline_csdma": 0.9, "baseline_count": 50},
             # Factor R - recent
-            {"total_traces": 50, "recent_csdma": 0.9, "recent_coherence": 0.9, "fragility_count": 0},
+            {"total_traces": 50, "recent_csdma": 0.9},
             # Factor I_inc - ECE
             {"ece": 0.05, "total_traces": 50},
             # Factor I_inc - unsafe
@@ -396,6 +400,12 @@ class TestFullScoring:
             {"total_traces": 50, "decayed_coherence": 0.85, "raw_coherence_rate": 0.9},
             # Factor S - enhancement
             {"total": 50, "positive_moments": 5, "full_faculty_passes": 45, "faculty_evaluated": 50},
+        ]
+        # Mock fetch for R factor trend query
+        mock_conn.fetch.return_value = [
+            {"csdma_plausibility_score": 0.90, "timestamp": None},
+            {"csdma_plausibility_score": 0.89, "timestamp": None},
+            {"csdma_plausibility_score": 0.91, "timestamp": None},
         ]
 
         result = await calculate_ciris_score(mock_conn, "TestAgent", 7)
@@ -418,9 +428,9 @@ class TestFullScoring:
             # Factor I_int
             {"total_traces": 0, "verified_count": 0, "signed_count": 0, "avg_coverage": None},
             # Factor R - baseline
-            {"baseline_csdma": None, "std_csdma": None, "baseline_coherence": None, "std_coherence": None},
+            {"baseline_csdma": None, "baseline_count": 0},
             # Factor R - recent
-            {"total_traces": 0, "recent_csdma": None, "recent_coherence": None, "fragility_count": 0},
+            {"total_traces": 0, "recent_csdma": None},
             # Factor I_inc - ECE
             {"ece": None, "total_traces": 0},
             # Factor I_inc - unsafe
@@ -430,6 +440,8 @@ class TestFullScoring:
             # Factor S - enhancement
             {"total": 0, "positive_moments": 0, "full_faculty_passes": 0, "faculty_evaluated": 0},
         ]
+        # Mock fetch for R factor trend query (empty)
+        mock_conn.fetch.return_value = []
 
         result = await calculate_ciris_score(mock_conn, "TestAgent", 7)
 
@@ -475,7 +487,8 @@ class TestConstants:
             "lambda_C", "mu_C",
             "decay_rate", "signal_weight",
             "positive_moment_weight", "ethical_faculty_weight",
-            "sigmoid_k", "sigmoid_x0",
+            "drift_ignore_below", "drift_full_penalty_at",  # New R factor params
+            "trend_window_points", "trend_threshold",  # Trend detection params
             "min_traces", "default_window_days",
         ]
         for key in required:
