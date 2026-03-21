@@ -269,6 +269,30 @@ class TestDSARSignatureVerification:
         is_valid, error = _verify_dsar_signature(req, public_keys)
         assert is_valid is True
 
+    def test_generic_verification_exception(self, make_signed_request, public_keys):
+        """Generic exceptions during verification are handled gracefully."""
+        req = make_signed_request()
+
+        # Mock VerifyKey to raise an unexpected exception
+        with patch("nacl.signing.VerifyKey", side_effect=RuntimeError("Unexpected error")):
+            is_valid, error = _verify_dsar_signature(req, public_keys)
+
+        assert is_valid is False
+        assert "Verification error" in error
+        assert "Unexpected error" in error
+
+    def test_malformed_base64_signature(self, public_keys, key_id):
+        """Completely invalid base64 signatures are handled gracefully."""
+        req = DSARDeleteRequest(
+            agent_id_hash="abc123def456",
+            requested_at="2026-03-20T12:00:00+00:00",
+            signature="not-valid-base64!!!",
+            signature_key_id=key_id,
+        )
+        is_valid, error = _verify_dsar_signature(req, public_keys)
+        assert is_valid is False
+        assert "Verification error" in error
+
 
 # =============================================================================
 # Endpoint Tests (with mocked database)
