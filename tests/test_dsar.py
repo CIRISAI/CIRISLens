@@ -248,12 +248,15 @@ class TestDSARDeleteEndpoint:
         req = make_signed_request()
 
         mock_conn = AsyncMock()
-        mock_conn.execute = AsyncMock()
+        mock_conn.execute = AsyncMock(side_effect=[
+            "INSERT 0 1",  # INSERT audit record
+            "DELETE 5",    # DELETE from accord_traces
+            "DELETE 2",    # DELETE from accord_traces_mock
+            "DELETE 1",    # DELETE from coherence_ratchet_alerts
+            "UPDATE 1",    # UPDATE audit record
+        ])
         mock_conn.fetchval = AsyncMock(side_effect=[
             5,    # COUNT(*) from accord_traces
-            5,    # DELETE from accord_traces RETURNING COUNT(*)
-            2,    # DELETE from accord_traces_mock RETURNING COUNT(*)
-            1,    # DELETE from coherence_ratchet_alerts RETURNING COUNT(*)
         ])
 
         mock_pool = _setup_mock_pool(mock_conn)
@@ -285,7 +288,10 @@ class TestDSARDeleteEndpoint:
         req = make_signed_request()
 
         mock_conn = AsyncMock()
-        mock_conn.execute = AsyncMock()
+        mock_conn.execute = AsyncMock(side_effect=[
+            "INSERT 0 1",  # INSERT audit record
+            "UPDATE 1",    # UPDATE audit record (no-traces path)
+        ])
         mock_conn.fetchval = AsyncMock(side_effect=[
             0,  # COUNT(*) from accord_traces = 0
             0,  # COUNT(*) from accord_traces_mock = 0
@@ -357,24 +363,15 @@ class TestDSARDeleteEndpoint:
         assert response.status_code == 503
 
     @pytest.mark.asyncio
-    async def test_delete_no_public_keys_allows_deletion(
+    async def test_delete_no_public_keys_fails_closed(
         self, client, make_signed_request
     ):
-        """When no public keys are loaded, deletion proceeds (signature not enforced)."""
+        """When no public keys are loaded, deletion is rejected (fail closed)."""
         import main as main_module
 
         req = make_signed_request()
 
-        mock_conn = AsyncMock()
-        mock_conn.execute = AsyncMock()
-        mock_conn.fetchval = AsyncMock(side_effect=[
-            3,  # COUNT(*) from accord_traces
-            3,  # DELETE from accord_traces
-            0,  # DELETE from accord_traces_mock
-            0,  # DELETE from coherence_ratchet_alerts
-        ])
-
-        mock_pool = _setup_mock_pool(mock_conn)
+        mock_pool = MagicMock()
         original_pool = main_module.db_pool
 
         try:
@@ -387,10 +384,9 @@ class TestDSARDeleteEndpoint:
         finally:
             main_module.db_pool = original_pool
 
-        # When no public keys exist, sig_valid=False but public_keys is empty
-        # so signature enforcement is skipped (same pattern as trace ingestion)
-        assert response.status_code == 200
-        assert response.json()["status"] == "deleted"
+        # Destructive DSAR path must fail closed when keys are unavailable
+        assert response.status_code == 403
+        assert "Signature verification failed" in response.json()["detail"]
 
     @pytest.mark.asyncio
     async def test_audit_trail_recorded(self, client, make_signed_request, public_keys):
@@ -400,12 +396,15 @@ class TestDSARDeleteEndpoint:
         req = make_signed_request()
 
         mock_conn = AsyncMock()
-        mock_conn.execute = AsyncMock()
+        mock_conn.execute = AsyncMock(side_effect=[
+            "INSERT 0 1",  # INSERT audit record
+            "DELETE 1",    # DELETE from accord_traces
+            "DELETE 0",    # DELETE from accord_traces_mock
+            "DELETE 0",    # DELETE from coherence_ratchet_alerts
+            "UPDATE 1",    # UPDATE audit record
+        ])
         mock_conn.fetchval = AsyncMock(side_effect=[
-            1,  # COUNT(*)
-            1,  # DELETE traces
-            0,  # DELETE mock
-            0,  # DELETE alerts
+            1,  # COUNT(*) from accord_traces
         ])
 
         mock_pool = _setup_mock_pool(mock_conn)
@@ -439,14 +438,17 @@ class TestDSARDeleteEndpoint:
         req = make_signed_request()
 
         mock_conn = AsyncMock()
-        mock_conn.execute = AsyncMock()
+        mock_conn.execute = AsyncMock(side_effect=[
+            "INSERT 0 1",  # INSERT audit record
+            "UPDATE 1",    # UPDATE audit record (no-traces path)
+            "DELETE 0",    # DELETE from accord_traces (none there)
+            "DELETE 3",    # DELETE from accord_traces_mock
+            "DELETE 0",    # DELETE from coherence_ratchet_alerts
+            "UPDATE 1",    # UPDATE audit record (final)
+        ])
         mock_conn.fetchval = AsyncMock(side_effect=[
             0,  # COUNT(*) from accord_traces = 0
             3,  # COUNT(*) from accord_traces_mock = 3 (has mock traces)
-            # Falls through to deletion path:
-            0,  # DELETE from accord_traces (none there)
-            3,  # DELETE from accord_traces_mock
-            0,  # DELETE from coherence_ratchet_alerts
         ])
 
         mock_pool = _setup_mock_pool(mock_conn)

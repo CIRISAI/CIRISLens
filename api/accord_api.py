@@ -2300,7 +2300,7 @@ async def dsar_delete_traces(request: DSARDeleteRequest) -> dict[str, Any]:
     public_keys = await load_public_keys()
     sig_valid, sig_error = _verify_dsar_signature(request, public_keys)
 
-    if not sig_valid and public_keys:
+    if not sig_valid:
         raise HTTPException(
             status_code=403,
             detail=f"Signature verification failed: {sig_error}",
@@ -2349,9 +2349,12 @@ async def dsar_delete_traces(request: DSARDeleteRequest) -> dict[str, Any]:
                 UPDATE cirislens.dsar_requests
                 SET status = 'completed', traces_deleted = 0,
                     processed_at = NOW()
-                WHERE agent_id_hash = $1
-                AND status = 'processing'
-                ORDER BY created_at DESC LIMIT 1
+                WHERE id = (
+                    SELECT id FROM cirislens.dsar_requests
+                    WHERE agent_id_hash = $1
+                    AND status = 'processing'
+                    ORDER BY created_at DESC LIMIT 1
+                )
                 """,
                 request.agent_id_hash,
             )
@@ -2365,38 +2368,34 @@ async def dsar_delete_traces(request: DSARDeleteRequest) -> dict[str, Any]:
                 }
 
         # Delete from accord_traces
-        deleted_traces = await conn.fetchval(
+        result = await conn.execute(
             """
             DELETE FROM cirislens.accord_traces
             WHERE agent_id_hash = $1
-            RETURNING COUNT(*)
             """,
             request.agent_id_hash,
         )
-        # fetchval on DELETE RETURNING COUNT(*) may return None if no rows
-        deleted_traces = deleted_traces or 0
+        deleted_traces = int(result.split()[-1]) if result else 0
 
         # Delete from accord_traces_mock
-        deleted_mock = await conn.fetchval(
+        result = await conn.execute(
             """
             DELETE FROM cirislens.accord_traces_mock
             WHERE agent_id_hash = $1
-            RETURNING COUNT(*)
             """,
             request.agent_id_hash,
         )
-        deleted_mock = deleted_mock or 0
+        deleted_mock = int(result.split()[-1]) if result else 0
 
         # Delete from coherence_ratchet_alerts related to this agent
-        deleted_alerts = await conn.fetchval(
+        result = await conn.execute(
             """
             DELETE FROM cirislens.coherence_ratchet_alerts
             WHERE agent_id_hash = $1
-            RETURNING COUNT(*)
             """,
             request.agent_id_hash,
         )
-        deleted_alerts = deleted_alerts or 0
+        deleted_alerts = int(result.split()[-1]) if result else 0
 
         total_deleted = deleted_traces + deleted_mock
 
