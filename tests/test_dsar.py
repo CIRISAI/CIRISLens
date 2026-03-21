@@ -23,7 +23,6 @@ from api.accord_api import (
     _verify_dsar_signature,
 )
 
-
 # =============================================================================
 # Test Fixtures
 # =============================================================================
@@ -97,7 +96,7 @@ class TestDSARDeleteRequest:
         assert req.reason == "User DSAR self-service request"
 
     def test_agent_id_hash_too_short(self):
-        with pytest.raises(Exception):
+        with pytest.raises(ValueError):
             DSARDeleteRequest(
                 agent_id_hash="abc",  # too short (min 8)
                 requested_at="2026-03-20T12:00:00+00:00",
@@ -106,7 +105,7 @@ class TestDSARDeleteRequest:
             )
 
     def test_agent_id_hash_too_long(self):
-        with pytest.raises(Exception):
+        with pytest.raises(ValueError):
             DSARDeleteRequest(
                 agent_id_hash="a" * 65,  # too long (max 64)
                 requested_at="2026-03-20T12:00:00+00:00",
@@ -115,7 +114,7 @@ class TestDSARDeleteRequest:
             )
 
     def test_invalid_request_type(self):
-        with pytest.raises(Exception):
+        with pytest.raises(ValueError):
             DSARDeleteRequest(
                 agent_id_hash="abc123def456",
                 request_type="delete_some_traces",
