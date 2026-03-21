@@ -3069,11 +3069,9 @@ async def set_trace_public_sample(
             raise HTTPException(status_code=404, detail="Trace not found")
 
         logger.info(
-            "Trace %s public_sample set to %s by %s (reason provided: %s)",
+            "Trace %s public_sample updated by %s",
             trace_id,
-            request.public_sample,
             user_id,
-            bool(request.reason),  # Log only whether reason was provided, not content
         )
 
         return {
