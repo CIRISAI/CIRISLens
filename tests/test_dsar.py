@@ -246,28 +246,20 @@ class TestDSARSignatureVerification:
         """PyNaCl import failure returns graceful error."""
         req = make_signed_request()
 
-        # Mock the nacl import to fail
-        import sys
+        import builtins
 
-        original_modules = sys.modules.copy()
-        # Remove nacl from modules to simulate import failure
-        for mod in list(sys.modules.keys()):
-            if mod.startswith("nacl"):
-                del sys.modules[mod]
+        original_import = builtins.__import__
 
-        with patch.dict(
-            "sys.modules", {"nacl": None, "nacl.signing": None, "nacl.exceptions": None}
-        ):
-            # Need to reimport the function to trigger the ImportError
-            # This is tricky - let's just test that it handles gracefully
-            pass
+        def mock_import(name, *args, **kwargs):
+            if name.startswith("nacl"):
+                raise ImportError("No module named 'nacl'")
+            return original_import(name, *args, **kwargs)
 
-        # Restore modules
-        sys.modules.update(original_modules)
+        with patch.object(builtins, "__import__", side_effect=mock_import):
+            is_valid, error = _verify_dsar_signature(req, public_keys)
 
-        # Since properly testing ImportError is complex, verify normal flow works
-        is_valid, error = _verify_dsar_signature(req, public_keys)
-        assert is_valid is True
+        assert is_valid is False
+        assert error == "Signature verification unavailable"
 
     def test_generic_verification_exception(self, make_signed_request, public_keys):
         """Generic exceptions during verification are handled gracefully."""
