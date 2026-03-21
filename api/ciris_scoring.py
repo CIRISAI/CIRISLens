@@ -633,14 +633,16 @@ async def calculate_factor_S(
                        "HandlerActionType.MEMORIZE", "HandlerActionType.FORGET"]
 
     # Query for coherence signals with decay
+    # Only count traces that have coherence data (NULL means check was not performed)
     coherence_query = f"""
     SELECT
         COUNT(*) as total_traces,
+        COUNT(*) FILTER (WHERE coherence_passed IS NOT NULL) as traces_with_coherence,
         AVG(
-            CASE WHEN coherence_passed THEN 1.0 ELSE 0.0 END
+            CASE WHEN coherence_passed THEN 1.0 WHEN coherence_passed = false THEN 0.0 END
             * EXP(-($4::float8) * EXTRACT(EPOCH FROM ($5::timestamptz - timestamp)) / 86400.0)
         ) as decayed_coherence,
-        AVG(CASE WHEN coherence_passed THEN 1.0 ELSE 0.0 END) as raw_coherence_rate
+        AVG(CASE WHEN coherence_passed THEN 1.0 WHEN coherence_passed = false THEN 0.0 END) as raw_coherence_rate
     FROM cirislens.covenant_traces
     WHERE agent_name = $1
       AND timestamp BETWEEN $2 AND $3
