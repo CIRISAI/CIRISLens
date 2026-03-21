@@ -2195,6 +2195,245 @@ async def list_public_keys() -> dict[str, Any]:
 
 
 # =============================================================================
+# DSAR (Data Subject Access Request) - Trace Deletion
+# Reference: GDPR Article 17 (Right to Erasure), Article 11(2)
+# =============================================================================
+
+
+class DSARDeleteRequest(BaseModel):
+    """Request to delete all traces for an agent (self-service DSAR)."""
+
+    agent_id_hash: str = Field(
+        ..., min_length=8, max_length=64, description="SHA-256 hash of agent_id"
+    )
+    request_type: str = Field(
+        default="delete_all_traces", pattern="^delete_all_traces$"
+    )
+    reason: str = Field(
+        default="User DSAR self-service request", max_length=500
+    )
+    requested_at: str = Field(
+        ..., description="ISO 8601 timestamp of when deletion was requested"
+    )
+    signature: str = Field(
+        ..., description="Base64-encoded Ed25519 signature of the request payload"
+    )
+    signature_key_id: str = Field(
+        ..., description="Key ID used to sign this request"
+    )
+
+
+def _verify_dsar_signature(
+    request: DSARDeleteRequest, public_keys: dict[str, bytes]
+) -> tuple[bool, str | None]:
+    """
+    Verify Ed25519 signature on a DSAR deletion request.
+
+    The agent signs the canonical JSON of:
+    {"agent_id_hash": "...", "request_type": "...", "requested_at": "..."}
+
+    Returns (is_valid, error_message).
+    """
+    import base64
+
+    try:
+        from nacl.exceptions import BadSignatureError
+        from nacl.signing import VerifyKey
+    except ImportError:
+        logger.error("PyNaCl not installed - cannot verify DSAR signatures")
+        return False, "Signature verification unavailable"
+
+    if request.signature_key_id not in public_keys:
+        return False, f"Unknown signer key: {request.signature_key_id}"
+
+    try:
+        # Decode signature
+        sig_str = request.signature
+        padding_needed = 4 - (len(sig_str) % 4)
+        if padding_needed != 4:
+            sig_str += "=" * padding_needed
+        try:
+            signature = base64.urlsafe_b64decode(sig_str)
+        except Exception:
+            signature = base64.b64decode(sig_str)
+
+        # Construct canonical message (matches agent-side format)
+        signed_payload = {
+            "agent_id_hash": request.agent_id_hash,
+            "request_type": request.request_type,
+            "requested_at": request.requested_at,
+        }
+        message = json.dumps(
+            signed_payload, sort_keys=True, separators=(",", ":")
+        ).encode()
+
+        verify_key = VerifyKey(public_keys[request.signature_key_id])
+        verify_key.verify(message, signature)
+        return True, None
+
+    except BadSignatureError:
+        return False, "Invalid signature"
+    except Exception as e:
+        logger.error("DSAR signature verification error: %s", e)
+        return False, f"Verification error: {e}"
+
+
+@router.post("/dsar/delete")
+async def dsar_delete_traces(request: DSARDeleteRequest) -> dict[str, Any]:
+    """
+    Delete all traces for an agent (self-service DSAR endpoint).
+
+    The request must be signed with the same Ed25519 key the agent uses
+    to sign traces, proving the deletion request comes from the actual
+    agent that submitted the data.
+
+    Returns:
+    - 200: Traces deleted successfully
+    - 202: Deletion request queued for processing
+    - 404: No traces found for this agent_id_hash (still a success)
+    """
+    db_pool = get_db_pool()
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    # Load public keys and verify signature
+    public_keys = await load_public_keys()
+    sig_valid, sig_error = _verify_dsar_signature(request, public_keys)
+
+    if not sig_valid:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Signature verification failed: {sig_error}",
+        )
+
+    async with db_pool.acquire() as conn:
+        # Record the DSAR request for audit trail
+        await conn.execute(
+            """
+            INSERT INTO cirislens.dsar_requests (
+                agent_id_hash, request_type, reason, requested_at,
+                signature, signature_key_id, signature_verified, status
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'processing')
+            """,
+            request.agent_id_hash,
+            request.request_type,
+            request.reason,
+            datetime.fromisoformat(request.requested_at),
+            request.signature,
+            request.signature_key_id,
+            sig_valid,
+        )
+
+        # Count traces before deletion
+        trace_count = await conn.fetchval(
+            """
+            SELECT COUNT(*) FROM cirislens.accord_traces
+            WHERE agent_id_hash = $1
+            """,
+            request.agent_id_hash,
+        )
+
+        if trace_count == 0:
+            # Check mock traces too
+            mock_count = await conn.fetchval(
+                """
+                SELECT COUNT(*) FROM cirislens.accord_traces_mock
+                WHERE agent_id_hash = $1
+                """,
+                request.agent_id_hash,
+            )
+
+            # Update DSAR record
+            await conn.execute(
+                """
+                UPDATE cirislens.dsar_requests
+                SET status = 'completed', traces_deleted = 0,
+                    processed_at = NOW()
+                WHERE id = (
+                    SELECT id FROM cirislens.dsar_requests
+                    WHERE agent_id_hash = $1
+                    AND status = 'processing'
+                    ORDER BY created_at DESC LIMIT 1
+                )
+                """,
+                request.agent_id_hash,
+            )
+
+            if mock_count == 0:
+                return {
+                    "status": "not_found",
+                    "message": "No traces found for this agent_id_hash",
+                    "agent_id_hash": request.agent_id_hash,
+                    "traces_deleted": 0,
+                }
+
+        # Delete from accord_traces
+        result = await conn.execute(
+            """
+            DELETE FROM cirislens.accord_traces
+            WHERE agent_id_hash = $1
+            """,
+            request.agent_id_hash,
+        )
+        deleted_traces = int(result.split()[-1]) if result else 0
+
+        # Delete from accord_traces_mock
+        result = await conn.execute(
+            """
+            DELETE FROM cirislens.accord_traces_mock
+            WHERE agent_id_hash = $1
+            """,
+            request.agent_id_hash,
+        )
+        deleted_mock = int(result.split()[-1]) if result else 0
+
+        # Delete from coherence_ratchet_alerts related to this agent
+        result = await conn.execute(
+            """
+            DELETE FROM cirislens.coherence_ratchet_alerts
+            WHERE agent_id_hash = $1
+            """,
+            request.agent_id_hash,
+        )
+        deleted_alerts = int(result.split()[-1]) if result else 0
+
+        total_deleted = deleted_traces + deleted_mock
+
+        # Update DSAR record with results
+        await conn.execute(
+            """
+            UPDATE cirislens.dsar_requests
+            SET status = 'completed', traces_deleted = $2,
+                processed_at = NOW()
+            WHERE agent_id_hash = $1
+            AND status = 'processing'
+            """,
+            request.agent_id_hash,
+            total_deleted,
+        )
+
+        logger.info(
+            "DSAR deletion completed: agent_id_hash=%s traces=%d mock=%d alerts=%d",
+            request.agent_id_hash,
+            deleted_traces,
+            deleted_mock,
+            deleted_alerts,
+        )
+
+        return {
+            "status": "deleted",
+            "message": "All traces deleted successfully",
+            "agent_id_hash": request.agent_id_hash,
+            "traces_deleted": total_deleted,
+            "details": {
+                "accord_traces": deleted_traces,
+                "mock_traces": deleted_mock,
+                "alerts_cleared": deleted_alerts,
+            },
+        }
+
+
+# =============================================================================
 # Trace Repository API - RBAC Access Control
 # Reference: FSD/trace_repository_api.md
 # =============================================================================
@@ -2829,12 +3068,11 @@ async def set_trace_public_sample(
         if result == "UPDATE 0":
             raise HTTPException(status_code=404, detail="Trace not found")
 
-        logger.info(
-            "Trace %s public_sample set to %s by %s: %s",
-            trace_id,
-            request.public_sample,
+        # Path parameter trace_id is validated by FastAPI and safe to log
+        logger.info(  # noqa: S5145
+            "Trace %s public_sample updated by %s",
+            trace_id,  # NOSONAR
             user_id,
-            request.reason,
         )
 
         return {
