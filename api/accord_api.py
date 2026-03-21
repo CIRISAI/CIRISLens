@@ -3068,12 +3068,14 @@ async def set_trace_public_sample(
         if result == "UPDATE 0":
             raise HTTPException(status_code=404, detail="Trace not found")
 
+        # Sanitize user-controlled reason for safe logging (prevent log injection)
+        safe_reason = (request.reason or "")[:100].replace("\n", " ").replace("\r", "")
         logger.info(
             "Trace %s public_sample set to %s by %s: %s",
             trace_id,
             request.public_sample,
             user_id,
-            request.reason,
+            safe_reason,
         )
 
         return {
