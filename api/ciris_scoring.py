@@ -491,12 +491,31 @@ async def calculate_factor_R(
     # R = 1 - drift_penalty (simple and interpretable)
     score = max(0.0, min(1.0, 1.0 - drift_penalty))
 
-    # Build notes
+    # Build notes and determine confidence
     notes = []
-    if baseline_count < 10:
-        notes.append(f"Limited baseline data ({baseline_count} traces)")
+    confidence = "high"
+
+    # Baseline confidence affects R factor reliability
+    # With limited baseline, drift measurements are less meaningful
+    if baseline_count < 20:
+        if baseline_count < 10:
+            notes.append(f"Very limited baseline ({baseline_count} traces) - drift penalty reduced")
+            confidence = "low"
+            # Reduce penalty for low-confidence baseline (scale down by 50%)
+            drift_penalty *= 0.5
+            score = max(0.0, min(1.0, 1.0 - drift_penalty))
+        else:
+            notes.append(f"Limited baseline ({baseline_count} traces) - drift penalty reduced")
+            confidence = "medium"
+            # Reduce penalty for medium-confidence baseline (scale down by 25%)
+            drift_penalty *= 0.75
+            score = max(0.0, min(1.0, 1.0 - drift_penalty))
+
     if trend_flag:
         notes.append(f"Sustained {trend_direction} trend detected ({trend_magnitude:+.1%})")
+
+    if not notes:
+        notes.append("Stable performance")
 
     return FactorScore(
         name="R",
@@ -514,8 +533,8 @@ async def calculate_factor_R(
             "threshold_full_penalty": full_penalty_at,
         },
         trace_count=total,
-        confidence=get_confidence_level(total),
-        notes=notes if notes else ["Stable performance"],
+        confidence=confidence,
+        notes=notes,
     )
 
 
@@ -634,14 +653,22 @@ async def calculate_factor_S(
 
     # Query for coherence signals with decay
     # Only count traces that have coherence data (NULL means check was not performed)
+    # Use WEIGHTED AVERAGE: recent traces have more influence, but perfect coherence
+    # from old traces still contributes positively (doesn't penalize inactivity)
+    # Formula: SUM(coherence * weight) / SUM(weight) where weight = exp(-decay * age)
     coherence_query = f"""
     SELECT
         COUNT(*) as total_traces,
         COUNT(*) FILTER (WHERE coherence_passed IS NOT NULL) as traces_with_coherence,
-        AVG(
+        -- Weighted average: decay affects weight, not the score itself
+        SUM(
             CASE WHEN coherence_passed THEN 1.0 WHEN coherence_passed = false THEN 0.0 END
             * EXP(-($4::float8) * EXTRACT(EPOCH FROM ($5::timestamptz - timestamp)) / 86400.0)
-        ) as decayed_coherence,
+        ) / NULLIF(SUM(
+            CASE WHEN coherence_passed IS NOT NULL
+            THEN EXP(-($4::float8) * EXTRACT(EPOCH FROM ($5::timestamptz - timestamp)) / 86400.0)
+            ELSE 0 END
+        ), 0) as decayed_coherence,
         AVG(CASE WHEN coherence_passed THEN 1.0 WHEN coherence_passed = false THEN 0.0 END) as raw_coherence_rate
     FROM cirislens.covenant_traces
     WHERE agent_name = $1
