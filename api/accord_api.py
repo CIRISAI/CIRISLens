@@ -3069,9 +3069,9 @@ async def set_trace_public_sample(
             raise HTTPException(status_code=404, detail="Trace not found")
 
         # Path parameter trace_id is validated by FastAPI and safe to log
-        logger.info(  # NOSONAR: trace_id is a validated path parameter, not arbitrary user input
+        logger.info(  # noqa: S5145
             "Trace %s public_sample updated by %s",
-            trace_id,
+            trace_id,  # NOSONAR
             user_id,
         )
 
