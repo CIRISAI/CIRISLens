@@ -2287,10 +2287,14 @@ async def dsar_delete_traces(request: DSARDeleteRequest) -> dict[str, Any]:
     to sign traces, proving the deletion request comes from the actual
     agent that submitted the data.
 
+    IMPORTANT: Only traces signed by the requesting key are deleted.
+    This prevents cross-agent deletion when multiple agents share
+    the same agent_id_hash.
+
     Returns:
     - 200: Traces deleted successfully
     - 202: Deletion request queued for processing
-    - 404: No traces found for this agent_id_hash (still a success)
+    - 404: No traces found for this agent_id_hash/key combination
     """
     db_pool = get_db_pool()
     if db_pool is None:
@@ -2324,13 +2328,14 @@ async def dsar_delete_traces(request: DSARDeleteRequest) -> dict[str, Any]:
             sig_valid,
         )
 
-        # Count traces before deletion
+        # Count traces before deletion - only traces signed by this key
         trace_count = await conn.fetchval(
             """
             SELECT COUNT(*) FROM cirislens.accord_traces
-            WHERE agent_id_hash = $1
+            WHERE agent_id_hash = $1 AND signature_key_id = $2
             """,
             request.agent_id_hash,
+            request.signature_key_id,
         )
 
         if trace_count == 0:
@@ -2338,9 +2343,10 @@ async def dsar_delete_traces(request: DSARDeleteRequest) -> dict[str, Any]:
             mock_count = await conn.fetchval(
                 """
                 SELECT COUNT(*) FROM cirislens.accord_traces_mock
-                WHERE agent_id_hash = $1
+                WHERE agent_id_hash = $1 AND signature_key_id = $2
                 """,
                 request.agent_id_hash,
+                request.signature_key_id,
             )
 
             # Update DSAR record
@@ -2362,32 +2368,38 @@ async def dsar_delete_traces(request: DSARDeleteRequest) -> dict[str, Any]:
             if mock_count == 0:
                 return {
                     "status": "not_found",
-                    "message": "No traces found for this agent_id_hash",
+                    "message": "No traces found for this agent_id_hash signed by this key",
                     "agent_id_hash": request.agent_id_hash,
+                    "signature_key_id": request.signature_key_id,
                     "traces_deleted": 0,
                 }
 
-        # Delete from accord_traces
+        # Delete from accord_traces - only traces signed by this key
         result = await conn.execute(
             """
             DELETE FROM cirislens.accord_traces
-            WHERE agent_id_hash = $1
+            WHERE agent_id_hash = $1 AND signature_key_id = $2
             """,
             request.agent_id_hash,
+            request.signature_key_id,
         )
         deleted_traces = int(result.split()[-1]) if result else 0
 
-        # Delete from accord_traces_mock
+        # Delete from accord_traces_mock - only traces signed by this key
         result = await conn.execute(
             """
             DELETE FROM cirislens.accord_traces_mock
-            WHERE agent_id_hash = $1
+            WHERE agent_id_hash = $1 AND signature_key_id = $2
             """,
             request.agent_id_hash,
+            request.signature_key_id,
         )
         deleted_mock = int(result.split()[-1]) if result else 0
 
         # Delete from coherence_ratchet_alerts related to this agent
+        # Note: alerts are system-generated, not signed by agents, so we only
+        # filter by agent_id_hash here. This is acceptable because alerts are
+        # derived from traces - if the traces are gone, alerts should go too.
         result = await conn.execute(
             """
             DELETE FROM cirislens.coherence_ratchet_alerts
@@ -2413,8 +2425,9 @@ async def dsar_delete_traces(request: DSARDeleteRequest) -> dict[str, Any]:
         )
 
         logger.info(
-            "DSAR deletion completed: agent_id_hash=%s traces=%d mock=%d alerts=%d",
+            "DSAR deletion completed: agent_id_hash=%s key_id=%s traces=%d mock=%d alerts=%d",
             request.agent_id_hash,
+            request.signature_key_id,
             deleted_traces,
             deleted_mock,
             deleted_alerts,
