@@ -145,6 +145,7 @@ ignore = [
 ]
 "api/ciris_scoring.py" = [
     "S608",      # SQL injection false positive - BENCHMARK_FILTER is a constant, not user input
+    "PLR0915",   # Too many statements in calculate_factor_R (confidence-based penalty logic)
 ]
 "api/manager_collector.py" = [
     "S501",      # verify=False for internal services behind Cloudflare
