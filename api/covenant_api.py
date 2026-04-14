@@ -385,7 +385,8 @@ async def get_covenant_repository_statistics(
     access: TraceAccessContext | None = None,
 ) -> TraceStatisticsResponse:
     """DEPRECATED: Use /api/v1/accord/repository/statistics instead."""
-    return await get_repository_statistics(access=access)
+    access_level = access.access_level if access else AccessLevel.PUBLIC
+    return await get_repository_statistics(access_level=access_level)
 
 
 @router.put("/repository/traces/{trace_id}/public-sample")
