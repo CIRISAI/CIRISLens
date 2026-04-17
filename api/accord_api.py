@@ -1253,7 +1253,11 @@ async def _store_mock_trace(
             selection_confidence, is_recursive, follow_up_thought_id, api_bases_used,
             schema_version,
             idma_result, tsaspdma_result,
-            tool_name, tool_parameters, tsaspdma_reasoning, tsaspdma_approved
+            tool_name, tool_parameters, tsaspdma_reasoning, tsaspdma_approved,
+            thought_start_at, snapshot_at, dma_results_at, aspdma_at,
+            idma_at, tsaspdma_at, conscience_at, action_result_at,
+            memory_count, context_tokens, conversation_turns,
+            alternatives_considered, conscience_checks_count
         ) VALUES (
             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
             $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
@@ -1261,7 +1265,8 @@ async def _store_mock_trace(
             $31, $32, $33, $34, $35, $36, $37, $38, $39, $40,
             $41, $42, $43, $44, $45, $46, $47, $48, $49, $50,
             $51, $52, $53, $54, $55, $56, $57, $58, $59, $60,
-            $61, $62, $63, $64, $65, $66
+            $61, $62, $63, $64, $65, $66, $67, $68, $69, $70,
+            $71, $72, $73, $74, $75, $76, $77, $78, $79
         )
         ON CONFLICT (trace_id) DO NOTHING
         """,
@@ -1331,6 +1336,19 @@ async def _store_mock_trace(
         json.dumps(metadata["tool_parameters"]),     # $64 - tool parameters
         metadata["tsaspdma_reasoning"],              # $65 - TSASPDMA reasoning
         metadata["tsaspdma_approved"],               # $66 - TSASPDMA approval status
+        metadata["thought_start_at"],                # $67 - step timestamp
+        metadata["snapshot_at"],                     # $68 - step timestamp
+        metadata["dma_results_at"],                  # $69 - step timestamp
+        metadata["aspdma_at"],                       # $70 - step timestamp
+        metadata["idma_at"],                         # $71 - step timestamp
+        metadata["tsaspdma_at"],                     # $72 - step timestamp
+        metadata["conscience_at"],                   # $73 - step timestamp
+        metadata["action_result_at"],                # $74 - step timestamp
+        metadata["memory_count"],                    # $75 - observation weight
+        metadata["context_tokens"],                  # $76 - observation weight
+        metadata["conversation_turns"],              # $77 - observation weight
+        metadata["alternatives_considered"],         # $78 - observation weight
+        metadata["conscience_checks_count"],         # $79 - observation weight
     )
 
 
@@ -1421,6 +1439,21 @@ def extract_trace_metadata(trace: AccordTrace, trace_level: str = "generic") -> 
         "tool_parameters": None,
         "tsaspdma_reasoning": None,
         "tsaspdma_approved": None,
+        # Step timestamps (pipeline timing)
+        "thought_start_at": None,
+        "snapshot_at": None,
+        "dma_results_at": None,
+        "aspdma_at": None,
+        "idma_at": None,
+        "tsaspdma_at": None,
+        "conscience_at": None,
+        "action_result_at": None,
+        # Observation weight (numeric, privacy-safe)
+        "memory_count": None,
+        "context_tokens": None,
+        "conversation_turns": None,
+        "alternatives_considered": None,
+        "conscience_checks_count": None,
     }
 
     # Extract trace type from task_id if present
@@ -1463,6 +1496,8 @@ def extract_trace_metadata(trace: AccordTrace, trace_level: str = "generic") -> 
             metadata["thought_start"] = data
             metadata["thought_type"] = data.get("thought_type")
             metadata["thought_depth"] = data.get("thought_depth")
+            # Extract step timestamp
+            metadata["thought_start_at"] = _parse_timestamp(component.timestamp)
             # Fallback trace type detection from task_description
             if not metadata["trace_type"]:
                 task_desc = data.get("task_description", "")
@@ -1486,6 +1521,24 @@ def extract_trace_metadata(trace: AccordTrace, trace_level: str = "generic") -> 
                 sys_snapshot = data.get("system_snapshot", {})
                 agent_identity = sys_snapshot.get("agent_identity", {})
                 metadata["agent_name"] = agent_identity.get("agent_name") or agent_identity.get("agent_id")
+            # Extract step timestamp
+            metadata["snapshot_at"] = _parse_timestamp(component.timestamp)
+            # Observation weight: memory_count
+            relevant_memories = data.get("relevant_memories")
+            if isinstance(relevant_memories, list):
+                metadata["memory_count"] = len(relevant_memories)
+            # Observation weight: context_tokens
+            if data.get("context_tokens"):
+                metadata["context_tokens"] = data.get("context_tokens")
+            elif data.get("total_tokens"):
+                metadata["context_tokens"] = data.get("total_tokens")
+            elif data.get("gathered_context"):
+                # Rough estimate: ~4 chars per token
+                metadata["context_tokens"] = len(data.get("gathered_context", "")) // 4
+            # Observation weight: conversation_turns
+            conversation_history = data.get("conversation_history")
+            if isinstance(conversation_history, list):
+                metadata["conversation_turns"] = len(conversation_history)
 
         elif event_type == "DMA_RESULTS":
             metadata["dma_results"] = data
@@ -1509,6 +1562,8 @@ def extract_trace_metadata(trace: AccordTrace, trace_level: str = "generic") -> 
                 metadata["idma_correlation_risk"] = idma.get("correlation_risk")
                 metadata["idma_fragility_flag"] = idma.get("fragility_flag")
                 metadata["idma_phase"] = idma.get("phase")
+            # Extract step timestamp
+            metadata["dma_results_at"] = _parse_timestamp(component.timestamp)
 
         elif event_type == "ASPDMA_RESULT":
             metadata["aspdma_result"] = data
@@ -1521,6 +1576,13 @@ def extract_trace_metadata(trace: AccordTrace, trace_level: str = "generic") -> 
             # ASPDMA decision metadata
             metadata["selection_confidence"] = data.get("selection_confidence")
             metadata["is_recursive"] = data.get("is_recursive")
+            # Extract step timestamp
+            metadata["aspdma_at"] = _parse_timestamp(component.timestamp)
+            # Observation weight: alternatives_considered
+            for key in ["action_options", "evaluated_actions", "alternatives"]:
+                if isinstance(data.get(key), list):
+                    metadata["alternatives_considered"] = len(data.get(key))
+                    break
 
         elif event_type == "IDMA_RESULT":
             # V1.9.3: IDMA as separate event (not nested in DMA_RESULTS)
@@ -1530,6 +1592,8 @@ def extract_trace_metadata(trace: AccordTrace, trace_level: str = "generic") -> 
             metadata["idma_correlation_risk"] = data.get("correlation_risk")
             metadata["idma_fragility_flag"] = data.get("fragility_flag")
             metadata["idma_phase"] = data.get("phase")
+            # Extract step timestamp
+            metadata["idma_at"] = _parse_timestamp(component.timestamp)
 
         elif event_type == "TSASPDMA_RESULT":
             # V1.9.3: Tool-Specific ASPDMA for TOOL actions
@@ -1542,6 +1606,8 @@ def extract_trace_metadata(trace: AccordTrace, trace_level: str = "generic") -> 
             # Only approved if final_action == "tool"
             final_action = (data.get("final_action") or "").lower()
             metadata["tsaspdma_approved"] = final_action == "tool"
+            # Extract step timestamp
+            metadata["tsaspdma_at"] = _parse_timestamp(component.timestamp)
 
         elif event_type == "CONSCIENCE_RESULT":
             metadata["conscience_result"] = data
@@ -1563,6 +1629,20 @@ def extract_trace_metadata(trace: AccordTrace, trace_level: str = "generic") -> 
             metadata["coherence_passed"] = data.get("coherence_passed")
             metadata["optimization_veto_passed"] = data.get("optimization_veto_passed")
             metadata["epistemic_humility_passed"] = data.get("epistemic_humility_passed")
+            # Extract step timestamp
+            metadata["conscience_at"] = _parse_timestamp(component.timestamp)
+            # Observation weight: conscience_checks_count
+            for key in ["checks", "ethical_checks", "check_results"]:
+                if isinstance(data.get(key), list):
+                    metadata["conscience_checks_count"] = len(data.get(key))
+                    break
+            else:
+                # Count individual check fields as fallback
+                check_count = sum(1 for k in ["entropy_passed", "coherence_passed",
+                                              "optimization_veto_passed", "epistemic_humility_passed",
+                                              "integrity_check_passed"] if data.get(k) is not None)
+                if check_count > 0:
+                    metadata["conscience_checks_count"] = check_count
 
         elif event_type == "ACTION_RESULT":
             metadata["action_result"] = data
@@ -1591,6 +1671,8 @@ def extract_trace_metadata(trace: AccordTrace, trace_level: str = "generic") -> 
             metadata["energy_mwh"] = data.get("energy_mwh")
             metadata["llm_calls"] = data.get("llm_calls")
             metadata["models_used"] = data.get("models_used")
+            # Extract step timestamp
+            metadata["action_result_at"] = _parse_timestamp(component.timestamp)
 
     return metadata
 
@@ -1928,7 +2010,11 @@ async def receive_accord_events(
                         selection_confidence, is_recursive, follow_up_thought_id, api_bases_used,
                         schema_version,
                         idma_result, tsaspdma_result,
-                        tool_name, tool_parameters, tsaspdma_reasoning, tsaspdma_approved
+                        tool_name, tool_parameters, tsaspdma_reasoning, tsaspdma_approved,
+                        thought_start_at, snapshot_at, dma_results_at, aspdma_at,
+                        idma_at, tsaspdma_at, conscience_at, action_result_at,
+                        memory_count, context_tokens, conversation_turns,
+                        alternatives_considered, conscience_checks_count
                     ) VALUES (
                         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
                         $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
@@ -1937,7 +2023,9 @@ async def receive_accord_events(
                         $41, $42, $43, $44, $45, $46, $47, $48, $49, $50,
                         $51, $52, $53, $54, $55, $56, $57, $58, $59, $60,
                         $61, $62, $63, $64, $65, $66, $67, $68, $69, $70,
-                        $71, $72, $73, $74, $75, $76, $77, $78, $79
+                        $71, $72, $73, $74, $75, $76, $77, $78, $79,
+                        $80, $81, $82, $83, $84, $85, $86, $87,
+                        $88, $89, $90, $91, $92
                     )
                     ON CONFLICT (trace_id, timestamp) DO NOTHING
                     """,
@@ -2020,6 +2108,19 @@ async def receive_accord_events(
                     json.dumps(metadata["tool_parameters"]),     # $77 - tool parameters
                     metadata["tsaspdma_reasoning"],              # $78 - TSASPDMA reasoning
                     metadata["tsaspdma_approved"],               # $79 - TSASPDMA approval status
+                    metadata["thought_start_at"],                # $80 - step timestamp
+                    metadata["snapshot_at"],                     # $81 - step timestamp
+                    metadata["dma_results_at"],                  # $82 - step timestamp
+                    metadata["aspdma_at"],                       # $83 - step timestamp
+                    metadata["idma_at"],                         # $84 - step timestamp
+                    metadata["tsaspdma_at"],                     # $85 - step timestamp
+                    metadata["conscience_at"],                   # $86 - step timestamp
+                    metadata["action_result_at"],                # $87 - step timestamp
+                    metadata["memory_count"],                    # $88 - observation weight
+                    metadata["context_tokens"],                  # $89 - observation weight
+                    metadata["conversation_turns"],              # $90 - observation weight
+                    metadata["alternatives_considered"],         # $91 - observation weight
+                    metadata["conscience_checks_count"],         # $92 - observation weight
                 )
                 accepted += 1
                 logger.info("Successfully stored trace %s", trace.trace_id)
