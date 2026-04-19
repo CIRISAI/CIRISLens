@@ -25,7 +25,7 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 if TYPE_CHECKING:
@@ -1681,6 +1681,32 @@ def extract_trace_metadata(trace: AccordTrace, trace_level: str = "generic") -> 
 # API Endpoint - Covenant Events Receiver
 # Reference: FSD/covenant_events_receiver.md
 # =============================================================================
+
+
+@router.post("/events/debug")
+async def debug_accord_events(request: Request) -> dict[str, Any]:
+    """Debug endpoint to capture rejected request bodies."""
+    body = await request.body()
+    try:
+        import json
+        data = json.loads(body)
+        logger.warning(
+            "DEBUG_REQUEST keys=%s batch_ts=%s consent_ts=%s events=%d",
+            list(data.keys()),
+            data.get("batch_timestamp"),
+            data.get("consent_timestamp"),
+            len(data.get("events", [])),
+        )
+        if data.get("events"):
+            first_event = data["events"][0]
+            logger.warning(
+                "DEBUG_FIRST_EVENT keys=%s trace_id=%s",
+                list(first_event.keys())[:10],
+                first_event.get("trace_id"),
+            )
+    except Exception as e:
+        logger.warning("DEBUG_REQUEST_RAW len=%d error=%s", len(body), e)
+    return {"status": "debug", "body_length": len(body)}
 
 
 @router.post("/events", response_model=AccordEventsResponse)
