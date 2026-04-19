@@ -69,6 +69,37 @@ app.add_middleware(
 )
 
 
+# Validation error handler to log rejected request bodies
+from fastapi.exceptions import RequestValidationError
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """Log validation errors with request details for debugging."""
+    if "/accord/events" in str(request.url):
+        try:
+            body = await request.body()
+            import json as _json
+            try:
+                data = _json.loads(body)
+                logger.warning(
+                    "VALIDATION_ERROR path=%s keys=%s batch_ts=%s consent_ts=%s events=%d errors=%s",
+                    request.url.path,
+                    list(data.keys()) if isinstance(data, dict) else type(data).__name__,
+                    data.get("batch_timestamp") if isinstance(data, dict) else None,
+                    data.get("consent_timestamp") if isinstance(data, dict) else None,
+                    len(data.get("events", [])) if isinstance(data, dict) else 0,
+                    str(exc.errors())[:200],
+                )
+            except _json.JSONDecodeError:
+                logger.warning("VALIDATION_ERROR path=%s body_len=%d (not JSON)", request.url.path, len(body))
+        except Exception as e:
+            logger.warning("VALIDATION_ERROR path=%s (could not read body: %s)", request.url.path, e)
+    return JSONResponse(
+        status_code=422,
+        content={"detail": exc.errors()},
+    )
+
+
 # Include Accord API routers (primary)
 app.include_router(accord_v1_router)
 app.include_router(accord_v2_router)
