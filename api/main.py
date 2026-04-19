@@ -15,6 +15,7 @@ from typing import Any
 import asyncpg
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, EmailStr
@@ -70,17 +71,14 @@ app.add_middleware(
 
 
 # Validation error handler to log rejected request bodies
-from fastapi.exceptions import RequestValidationError
-
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     """Log validation errors with request details for debugging."""
     if "/accord/events" in str(request.url):
         try:
             body = await request.body()
-            import json as _json
             try:
-                data = _json.loads(body)
+                data = json.loads(body)
                 logger.warning(
                     "VALIDATION_ERROR path=%s keys=%s batch_ts=%s consent_ts=%s events=%d errors=%s",
                     request.url.path,
@@ -90,7 +88,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
                     len(data.get("events", [])) if isinstance(data, dict) else 0,
                     str(exc.errors())[:200],
                 )
-            except _json.JSONDecodeError:
+            except json.JSONDecodeError:
                 logger.warning("VALIDATION_ERROR path=%s body_len=%d (not JSON)", request.url.path, len(body))
         except Exception as e:
             logger.warning("VALIDATION_ERROR path=%s (could not read body: %s)", request.url.path, e)
