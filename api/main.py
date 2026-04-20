@@ -70,28 +70,42 @@ app.add_middleware(
 )
 
 
+# Middleware to cache request body for validation error logging
+@app.middleware("http")
+async def cache_request_body(request: Request, call_next):
+    """Cache request body so it can be read in exception handlers."""
+    if "/accord/events" in str(request.url) and request.method == "POST":
+        body = await request.body()
+        request.state.cached_body = body
+    response = await call_next(request)
+    return response
+
+
 # Validation error handler to log rejected request bodies
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     """Log validation errors with request details for debugging."""
     if "/accord/events" in str(request.url):
         try:
-            body = await request.body()
-            try:
-                data = json.loads(body)
-                logger.warning(
-                    "VALIDATION_ERROR path=%s keys=%s batch_ts=%s consent_ts=%s events=%d errors=%s",
-                    request.url.path,
-                    list(data.keys()) if isinstance(data, dict) else type(data).__name__,
-                    data.get("batch_timestamp") if isinstance(data, dict) else None,
-                    data.get("consent_timestamp") if isinstance(data, dict) else None,
-                    len(data.get("events", [])) if isinstance(data, dict) else 0,
-                    str(exc.errors())[:200],
-                )
-            except json.JSONDecodeError:
-                logger.warning("VALIDATION_ERROR path=%s body_len=%d (not JSON)", request.url.path, len(body))
+            body = getattr(request.state, "cached_body", None)
+            if body:
+                try:
+                    data = json.loads(body)
+                    logger.warning(
+                        "VALIDATION_ERROR path=%s keys=%s batch_ts=%s consent_ts=%s events=%d errors=%s",
+                        request.url.path,
+                        list(data.keys()) if isinstance(data, dict) else type(data).__name__,
+                        data.get("batch_timestamp") if isinstance(data, dict) else None,
+                        data.get("consent_timestamp") if isinstance(data, dict) else None,
+                        len(data.get("events", [])) if isinstance(data, dict) else 0,
+                        str(exc.errors())[:200],
+                    )
+                except json.JSONDecodeError:
+                    logger.warning("VALIDATION_ERROR path=%s body_len=%d (not JSON)", request.url.path, len(body))
+            else:
+                logger.warning("VALIDATION_ERROR path=%s errors=%s", request.url.path, str(exc.errors())[:300])
         except Exception as e:
-            logger.warning("VALIDATION_ERROR path=%s (could not read body: %s)", request.url.path, e)
+            logger.warning("VALIDATION_ERROR path=%s exception=%s", request.url.path, e)
     return JSONResponse(
         status_code=422,
         content={"detail": exc.errors()},
