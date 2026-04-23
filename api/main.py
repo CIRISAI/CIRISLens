@@ -73,10 +73,18 @@ app.add_middleware(
 # Middleware to cache request body for validation error logging
 @app.middleware("http")
 async def cache_request_body(request: Request, call_next):
-    """Cache request body so it can be read in exception handlers."""
+    """Cache request body so it can be read in exception handlers.
+
+    Must restore the body stream after reading or downstream endpoints hang.
+    """
     if "/accord/events" in str(request.url) and request.method == "POST":
         body = await request.body()
         request.state.cached_body = body
+
+        async def receive():
+            return {"type": "http.request", "body": body, "more_body": False}
+
+        request._receive = receive
     response = await call_next(request)
     return response
 
