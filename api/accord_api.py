@@ -1049,7 +1049,7 @@ class CorrelationMetadata(BaseModel):
     user_longitude: float | None = None  # Snapped to 0.5° grid server-side
 
     @model_validator(mode="after")
-    def coarsen_user_location(self) -> "CorrelationMetadata":
+    def coarsen_user_location(self) -> CorrelationMetadata:
         """Apply privacy-preserving coarsening before storage.
 
         Snap lat/lon to 0.5° grid (~55km cells). Drop free-text city string —
