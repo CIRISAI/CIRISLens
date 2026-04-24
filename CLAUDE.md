@@ -207,6 +207,38 @@ open http://localhost:3000
 
 ## Common Tasks
 
+### Check Corpus Shape (start every analysis here)
+
+Before running any correlation / k_eff / trace-behavior analysis, run
+`scripts/corpus_shape.py` to see what kind of traces are in your window
+(QA harness vs real traffic, which languages/questions, which agents,
+stationary or drifting). Skipping this step has repeatedly led to
+misreading QA cycles as agent degradation, mixing wakeup-ritual traces
+with work traces, etc.
+
+```bash
+# Default: last 24h, production DB over SSH
+scripts/corpus_shape.py
+
+# Narrower windows
+scripts/corpus_shape.py --window 30m
+scripts/corpus_shape.py --window 7d
+
+# Bounded by exact timestamps (ISO 8601)
+scripts/corpus_shape.py --since 2026-04-24T03:52:00
+
+# Faceted: only QA traffic or only one agent
+scripts/corpus_shape.py --task-class qa_eval
+scripts/corpus_shape.py --agent Ally
+```
+
+Override the DB connection by setting `CIRISLENS_PSQL` to a command that
+reads SQL from stdin (see script docstring). Analysis reads the
+`cirislens.trace_context` view which adds derived `task_class`,
+`qa_language`, `qa_question_num`, coarsened region, and primary model
+columns on top of `accord_traces`. All trace analysis queries should
+read from `trace_context`, not `accord_traces` directly.
+
 ### View Agent Metrics
 ```promql
 # In Grafana, query Mimir datasource
