@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 if TYPE_CHECKING:
     import asyncpg
@@ -1018,12 +1018,51 @@ class AccordTraceEvent(BaseModel):
 
 
 class CorrelationMetadata(BaseModel):
-    """Optional metadata for Early Warning System correlation analysis."""
+    """Optional metadata for Early Warning System correlation analysis.
 
+    User-location fields represent agent-declared, consent-scoped context.
+    The batch-level `consent_timestamp` on AccordEventsRequest records the
+    opt-in — the agent owns the legal basis.
+
+    Lens applies privacy-preserving coarsening server-side as defense-in-depth:
+
+    - `user_latitude` / `user_longitude`: snapped to 0.5° grid (~55km cells)
+      before storage. High-precision values never persist.
+    - `user_location` (free-text city string): accepted but dropped — the
+      snapped coordinates carry enough signal for regional aggregation.
+    - `user_timezone`: stored as-is (IANA strings are coarse by nature).
+
+    Aggregation queries must enforce k-anonymity (k≥5 distinct agents per cell)
+    before display or export.
+    """
+
+    # Operator-declared deployment context
     deployment_region: str | None = None  # na, eu, uk, apac, latam, mena, africa, oceania
     deployment_type: str | None = None  # personal, business, research, nonprofit
     agent_role: str | None = None  # assistant, customer_support, content, coding, etc.
     agent_template: str | None = None  # CIRIS template name if using standard template
+
+    # User-declared location context (opt-in; coarsened server-side)
+    user_location: str | None = None  # Free-text city — dropped by validator
+    user_timezone: str | None = None  # IANA timezone, e.g. "America/Chicago"
+    user_latitude: float | None = None  # Snapped to 0.5° grid server-side
+    user_longitude: float | None = None  # Snapped to 0.5° grid server-side
+
+    @model_validator(mode="after")
+    def coarsen_user_location(self) -> "CorrelationMetadata":
+        """Apply privacy-preserving coarsening before storage.
+
+        Snap lat/lon to 0.5° grid (~55km cells). Drop free-text city string —
+        the snapped coordinates are sufficient for regional CCA aggregation
+        and the text is too granular to store even with consent.
+        """
+        if self.user_latitude is not None:
+            self.user_latitude = round(self.user_latitude / 0.5) * 0.5
+        if self.user_longitude is not None:
+            self.user_longitude = round(self.user_longitude / 0.5) * 0.5
+        # Drop the granular text location — coordinates carry the signal
+        self.user_location = None
+        return self
 
 
 class AccordEventsRequest(BaseModel):
@@ -1854,6 +1893,34 @@ async def receive_accord_events(
 
             # Verify signature
             is_valid, error = verify_trace_signature(trace, public_keys, request.trace_level)
+
+            # Multi-worker cache-miss recovery: Uvicorn runs N worker processes,
+            # each with its own Python-global public_keys dict. A registration
+            # hits one worker; traces to other workers see stale caches.
+            # On "unknown signer key", do a targeted DB lookup for just this
+            # key before rejecting. Populates the local worker's cache.
+            if not is_valid and error and error.startswith("Unknown signer key:"):
+                import base64 as _b64
+                row = await conn.fetchrow(
+                    """
+                    SELECT public_key_base64 FROM cirislens.accord_public_keys
+                    WHERE key_id = $1 AND revoked_at IS NULL
+                    AND (expires_at IS NULL OR expires_at > NOW())
+                    """,
+                    trace.signature_key_id,
+                )
+                if row:
+                    public_keys[trace.signature_key_id] = _b64.b64decode(
+                        row["public_key_base64"]
+                    )
+                    logger.info(
+                        "PUBLIC_KEY_CACHE_MISS_RECOVERED key_id=%s "
+                        "(loaded from DB, worker-local cache was stale)",
+                        trace.signature_key_id,
+                    )
+                    is_valid, error = verify_trace_signature(
+                        trace, public_keys, request.trace_level
+                    )
 
             if not is_valid and public_keys:
                 rejected += 1
