@@ -1111,6 +1111,14 @@ def verify_trace_signature(
 
     # Check if we have the signer's key
     if trace.signature_key_id not in public_keys:
+        logger.warning(
+            "SIGNATURE_REJECT_UNKNOWN_KEY trace=%s key_id=%s keys_loaded=%d "
+            "hint='key not registered or public_keys cache stale — verify "
+            "POST /accord/public-keys succeeded for this key_id'",
+            trace.trace_id,
+            trace.signature_key_id,
+            len(public_keys),
+        )
         return False, f"Unknown signer key: {trace.signature_key_id}"
 
     try:
@@ -1174,6 +1182,12 @@ def verify_trace_signature(
         )
         return False, "Invalid signature"
     except Exception as e:
+        logger.error(
+            "SIGNATURE_REJECT_VERIFY_ERROR trace=%s key_id=%s error=%s",
+            trace.trace_id,
+            trace.signature_key_id,
+            str(e)[:200],
+        )
         return False, f"Verification error: {str(e)[:100]}"
 
 
