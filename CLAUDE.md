@@ -4,32 +4,21 @@ This file provides guidance to Claude Code (claude.ai/code) when working with CI
 
 ## Project Overview
 
-CIRISLens is the **observability layer** for the CIRIS ecosystem. It collects, stores, and visualizes telemetry data (metrics, traces, logs) from all CIRIS components using industry-standard open source tools.
+CIRISLens is the **observability layer** for the CIRIS ecosystem. It ingests Ed25519-signed reasoning traces from agents at a Rust edge (`cirislens-core`, compiled into the API via PyO3), stores them in TimescaleDB, and uses the corpus to tune the **Coherence Ratchet** (anomaly detection) and compute **CIRIS Capacity Scores** (agent health). Grafana handles visualization.
 
-## Relationship to Other CIRIS Projects
+See [README.md](README.md) for the user-facing overview.
 
-### The CIRIS Trinity
+## The CIRIS Trinity (how this project relates to the others)
 
-1. **CIRISAgent** (Business Logic)
-   - **Role**: Executes agent logic, handles messages, manages cognitive states
-   - **Telemetry**: EXPOSES metrics/traces/logs via `/v1/telemetry/unified` endpoint
-   - **Version**: 1.4.3+ has full OpenTelemetry support with 500+ metrics
+1. **CIRISAgent** — executes agent logic, manages cognitive states, emits signed reasoning traces + OTLP telemetry.
+2. **CIRISManager** — container lifecycle, traffic routing, exposes its own operational metrics. Does **not** collect or store telemetry.
+3. **CIRISLens** (this project) — ingests, verifies, scrubs, stores, analyzes. Powers dashboards and the Coherence Ratchet.
 
-2. **CIRISManager** (Lifecycle Management)
-   - **Role**: Manages agent containers, handles deployments, routes traffic
-   - **Telemetry**: EXPOSES its own operational metrics
-   - **Note**: NO LONGER collects or stores telemetry (that's CIRISLens's job)
-
-3. **CIRISLens** (Observability)
-   - **Role**: Collects all telemetry, provides dashboards, enables debugging
-   - **Telemetry**: COLLECTS from agents and manager, STORES in time-series DBs
-   - **This Project**: You are here!
-
-### Data Flow
+Data flow:
 
 ```
-CIRISAgent → Exposes telemetry → CIRISLens collects → Grafana visualizes
-CIRISManager → Exposes metrics → CIRISLens collects → Grafana visualizes
+CIRISAgent ─signed traces─► cirislens-core (Rust) ─► TimescaleDB ─► Grafana
+CIRISManager ── metrics ──► CIRISLens collector  ─► TimescaleDB ─► Grafana
 ```
 
 ## Architecture Principles

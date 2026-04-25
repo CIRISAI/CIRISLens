@@ -1,189 +1,167 @@
 # CIRISLens
 
-**Version: 0.3-alpha**
+**Rust-edge observability for CIRIS agents — ingest signed reasoning traces at scale, tune the Coherence Ratchet, measure agent health.**
 
-Full-stack observability platform for CIRIS infrastructure - unified metrics, traces, and logs with TimescaleDB time-series storage and automatic data lifecycle management.
+## What CIRISLens does
 
-## Overview
+CIRISLens receives Ed25519-signed reasoning traces from CIRIS agents in the field, verifies and scrubs them at the edge, and stores the signal in TimescaleDB. The corpus powers two things:
 
-CIRISLens provides complete observability for CIRIS deployments using best-in-class open source tools:
+1. **Coherence Ratchet** — anomaly detection over reasoning behavior (phase transitions, cross-agent divergence, hash-chain integrity, conscience-override rate).
+2. **CIRIS Capacity Score** — a composite trustworthiness score per agent, computed from privacy-safe numeric signals only.
 
-- **Storage**: TimescaleDB for time-series data with automatic compression (90% savings)
-- **Metrics**: 500+ agent metrics with hourly/daily continuous aggregates
-- **Traces**: Distributed tracing with OTLP support
-- **Logs**: Structured log aggregation with automatic retention
-- **Visualization**: Grafana 12.3+ with CIRIS-specific dashboards
-- **Collection**: Direct OTLP collection from agent endpoints via CIRISManager discovery
+The hot path is a Rust core (`cirislens-core`, compiled into the API via PyO3). Schema validation, Ed25519 signature verification, field extraction, and PII scrubbing all run in Rust; Python handles routing, storage, and dashboards.
 
-## Features
+## The Rust edge
 
-- **TimescaleDB Hypertables**: Automatic time-based partitioning for efficient queries
-- **90% Compression**: Data older than 7 days is automatically compressed
-- **Smart Retention**: Metrics 30 days, Logs/Traces 14 days (automatic cleanup)
-- **Continuous Aggregates**: Pre-computed hourly (90 days) and daily (1 year) summaries
-- **Manager Discovery**: Auto-discovers agents from CIRISManager API
-- **Full Correlation**: Click trace → see logs → view metrics
-- **Privacy-First**: Automatic PII sanitization for public dashboards
-- **Zero-Code Setup**: Works out of the box with CIRIS agents v1.4.5+
+```
+agent  ─signed trace─►  [ cirislens-core / Rust ]  ─►  TimescaleDB  ─►  Grafana
+                       • schema validation
+                       • Ed25519 verify
+                       • PII scrub (NER + regex)
+                       • field extraction
+                       • security sanitization
+```
 
-## Quick Start
+Why Rust at the edge:
 
-### Prerequisites
+- **Throughput**: trace batches arrive at scale; schema validation and signature verification can't be the bottleneck.
+- **Correctness under adversarial input**: XSS / SQLi / command-injection sanitizers run in a memory-safe language with no silent truncation.
+- **One verification boundary**: traces verify once in Rust. Everything downstream trusts the envelope.
 
-- Docker & Docker Compose
-- CIRIS agents running v1.4.5 or later with OTLP support
-- 4GB RAM minimum (8GB recommended)
-- Agent service tokens for telemetry access
+Falls back cleanly to a Python implementation when the Rust core isn't built (development convenience).
 
-### Installation
+## Coherence Ratchet
 
-1. Clone the repository:
+Five detection mechanisms run over the trace corpus:
+
+| Mechanism | What it catches |
+|-----------|-----------------|
+| Cross-agent divergence | An agent's DMA scores drift from peers in the same domain |
+| Intra-agent consistency | Self-contradictory reasoning within an agent |
+| Hash-chain verification | Gaps or tampering in the signed audit trail |
+| Temporal drift | Sudden behavioral changes over time |
+| Conscience override rate | Elevated ethical-faculty intervention rates |
+
+Detection is **triage, not verdict**. Anomalies warrant human review; they don't prove misalignment.
+
+See [docs/coherence-ratchet/](docs/coherence-ratchet/) for mechanism details.
+
+## CIRIS Capacity Score
+
+Composite trustworthiness, five factors, computable from `generic` traces (no reasoning text needed):
+
+| Factor | Measures |
+|--------|----------|
+| **C** — Core Identity | Identity stability, contradiction rate |
+| **I_int** — Integrity | Signature verification, field coverage |
+| **R** — Resilience | Score drift, recovery time |
+| **I_inc** — Incompleteness | Calibration, deferral quality |
+| **S** — Sustained Coherence | Coherence decay, cross-agent validation |
+
+See [FSD/ciris_scoring_specification.md](FSD/ciris_scoring_specification.md).
+
+## Trace levels
+
+Agents emit at three privacy tiers, opt-in controlled:
+
+| Level | Contains | PII |
+|-------|----------|-----|
+| `generic` | Numeric scores only | None |
+| `detailed` | + identifiers, timestamps, action types | Low |
+| `full_traces` | + reasoning text, prompts, context | Auto-scrubbed |
+
+Full traces are PII-scrubbed in Rust at ingest (NER via spaCy for persons/orgs/locations, regex for emails/phones/IPs/SSNs/cards). The original content hash is preserved as cryptographic provenance; the scrubbed version is re-signed by a CIRISLens key.
+
+Traces from mock/test LLMs are automatically routed to a separate mock repository to keep the production corpus clean.
+
+## Quick start
+
 ```bash
+# Prereqs: Docker, Docker Compose, 4GB RAM minimum
 git clone https://github.com/CIRISAI/CIRISLens.git
 cd CIRISLens
-```
-
-2. Create environment file for tokens:
-```bash
-cp .env.example .env
-# Add your agent tokens to .env (never commit this file)
-```
-
-3. Start the stack:
-```bash
+cp .env.example .env   # add agent tokens (never commit)
 docker compose -f docker-compose.managed.yml up -d
 ```
 
-4. Wait for services to initialize (2-3 minutes):
-```bash
-docker compose -f docker-compose.managed.yml ps
-```
+Access:
+- **Grafana**: http://localhost:3000 (Google OAuth in prod, `admin/admin` locally)
+- **Admin UI**: http://localhost:8080/cirislens/admin/
+- **API health**: http://localhost:8000/health
 
-5. Access the interfaces:
-- **Admin UI**: http://localhost:8080/cirislens/admin/ (OAuth required)
-- **Grafana**: http://localhost:3000 (admin/admin - requires @ciris.ai Google login in production)
-- **MinIO Console**: http://localhost:9001 (admin/adminpassword123)
-
-### Configure Agent Tokens
-
-CIRISLens uses secure token management for agent telemetry access:
-
-1. Access the Admin UI at http://localhost:8080/cirislens/admin/
-2. Navigate to the "Tokens" tab
-3. Add agent tokens (write-only, cannot be viewed after saving):
-   - Agent Name: e.g., "datum" or "sage"
-   - Agent URL: e.g., "https://agents.ciris.ai/api/datum"
-   - Service Token: Your agent's service token
+Add agent tokens via the Admin UI → Tokens tab (write-only, not recoverable after save).
 
 ## Architecture
 
 ```
-CIRIS Agents → OTLP Endpoints → CIRISLens Collector → Storage Backends → Grafana
-                     ↓                ↓                      ↓
-              (Service Auth)    (Token Manager)      (Tempo/Loki/Mimir)
+┌───────────────────────────────────────────────────────────────┐
+│  cirislens-api  (FastAPI + embedded Rust core)                │
+│  ┌──────────────────────────────────────────────────────────┐ │
+│  │ cirislens-core  (Rust / PyO3)                            │ │
+│  │ • schema validation   • Ed25519 verify                   │ │
+│  │ • PII scrub           • field extraction                 │ │
+│  └──────────────────────────────────────────────────────────┘ │
+│  Python routes: ingest, admin, scoring, ratchet               │
+└──────────────────┬────────────────────────┬───────────────────┘
+                   │                        │
+                   ▼                        ▼
+           TimescaleDB                   Grafana
+           (hypertables,              (CIRIS dashboards)
+            compression,
+            retention)
 ```
-
-### Components
 
 | Component | Purpose | Port |
 |-----------|---------|------|
-| CIRISLens API | Admin interface, manager collector, OTLP collector | 8000 |
-| TimescaleDB | Time-series storage with compression & retention | 5432 |
-| Grafana | Visualization & dashboards | 3000 |
+| cirislens-api | Ingest, admin, scoring, ratchet | 8000 |
+| TimescaleDB | Hypertables + compression + retention | 5432 |
+| Grafana | Visualization | 3000 |
 
-### Data Retention (Automatic)
+## Data retention
 
-| Data Type | Detail Retention | Compression | Aggregates |
-|-----------|------------------|-------------|------------|
-| Metrics | 30 days | After 7 days | Hourly (90d), Daily (1yr) |
-| Logs | 14 days | After 7 days | None |
-| Traces | 14 days | After 7 days | None |
+Automatic via TimescaleDB jobs:
 
-## CIRIS Telemetry Support
+| Table | Detail retention | Compression | Continuous aggregates |
+|-------|------------------|-------------|-----------------------|
+| `accord_traces` | 30 days | after 7 days | hourly (90 d), daily (1 yr) |
+| `service_logs` | 14 days | after 7 days | — |
+| Agent metrics | 30 days | after 7 days | hourly + daily |
 
-CIRISLens collects from CIRIS agents v1.4.5+ with full OTLP support:
+## Analysis tooling
 
-### 41 Service Components
-- **21 Core Services**: AgentCore, StateManager, CognitiveCore, etc.
-- **6 Message Buses**: EventBus, CommandBus, QueryBus, etc.
-- **5 Adapters**: HTTPAdapter, WebSocketAdapter, DiscordAdapter, etc.
-- **3 Processors**: MessageProcessor, EventProcessor, StateProcessor
-- **2 Registries**: ServiceRegistry, AdapterRegistry
-- **4 Other Components**: Telemetry, Monitoring, Security, Store
+Working with the trace corpus for research:
 
-### Collection & Storage
-- **Collection Interval**: 30 seconds (configurable)
-- **Agent Discovery**: Auto-discovers from CIRISManager every 60 seconds
-- **Storage**: TimescaleDB hypertables with automatic chunking
-- **Compression**: 90% space savings on data older than 7 days
-- **Retention**: Automatic cleanup via TimescaleDB background jobs
+```bash
+# Print a faceted shape card before any analysis (task class, language,
+# region, agent, stationarity check) — prevents misreading QA cycles as
+# agent behavior
+scripts/corpus_shape.py --window 24h
 
-## Covenant Traces
-
-CIRISLens receives Ed25519-signed reasoning traces from CIRIS agents at three privacy-tiered levels:
-
-### Trace Levels
-
-| Level | Content | PII Risk |
-|-------|---------|----------|
-| `generic` | DMA scores, conscience results | None |
-| `detailed` | + identifiers, timestamps, actions | Low |
-| `full_traces` | + reasoning text, prompts | High (auto-scrubbed) |
-
-### PII Scrubbing (Full Traces)
-
-Full traces are automatically scrubbed before storage:
-- **NER Detection**: Names, organizations, locations (spaCy)
-- **Regex Patterns**: Emails, phones, IPs, SSNs, credit cards
-- **Cryptographic Envelope**: Original content hash preserved for provenance
-- **21 Text Fields**: All reasoning/prompt fields scrubbed
-
-```
-Agent → Sign trace → CIRISLens verifies → Hash original → Scrub PII → Store scrubbed only
+# Export the full corpus as JSONL for offline analysis
+scripts/export_corpus.sh ~/my-analysis-dir
 ```
 
-Mock traces (test LLMs) are automatically excluded from storage.
+Analysis queries should read the `cirislens.trace_context` view, not raw
+`accord_traces` — the view surfaces `task_class`, `qa_language`,
+`qa_question_num`, coarsened region, and primary model as native columns.
 
-## Coherence Ratchet
+## Privacy posture
 
-CIRISLens includes the Coherence Ratchet anomaly detection system for identifying potentially misaligned agent behavior through statistical analysis of Ed25519-signed reasoning traces.
+- Grafana requires `@ciris.ai` Google OAuth in production.
+- IP addresses are never stored. User location fields are agent-declared
+  (consent-timestamped per batch) and server-coarsened to a ~55km grid
+  before storage.
+- PII scrubbing at ingest; scrubbed traces re-signed by CIRISLens, original
+  content hash preserved for provenance without retaining PII.
+- Signature verification failures are logged loudly
+  (`SIGNATURE_REJECT_UNKNOWN_KEY`), never silently dropped.
 
-### Detection Mechanisms
+## Documentation
 
-| Mechanism | Purpose | Documentation |
-|-----------|---------|---------------|
-| Cross-Agent Divergence | Detect agents whose scores differ from peers | [docs/coherence-ratchet/cross-agent-divergence.md](docs/coherence-ratchet/cross-agent-divergence.md) |
-| Intra-Agent Consistency | Detect self-contradictory reasoning | [docs/coherence-ratchet/intra-agent-consistency.md](docs/coherence-ratchet/intra-agent-consistency.md) |
-| Hash Chain Verification | Verify audit trail integrity | [docs/coherence-ratchet/hash-chain-verification.md](docs/coherence-ratchet/hash-chain-verification.md) |
-| Temporal Drift | Track behavioral changes over time | [docs/coherence-ratchet/temporal-drift.md](docs/coherence-ratchet/temporal-drift.md) |
-| Conscience Override | Monitor ethical intervention rates | [docs/coherence-ratchet/conscience-override.md](docs/coherence-ratchet/conscience-override.md) |
-
-See the [Coherence Ratchet Overview](docs/coherence-ratchet/README.md) for complete documentation.
-
-## CIRIS Capacity Scoring
-
-CIRISLens computes composite trustworthiness scores for agents based on five factors:
-
-| Factor | Symbol | Measures |
-|--------|--------|----------|
-| Core Identity | C | Identity stability, contradiction rate |
-| Integrity | I_int | Signature verification, field coverage |
-| Resilience | R | Score drift, recovery time, regression rate |
-| Incompleteness | I_inc | Calibration, deferral quality, unsafe actions |
-| Sustained Coherence | S | Coherence decay, cross-agent validation |
-
-**Privacy-preserving:** Scoring uses only numeric fields from `generic` traces - no reasoning text required.
-
-See [FSD/ciris_scoring_specification.md](FSD/ciris_scoring_specification.md) for complete documentation.
-
-## Case Law Compendium
-
-Full traces (with PII scrubbed) feed the Coherence Ratchet case law compendium - a corpus of agent reasoning patterns for alignment research. Key features:
-
-- **Patterns, not people**: Focus on reasoning structures, not individual interactions
-- **Cryptographic provenance**: Hash of original proves we had authentic data
-- **Consent-based**: Only traces from agents with explicit `full_traces` opt-in
-- **Human review**: Candidate traces staged for evaluation before publication
+- [CLAUDE.md](CLAUDE.md) — operations, production deployment, common tasks
+- [FSD/](FSD/) — formal spec documents (trace format, scoring, coherence ratchet)
+- [docs/coherence-ratchet/](docs/coherence-ratchet/) — detection mechanisms
+- [sql/](sql/) — schema migrations
 
 ## Support
 
@@ -192,4 +170,4 @@ Full traces (with PII scrubbed) feed the Coherence Ratchet case law compendium -
 
 ## License
 
-Apache 2.0 - See [LICENSE](LICENSE) for details
+Apache 2.0 — see [LICENSE](LICENSE).
