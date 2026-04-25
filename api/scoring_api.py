@@ -237,31 +237,33 @@ async def get_fleet_score(
         raise HTTPException(status_code=503, detail="Database not available")
 
     try:
-        async with db_pool.acquire() as conn:
-            scores = await get_fleet_scores(conn, window_days)
+        # Pass the pool so get_fleet_scores can parallelize per-agent
+        # calculations on separate connections (was sequential — 78s cold
+        # path on the 30d window with 5 agents).
+        scores = await get_fleet_scores(db_pool, window_days)
 
-            result = {
-                "timestamp": datetime.now(UTC).isoformat(),
-                "window_days": window_days,
-                "agent_count": len(scores),
-                "agents": [s.to_dict() for s in scores],
-                "summary": {
-                    "high_capacity": sum(1 for s in scores if s.category == "high_capacity"),
-                    "healthy": sum(1 for s in scores if s.category == "healthy"),
-                    "moderate": sum(1 for s in scores if s.category == "moderate"),
-                    "high_fragility": sum(1 for s in scores if s.category == "high_fragility"),
-                },
-                "cache": {
-                    "cached": False,
-                    "ttl_seconds": 300,
-                },
-            }
+        result = {
+            "timestamp": datetime.now(UTC).isoformat(),
+            "window_days": window_days,
+            "agent_count": len(scores),
+            "agents": [s.to_dict() for s in scores],
+            "summary": {
+                "high_capacity": sum(1 for s in scores if s.category == "high_capacity"),
+                "healthy": sum(1 for s in scores if s.category == "healthy"),
+                "moderate": sum(1 for s in scores if s.category == "moderate"),
+                "high_fragility": sum(1 for s in scores if s.category == "high_fragility"),
+            },
+            "cache": {
+                "cached": False,
+                "ttl_seconds": 300,
+            },
+        }
 
-            # Cache the result
-            score_cache.set(key, result)
-            logger.info("Cached fleet scores for window=%d (%d agents)", window_days, len(scores))
+        # Cache the result
+        score_cache.set(key, result)
+        logger.info("Cached fleet scores for window=%d (%d agents)", window_days, len(scores))
 
-            return result
+        return result
 
     except Exception as e:
         logger.exception("Error calculating fleet scores")

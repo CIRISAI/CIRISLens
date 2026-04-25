@@ -10,6 +10,7 @@ See also: FSD/ciris_scoring_specification.md
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import math
 from dataclasses import dataclass, field
@@ -863,11 +864,17 @@ async def calculate_ciris_score(
 
 
 async def get_fleet_scores(
-    conn: Any,
+    pool_or_conn: Any,
     window_days: int | None = None,
 ) -> list[CIRISScore]:
     """
     Calculate CIRIS scores for all agents with sufficient traces.
+
+    Accepts either an asyncpg pool (preferred — enables parallel per-agent
+    scoring on separate connections) or a single connection (backward-compat
+    sequential mode). Pool mode is ~Nx faster on N agents because per-agent
+    factor queries serialize over a single connection but parallelize across
+    connections.
 
     Returns list of CIRISScore objects, sorted by composite score descending.
     """
@@ -875,7 +882,10 @@ async def get_fleet_scores(
     window_end = datetime.now(UTC)
     window_start = window_end - timedelta(days=window_days)
 
-    # Get all agents with traces in window (excluding benchmark traffic)
+    # Detect pool vs raw connection. asyncpg.Pool exposes .acquire() returning
+    # an async context manager; a connection has .fetch directly.
+    has_acquire = hasattr(pool_or_conn, "acquire") and not hasattr(pool_or_conn, "fetchrow")
+
     agents_query = f"""
     SELECT DISTINCT agent_name
     FROM cirislens.covenant_traces
@@ -884,20 +894,34 @@ async def get_fleet_scores(
       {BENCHMARK_FILTER}
     """
 
-    rows = await conn.fetch(agents_query, window_start, window_end)
+    if has_acquire:
+        # Pool mode — fan out scoring across agents
+        async with pool_or_conn.acquire() as conn:
+            rows = await conn.fetch(agents_query, window_start, window_end)
+        agent_names = [row["agent_name"] for row in rows]
 
-    scores = []
-    for row in rows:
-        agent_name = row["agent_name"]
-        try:
-            score = await calculate_ciris_score(conn, agent_name, window_days)
-            scores.append(score)
-        except Exception as e:
-            logger.error("Failed to calculate score for %s: %s", agent_name, e)
+        async def _score_one(name: str) -> CIRISScore | None:
+            try:
+                async with pool_or_conn.acquire() as agent_conn:
+                    return await calculate_ciris_score(agent_conn, name, window_days)
+            except Exception as e:
+                logger.error("Failed to calculate score for %s: %s", name, e)
+                return None
 
-    # Sort by composite score descending
+        results = await asyncio.gather(*[_score_one(n) for n in agent_names])
+        scores = [s for s in results if s is not None]
+    else:
+        # Single-connection backward-compat path
+        conn = pool_or_conn
+        rows = await conn.fetch(agents_query, window_start, window_end)
+        scores = []
+        for row in rows:
+            try:
+                scores.append(await calculate_ciris_score(conn, row["agent_name"], window_days))
+            except Exception as e:
+                logger.error("Failed to calculate score for %s: %s", row["agent_name"], e)
+
     scores.sort(key=lambda s: s.composite_score, reverse=True)
-
     return scores
 
 
