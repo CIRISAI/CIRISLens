@@ -102,3 +102,8 @@ cirislens-core/target/
 # Maturin build artifacts
 cirislens-core/wheels/
 cirislens-core/*.whl
+# Scrubbing v2 model artifacts (built via scripts/export_xlmr_ner.py)
+cirislens-core/models/*.onnx
+cirislens-core/models/*.json
+cirislens-core/models/*.txt
+cirislens-core/models/sentencepiece.bpe.model

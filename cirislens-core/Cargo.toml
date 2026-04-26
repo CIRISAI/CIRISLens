@@ -47,6 +47,27 @@ uuid = { version = "1.0", features = ["v4"] }
 # Hex encoding (for hash output)
 hex = "0.4"
 
+# ── Scrubbing v2: NER inference (FSD §8 Stage 1) ──
+# Optional, behind the `ner` feature flag. The default build does not pull
+# these deps, keeping CI clean.
+#
+# UPSTREAM STATUS: The Rust ONNX runtime ecosystem is in flux as of this
+# commit. `ort` 2.0.0-rc.* has internal version skew between `ort` and
+# `ort-sys` that makes some configurations fail to compile. Tracking
+# upstream until a stable release lands; until then, the `ner` feature
+# is shape-only — the Rust call sites and inference structure are in
+# place but enabling the feature may not link. The Python path
+# (api/pii_scrubber.py with spaCy) remains the live scrubber.
+ort = { version = "2.0.0-rc.10", default-features = false, features = ["load-dynamic"], optional = true }
+tokenizers = { version = "0.20", default-features = false, features = ["onig"], optional = true }
+ndarray = { version = "0.16", optional = true }
+
+[features]
+# Default build: regex + walker only. CI fast, no native deps.
+default = []
+# Experimental: enables NER inference once ort upstream stabilizes.
+ner = ["dep:ort", "dep:tokenizers", "dep:ndarray"]
+
 [dev-dependencies]
 proptest = "1.4"
 # criterion = "0.5"  # Uncomment when adding benchmarks
