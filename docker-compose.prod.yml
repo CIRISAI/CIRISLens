@@ -21,11 +21,6 @@ services:
       - ENV=production
       - MANAGER_API_URL=http://host.docker.internal:8888/manager/v1
       - OAUTH_CALLBACK_URL=https://agents.ciris.ai/lens/admin/auth/callback
-      # Scrubbing v2 shadow mode — divergence records (FSD §8 R3.4) land
-      # here for offline R3.5 classification. Records are skipped when
-      # v2 isn't loaded, so this file only grows while the Rust scrubber
-      # is active. Hand-rotate when needed.
-      - CIRISLENS_SCRUBBER_DIVERGENCE_LOG=/app/sessions/scrubber_divergence.jsonl
     extra_hosts:
       - "host.docker.internal:host-gateway"
     # Override volumes - use SQL from image, not host mount
