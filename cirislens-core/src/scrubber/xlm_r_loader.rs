@@ -133,11 +133,13 @@ impl XLMRTokenClassifier {
         ))
     }
 
-    /// Forward pass — returns per-token logits of shape `[seq_len, num_labels]`
-    /// (batch dim squeezed). Caller does argmax.
+    /// Forward pass — returns per-token logits of shape
+    /// `[batch, seq_len, num_labels]`. Caller does argmax along the
+    /// last axis. Preserves the batch dim so this works for batched
+    /// inference (multiple chunks in one forward call).
     pub fn forward(&self, input_ids: &Tensor, attention_mask: &Tensor) -> Result<Tensor> {
-        // XLM-R takes `token_type_ids` even though XLM-R only uses one segment;
-        // a zeros tensor matching input_ids shape is the standard default.
+        // XLM-R takes `token_type_ids` even though it only uses one segment;
+        // zeros matching input_ids shape is the standard default.
         let token_type_ids = input_ids
             .zeros_like()
             .context("zeros_like for token_type_ids")?;
@@ -155,9 +157,8 @@ impl XLMRTokenClassifier {
             .context("backbone forward")?;
 
         // hidden: [batch, seq_len, hidden_size]
+        // logits: [batch, seq_len, num_labels]
         let logits = self.classifier.forward(&hidden).context("classifier forward")?;
-        // Squeeze batch dim → [seq_len, num_labels]
-        let logits = logits.squeeze(0).context("squeeze batch")?;
         Ok(logits)
     }
 }
