@@ -25,6 +25,7 @@ pub mod extraction;
 pub mod logging;
 pub mod pipeline;
 pub mod routing;
+pub mod scrubber;
 pub mod security;
 pub mod storage;
 pub mod validation;

@@ -1,0 +1,380 @@
+# CIRIS Scrubbing v2 — Functional Spec Document
+
+**Status**: Draft
+**Owner**: CIRISLens core team
+**Target**: cirislens-core 0.2.0
+**Last revised**: 2026-04-25
+
+## 1. Purpose & invariants
+
+CIRIS Scrubbing v2 replaces the current Python `pii_scrubber.py` with a Rust-edge,
+ONNX-NER-backed, multilingual scrubber that runs in `cirislens-core` ahead of any
+persistence path. The single hard invariant:
+
+> **No unscrubbed trace content may touch persistence.**
+>
+> Every byte of trace text written to TimescaleDB, log files, dashboards, or
+> exported corpora has passed through Scrubbing v2.
+
+Operationally: the Rust scrubber is the only path to the storage layer. Any
+ingest route that bypasses it is a bug, not a configuration option.
+
+## 2. Why v2
+
+The Python v1 scrubber has four documented gaps that v2 closes:
+
+1. **Single-language NER.** `en_core_web_sm` recognizes zero entities in CJK,
+   Arabic, Cyrillic, Devanagari, Amharic, etc. CIRIS supports 29 languages;
+   non-Latin content currently passes through with only regex coverage.
+
+2. **Walker bug.** Lists of strings under `SCRUB_FIELDS`-keyed parents
+   (`flags: [...]`, `source_ids: [...]`) are not scrubbed because list elements
+   have no key to match.
+
+3. **Year retention.** `DATE`/`TIME` entities and bare 4-digit historical years
+   are explicitly preserved as `KEEP_ENTITY_TYPES` "for pattern analysis." A
+   redacted entity name combined with a preserved year still uniquely
+   identifies many historical events.
+
+4. **Throughput.** Python NER at 30+ ms per long text, Python's GIL serializing
+   inference, and full Python overhead per trace: a 4,000-trace test corpus
+   takes ~30 minutes to scrub. Production volumes (10× to 100× test) cannot
+   wait for Python.
+
+v2 fixes all four. Latency goal: ≤2 ms per text on quantized-INT8 CPU
+inference, single edge process handles ≥1,000 traces/sec.
+
+## 3. Architecture
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│  cirislens-api  (FastAPI ingest)                                │
+│  ┌──────────────────────────────────────────────────────────┐   │
+│  │ cirislens-core  (Rust + PyO3)                            │   │
+│  │  ┌─────────────────────────────────────────────────────┐ │   │
+│  │  │ scrubber/                                           │ │   │
+│  │  │   ner.rs       ── ort + XLM-R NER inference        │ │   │
+│  │  │   regex.rs     ── year, identifier, email, phone,  │ │   │
+│  │  │                   IP, SSN, CC, URL                  │ │   │
+│  │  │   walker.rs    ── subtree scrub on SCRUB_FIELDS    │ │   │
+│  │  │   tokenize.rs  ── XLM-R tokenizer (rust-tokenizers)│ │   │
+│  │  │   level.rs     ── trace_level routing              │ │   │
+│  │  └─────────────────────────────────────────────────────┘ │   │
+│  └──────────────────────────────────────────────────────────┘   │
+│  PyO3 entry: cirislens_core.scrub_trace(trace, level) -> trace  │
+└──────────────────────────────────────────────────────────────────┘
+                                │
+                                ▼
+                        TimescaleDB (only after scrub returns Ok)
+```
+
+### Pipeline integration
+
+The scrubber sits between schema validation/signature verification (already in
+the Rust core) and any storage call. The trace handler MUST follow this exact
+order:
+
+```rust
+// 1. Validate schema
+let validated = validate_schema(&trace)?;
+
+// 2. Verify signature
+verify_signature(&validated, &public_keys)?;
+
+// 3. SCRUB (no Result branch lets unscrubbed data pass)
+let scrubbed = scrub_trace(validated, trace_level)?;
+
+// 4. Persist (only `scrubbed`, never `validated` or `trace`)
+persist(scrubbed)?;
+```
+
+The `validated` and `trace` bindings move into `scrub_trace` and become
+inaccessible after step 3 — Rust ownership prevents accidentally writing
+the pre-scrub object. This is why the scrubber is in Rust, not just for speed.
+
+## 4. Scrubbing rules
+
+### 4.1 Trace-level routing
+
+Different trace levels carry different content; scrub work is gated accordingly:
+
+| Level | NER pass | Regex pass | Walker depth |
+|-------|----------|------------|--------------|
+| `generic` | skip | skip | skip — no text to scrub |
+| `detailed` | skip | yes | full |
+| `full_traces` | yes | yes | full |
+
+The level gating is mechanical, not optional. A `full_traces` payload that
+arrives without successful NER inference is **rejected**, not stored
+regex-only — see §6 (failure modes).
+
+### 4.2 NER pass (full_traces only)
+
+**Model**: XLM-RoBERTa fine-tuned on WikiAnn NER, exported to ONNX, quantized
+INT8. Initial deployment uses
+[Davlan/xlm-roberta-base-wikiann-ner](https://huggingface.co/Davlan/xlm-roberta-base-wikiann-ner)
+(20 fine-tuned languages, 100 pre-trained languages → reasonable zero-shot
+transfer to the remaining 9 CIRIS languages).
+
+**Entity classes redacted** (all replaced with `[<TYPE>_<n>]` placeholders):
+
+| Class | spaCy/HF tag | Why redacted |
+|-------|--------------|--------------|
+| Person | PER, PERSON | Direct PII |
+| Organization | ORG | Indirect PII; can identify reporting structure |
+| Geopolitical entity | GPE | Country/state/city |
+| Facility | FAC | Buildings, landmarks |
+| Location | LOC | Non-GPE places |
+| Nationality/religion/political group | NORP | Identity-revealing demographics |
+| Date / Time | DATE, TIME | Historical year + entity = unique event identifier |
+| Event | EVENT | Named events (battles, agreements, etc.) |
+| Misc | MISC | Multilingual model's catch-all |
+| Work of Art | WORK_OF_ART | Titles |
+| Law | LAW | Named legal documents |
+
+**Entity classes preserved** (purely numeric, low re-identification risk):
+`MONEY`, `PERCENT`, `QUANTITY`, `ORDINAL`, `CARDINAL`.
+
+### 4.3 Regex pass (detailed and full_traces)
+
+```
+Email           [a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}        → [EMAIL]
+Phone (US-ish)  (?:\+?1[-.\s]?)?\(?[0-9]{3}\)?[-.\s]?[0-9]{3}[-.\s]?[0-9]{4}
+                                                                      → [PHONE]
+IPv4            \b(?:\d{1,3}\.){3}\d{1,3}\b                          → [IP_ADDRESS]
+URL             https?://[^\s<>]+                                     → [URL]
+SSN (US)        \b\d{3}-\d{2}-\d{4}\b                                → [SSN]
+Credit card     \b(?:\d{4}[-\s]?){3}\d{4}\b                          → [CREDIT_CARD]
+Historical year \b(?:1[7-9]\d{2}|20[0-1]\d|202[0-3])\b               → [YEAR]
+Year-bearing    \b[\w\-]{0,40}(?:1[7-9]\d{2}|20[0-1]\d|202[0-3])
+identifier      [\w\-]{0,40}\b                                        → [IDENTIFIER]
+```
+
+The year cutoff is `2023` (not current year) so timestamps in conversational
+context (`2026-04-25`, "today is 2026-04-25") survive; only years that read
+as historical references are scrubbed.
+
+### 4.4 Subtree walker
+
+When a key in `SCRUB_FIELDS` is encountered while walking a trace's JSON,
+**every string in that subtree is scrubbed**, regardless of nesting:
+
+```rust
+fn scrub_value(v: Value) -> Value {
+    match v {
+        Value::String(s)  => Value::String(scrub_text(&s)),
+        Value::Array(xs)  => Value::Array(xs.into_iter().map(scrub_value).collect()),
+        Value::Object(m)  => Value::Object(m.into_iter()
+                                            .map(|(k,v)| (k, scrub_value(v)))
+                                            .collect()),
+        other             => other,
+    }
+}
+```
+
+This fixes the v1 bug where `flags: ["User asked about <topic>"]` passed through
+because `flags` was the key but the strings were unkeyed list elements.
+
+### 4.5 SCRUB_FIELDS
+
+Authoritative list (mirrors the consolidated v1 final state):
+
+```
+THOUGHT_START:   task_description, initial_context, thought_content
+SNAPSHOT:        system_snapshot, gathered_context, relevant_memories,
+                 conversation_history, current_thought_summary
+DMA_RESULTS:     reasoning, prompt_used, combined_analysis, flags,
+                 alignment_check, conflicts, stakeholders
+ASPDMA:          action_rationale, reasoning_summary, action_parameters,
+                 aspdma_prompt, questions, completion_reason
+CONSCIENCE:      conscience_override_reason, epistemic_data,
+                 updated_status_content, entropy_reason, coherence_reason,
+                 optimization_veto_justification, epistemic_humility_justification,
+                 epistemic_humility_uncertainties
+ACTION:          execution_error
+IDMA:            intervention_recommendation, next_best_recovery_step,
+                 correlation_factors, top_correlation_factors,
+                 common_cause_flags, sources_identified, source_ids,
+                 source_clusters, source_types, source_type_counts,
+                 pairwise_correlation_summary, reasoning_state
+```
+
+Stored as a `phf` perfect-hash map for O(1) lookup; updates require code change
+(intentional — `SCRUB_FIELDS` is part of the security boundary, not config).
+
+## 5. Performance budget
+
+Target (CPU-only, no GPU):
+
+| Metric | Goal |
+|--------|------|
+| NER inference per text (avg) | ≤ 2 ms |
+| Per-trace scrub time, full_traces | ≤ 50 ms |
+| Per-trace scrub time, detailed | ≤ 5 ms |
+| Per-trace scrub time, generic | ≤ 0.1 ms (no-op) |
+| Memory footprint (model + runtime) | ≤ 100 MB |
+| Throughput, single ingest worker | ≥ 200 traces/sec |
+| Throughput, 4-worker fleet | ≥ 800 traces/sec |
+
+Achieved via: INT8 quantization of XLM-R, batched ONNX inference (process
+multiple text fields per trace in one ort call), zero-copy strings via
+`Cow<str>`, lazy regex compilation via `lazy_static`.
+
+## 6. Failure modes
+
+| Condition | Action | Rationale |
+|-----------|--------|-----------|
+| ONNX model file missing | Refuse to start | A scrubber that can't NER full_traces silently is the worst possible failure mode. Better to crash on boot. |
+| NER inference returns error on a text | Retry once; on second failure, **reject the trace** with HTTP 500 | Cannot persist a full_trace without NER coverage. The agent will retry. |
+| Tokenizer error | Same as NER inference error | Same reasoning. |
+| Regex pass error | Cannot fail — pure strings, infallible patterns | Defense-in-depth. |
+| Walker recursion exceeds depth | Truncate; log `WALKER_DEPTH_EXCEEDED` warning; persist scrubbed-up-to-depth | Pathological JSONB shouldn't take down ingest, but log loudly. Cap at depth 30. |
+| Trace level missing or invalid | Reject with HTTP 422 | The scrubber needs to know the level to route correctly. |
+
+The reject-on-failure policy enforces the "no unscrubbed traces touch
+persistence" invariant. There is no graceful degradation that silently
+stores partially-scrubbed data.
+
+## 7. Verification & monitoring
+
+### 7.1 Built-in invariant checks
+
+After scrubbing a `full_traces` payload, the scrubber runs a final smoke pass
+on the output:
+
+1. **Year-residue check.** Run the historical-year regex against the
+   scrubbed output. Any match means the regex pass missed a year that
+   should have been redacted; reject and log `SCRUB_YEAR_RESIDUE`.
+
+2. **Operator-supplied probes.** `CIRISLENS_LEAK_PROBES` env var (newline-
+   separated terms) is checked against the output. Any match → reject and log
+   `SCRUB_PROBE_HIT`. Source-tree never contains topic-specific terms; the
+   list is operator-controlled.
+
+These add ~50µs to per-trace scrub time, well within budget.
+
+### 7.2 Metrics emitted
+
+Per trace:
+- `scrub.ner.inference_ms` (histogram)
+- `scrub.regex.passes` (counter, by pattern type)
+- `scrub.entities.redacted` (counter, by entity type)
+- `scrub.level` (label, dispatched on trace_level)
+- `scrub.reject` (counter, by failure mode)
+- `scrub.walker.max_depth` (gauge)
+
+Exported to TimescaleDB via the existing OTLP collector path.
+
+### 7.3 Property tests
+
+- **Idempotence**: `scrub(scrub(t)) == scrub(t)` for all `t`.
+- **No-text-no-change**: traces with no string fields pass through bytewise-identical.
+- **Generic invariance**: `scrub_generic(t) == t` always.
+- **Entity preservation**: redacted placeholders survive a second scrub pass.
+
+### 7.4 Golden corpus
+
+A `tests/scrubber/` directory holds ~50 hand-picked traces covering:
+- All 29 CIRIS languages (1-2 traces each)
+- All entity types (person/org/loc/fac/etc)
+- All known-difficult contexts (parenthetical entities, identifiers with embedded years, multi-script mixes)
+- Adversarial inputs (very long text, unicode tricks, repeated entities)
+
+Each input has a frozen "expected scrubbed" output. CI fails on any drift —
+intentional change requires updating the golden file in the same commit.
+
+## 8. Migration plan
+
+### Phase 1 — parallel run (1 week)
+
+- Land v2 behind a feature flag (`SCRUBBER_VERSION=v2|v1`, default `v1`).
+- All ingest writes go through the existing v1 path.
+- v2 also runs on every trace; outputs compared against v1, divergences logged
+  but not acted on.
+- After 1 week, evaluate: percentage of traces where v2 output differs from v1,
+  classify each class of difference (improvement / regression / equivalent).
+
+### Phase 2 — promotion (1 day)
+
+- Flip default to `SCRUBBER_VERSION=v2`.
+- v1 path still exists, can be toggled back via env var.
+- Monitor reject rate and downstream Grafana dashboards for 48 hours.
+
+### Phase 3 — cleanup (after 30 days at v2 default)
+
+- Delete v1 Python scrubber.
+- Delete the parallel-run comparison code.
+- Update `pii_scrubber.py` to a thin shim that calls the Rust path
+  (preserved for backwards-compatible imports).
+
+### Phase 4 — historical re-scrub (one-time, post-promotion)
+
+The existing TimescaleDB tables contain traces scrubbed under v1 rules
+(year-retaining, single-language, walker-bug-affected). Run a one-shot
+job that:
+
+1. Reads each row from `cirislens.accord_traces` where `trace_level IN ('detailed', 'full_traces')` and `scrub_version != 'v2'`
+2. Re-applies the v2 scrubber to the in-memory record
+3. Compares to the stored row; if different, writes the new scrubbed version
+4. Updates `scrub_version`, `scrub_timestamp`, `scrub_signature` columns
+5. Logs progress; throttled to avoid impact on live ingest
+
+Estimated runtime: ~2 hours on a single CPU at 200 traces/sec, against the
+current ~3,000-trace corpus.
+
+## 9. Out of scope (for v2)
+
+- **Custom entity types beyond NER.** The 11-category set is fixed. Domain
+  custom recognizers (e.g., medical record numbers) come in v2.1 if needed.
+- **Encryption / format-preserving redaction.** v2 replaces with placeholders;
+  it does not encrypt or preserve format. That's a separate feature.
+- **Reversibility.** v2 redactions are one-way. The cryptographic envelope
+  preserves the original_content_hash for provenance, but the original text
+  is not recoverable from v2 output. Designed.
+- **GPU inference.** CPU-only INT8 is the v2 baseline. GPU acceleration is a
+  later optimization if throughput targets are missed.
+- **Custom XLM-R fine-tune for 29 CIRIS languages.** Adopting Davlan's 20-language
+  model in v2 with zero-shot fallback; a CIRIS-specific 29-language fine-tune
+  ships separately as `CIRISAI/xlmr-29lang-ner` if zero-shot precision proves
+  insufficient under load.
+
+## 10. Open questions
+
+1. **Tokenizer choice**: `tokenizers` (rust crate from HF) is the obvious pick,
+   but does it support all 29 CIRIS scripts via XLM-R's SentencePiece BPE?
+   Verify with golden corpus before promotion.
+
+2. **Quantization accuracy**: INT8 quantization typically loses 1-3% F1 on NER.
+   For full_traces this is acceptable since regex catches most structured PII.
+   For unstructured PII in obscure languages, may need to retain FP16 fallback.
+
+3. **Concurrent inference**: ONNX Runtime in Rust supports session-per-thread.
+   Pool size = ingest worker count = 4 (matches Uvicorn config). Verify no
+   contention.
+
+4. **One-shot historical re-scrub policy**: re-sign with new `scrub_key_id`?
+   Preserve old scrubbed version + new in parallel columns? Decision required
+   before phase 4.
+
+## 11. Acceptance criteria
+
+v2 is shippable when ALL of the following hold:
+
+- [ ] Golden corpus passes (50/50 traces produce expected output)
+- [ ] Property tests green (idempotence, no-text-no-change, generic invariance)
+- [ ] Performance budget met (≤2 ms per text NER, ≥200 traces/sec end-to-end)
+- [ ] Year-residue invariant check fires zero times on a 5,000-trace stress run
+- [ ] Operator probe check works (set `CIRISLENS_LEAK_PROBES=foo`, verify rejection)
+- [ ] Parallel-run comparison shows v2 strictly improves on v1 (no regressions)
+- [ ] Reject path verified: forced ONNX failure causes HTTP 500, not silent persist
+- [ ] Pipeline review: trace handler code path proven not to write pre-scrub data
+
+## 12. References
+
+- v1 scrubber: `api/pii_scrubber.py`
+- Existing Rust security module: `cirislens-core/src/security/pii.rs`
+- Trace format spec: `FSD/trace_format_specification.md`
+- Privacy posture: `README.md` § Privacy posture
+- Cryptographic envelope: `sql/012_pii_scrubbing.sql`
+- Hugging Face: `Davlan/xlm-roberta-base-wikiann-ner`
+- ONNX Runtime: `ort` crate (Rust bindings)
