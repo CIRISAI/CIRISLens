@@ -39,25 +39,27 @@ separate offline step that consumes this JSONL stream.
 """
 from __future__ import annotations
 
+import argparse
+import contextlib
+import functools
 import json
 import logging
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, IO
+from typing import IO, Any
 
-logger = logging.getLogger(__name__)
+from api import scrubber_v2 as v2
 
-
-# ── v1 path: existing Python scrubber with spaCy ──
+# v1 path is optional in non-package contexts (e.g., running this file
+# standalone with PYTHONPATH=.); the package import is the normal route.
 try:
     from api import pii_scrubber as v1
-except ImportError:  # pragma: no cover — only happens in non-package contexts
+except ImportError:  # pragma: no cover
     import pii_scrubber as v1  # type: ignore
 
-# ── v2 path: Rust core via the wrapper module ──
-from api import scrubber_v2 as v2
+logger = logging.getLogger(__name__)
 
 DivergenceRecord = dict[str, Any]
 
@@ -80,19 +82,23 @@ def _diff_paths(a: Any, b: Any, path: str = "") -> list[str]:
         if len(a) != len(b):
             return [f"{path}[len {len(a)}!={len(b)}]"]
         out: list[str] = []
-        for i, (x, y) in enumerate(zip(a, b)):
+        for i, (x, y) in enumerate(zip(a, b, strict=True)):
             out.extend(_diff_paths(x, y, f"{path}[{i}]"))
         return out
     return [path or "<root>"]
 
 
-def _run_v1(trace: dict[str, Any], level: str) -> tuple[dict[str, Any] | None, str]:
-    """Run v1 scrubber. Returns (scrubbed_or_none, status_string)."""
+def _run_v1(trace: dict[str, Any], _level: str) -> tuple[dict[str, Any] | None, str]:
+    """Run v1 scrubber. Returns (scrubbed_or_none, status_string).
+
+    `_level` is unused — v1's `scrub_dict_recursive` is level-agnostic —
+    but the parameter is kept to mirror `_run_v2` for symmetry at the
+    call site.
+    """
     try:
-        # v1's entry point operates on a JSONB-shaped dict.
         scrubbed = v1.scrub_dict_recursive(trace)
         return scrubbed, "ok"
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         return None, f"error: {e}"
 
 
@@ -150,7 +156,7 @@ def compare(
         fields_diff = _diff_paths(v1_value, v2_value)[:32]  # cap output
 
     record: DivergenceRecord = {
-        "ts": datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
+        "ts": datetime.now(UTC).isoformat(timespec="milliseconds"),
         "trace_id": trace_id,
         "level": level,
         "shape": shape,
@@ -165,27 +171,24 @@ def compare(
 
 
 # ── Sink for divergence records ──
+#
+# `functools.cache` gives us a process-lifetime singleton without a `global`
+# statement. The sink is intentionally never closed: stderr/stdout don't
+# need it, and a path-backed sink should outlive any single trace handler.
 
-_sink_handle: IO[str] | None = None
 
-
+@functools.cache
 def _sink() -> IO[str]:
-    """Lazy-open the divergence sink. Configurable via
-    `CIRISLENS_SCRUBBER_DIVERGENCE_LOG` (path or `stderr`)."""
-    global _sink_handle
-    if _sink_handle is not None:
-        return _sink_handle
-
+    """Resolve the divergence sink once. Configurable via
+    `CIRISLENS_SCRUBBER_DIVERGENCE_LOG` (path or `stderr` / `stdout`)."""
     target = os.environ.get("CIRISLENS_SCRUBBER_DIVERGENCE_LOG", "stderr")
     if target == "stderr":
-        _sink_handle = sys.stderr
-    elif target == "stdout":
-        _sink_handle = sys.stdout
-    else:
-        path = Path(target)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        _sink_handle = path.open("a", encoding="utf-8")
-    return _sink_handle
+        return sys.stderr
+    if target == "stdout":
+        return sys.stdout
+    path = Path(target)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path.open("a", encoding="utf-8")
 
 
 def log_divergence(record: DivergenceRecord) -> None:
@@ -193,7 +196,7 @@ def log_divergence(record: DivergenceRecord) -> None:
     try:
         _sink().write(json.dumps(record, ensure_ascii=False) + "\n")
         _sink().flush()
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.warning("divergence sink write failed: %s", e)
 
 
@@ -227,8 +230,6 @@ def _main_cli() -> int:
     Each input line: {"trace": {...}, "level": "...", "trace_id": "..."}
     Each output line: divergence record.
     """
-    import argparse
-
     p = argparse.ArgumentParser(description="Replay corpus through v1+v2 comparison")
     p.add_argument("--in", dest="input", default="-",
                    help="JSONL input (- = stdin)")
@@ -236,11 +237,16 @@ def _main_cli() -> int:
                    help="JSONL divergence output (- = stdout)")
     args = p.parse_args()
 
-    in_fh = sys.stdin if args.input == "-" else open(args.input, encoding="utf-8")
-    out_fh = sys.stdout if args.output == "-" else open(args.output, "w", encoding="utf-8")
-
     n = divergent = 0
-    try:
+    with contextlib.ExitStack() as stack:
+        in_fh: IO[str] = (
+            sys.stdin if args.input == "-"
+            else stack.enter_context(Path(args.input).open(encoding="utf-8"))
+        )
+        out_fh: IO[str] = (
+            sys.stdout if args.output == "-"
+            else stack.enter_context(Path(args.output).open("w", encoding="utf-8"))
+        )
         for line in in_fh:
             try:
                 row = json.loads(line)
@@ -254,14 +260,9 @@ def _main_cli() -> int:
             n += 1
             if record["shape"] != "both" or not record["value_eq"]:
                 divergent += 1
-    finally:
-        if args.input != "-":
-            in_fh.close()
-        if args.output != "-":
-            out_fh.close()
 
-    print(f"compared: {n}  divergent: {divergent} ({divergent/n*100:.1f}%)" if n else "no input",
-          file=sys.stderr)
+    msg = f"compared: {n}  divergent: {divergent} ({divergent/n*100:.1f}%)" if n else "no input"
+    print(msg, file=sys.stderr)
     return 0
 
 

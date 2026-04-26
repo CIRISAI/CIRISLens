@@ -15,7 +15,7 @@ persistence for trace text content. This module is the call-site bridge:
   handler can call this to decide whether to dispatch to v2 or fall back
   to the v1 Python scrubber.
 
-The migration path is documented in FSD §8 Critical path Stages 2–4.
+The migration path is documented in FSD §8 Critical path Stages 2-4.
 """
 from __future__ import annotations
 
@@ -63,7 +63,7 @@ def ner_is_configured() -> bool:
         return False
     try:
         return bool(cirislens_core.ner_is_configured())
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.warning("ner_is_configured() raised: %s", e)
         return False
 
@@ -81,7 +81,7 @@ def should_use_v2(level: str) -> bool:
         return False
     if not _RUST_AVAILABLE:
         return False
-    if level == "generic" or level == "detailed":
+    if level in {"generic", "detailed"}:
         return True
     if level == "full_traces":
         return ner_is_configured()
@@ -102,7 +102,7 @@ class ScrubbedTrace:
     construct one without going through `scrub_for_persistence`.
     """
 
-    __slots__ = ("_trace", "_level", "_stats")
+    __slots__ = ("_level", "_stats", "_trace")
 
     def __init__(
         self,

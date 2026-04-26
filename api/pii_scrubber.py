@@ -75,7 +75,7 @@ def _get_nlp(text: str | None = None) -> Any:
                     download("xx_ent_wiki_sm")
                     _nlp_xx = spacy.load("xx_ent_wiki_sm")
                     logger.info("Downloaded xx_ent_wiki_sm (multilingual)")
-                except Exception as e:  # noqa: BLE001
+                except Exception as e:
                     logger.warning(
                         "Multilingual NER unavailable (xx_ent_wiki_sm): %s; "
                         "non-Latin text will fall back to English NER + regex.", e
@@ -194,7 +194,7 @@ REGEX_PATTERNS = [
     (r'\b\d{3}-\d{2}-\d{4}\b', '[SSN]'),
     # Credit card numbers (basic pattern)
     (r'\b\d{4}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}\b', '[CREDIT_CARD]'),
-    # Historical years (1700–2023). Excludes 2024–2026 to preserve current
+    # Historical years (1700-2023). Excludes 2024-2026 to preserve current
     # timestamps in conversation. Catches bare years that NER's DATE entity
     # may miss (e.g., a bare four-digit year without surrounding context).
     (r'\b(?:1[7-9]\d{2}|20[0-1]\d|202[0-3])\b', '[YEAR]'),

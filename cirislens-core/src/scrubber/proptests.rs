@@ -17,8 +17,6 @@
 //! invariants hold there. Full-traces invariants additionally require
 //! NER to be configured, tested via the `--features ner` test runner.
 
-#![cfg(test)]
-
 use proptest::prelude::*;
 use serde_json::{Map, Value};
 
