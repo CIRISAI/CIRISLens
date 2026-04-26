@@ -1,0 +1,9 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 7cb6c4775712ea72ecbfc28b4897a18d0e4445308bee5e4ac6e53e5d683c9dda # shrinks to trace = Object {"metadata": String(" 1700 ")}
+cc f991c3727929fd339cbeb0ae5a29e01dab4b8d11ae9bd27443a6c323026b4ff9 # shrinks to trace = Object {"metadata": Array [String(" 1700 ")]}
+cc 4b517ceab5b3b40a4f9e4b58a668bd08d3c04e8fd554235d9318ca388d9286ec # shrinks to trace = Object {"metadata": String(" 1700 ")}

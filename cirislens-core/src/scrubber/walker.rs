@@ -42,15 +42,14 @@ fn walk_inner(
 
     match value {
         Value::String(s) => {
-            if in_scope {
-                let scrubbed = scrub_text(&s, run_ner, stats)?;
-                if scrubbed != s {
-                    stats.fields_modified += 1;
-                }
-                Ok(Value::String(scrubbed))
-            } else {
-                Ok(Value::String(s))
+            // Regex passes apply to every string — defense-in-depth, and
+            // the year-residue invariant requires it. NER (expensive) stays
+            // scoped to SCRUB_FIELDS subtrees only.
+            let scrubbed = scrub_text(&s, run_ner && in_scope, stats)?;
+            if scrubbed != s {
+                stats.fields_modified += 1;
             }
+            Ok(Value::String(scrubbed))
         }
 
         Value::Array(arr) => {
@@ -134,19 +133,23 @@ mod tests {
     }
 
     #[test]
-    fn unmatched_subtree_unchanged() {
+    fn regex_applies_globally_even_outside_scrub_fields() {
+        // Updated contract: regex passes (year, year-identifier, structured
+        // PII) apply to every string in the trace, regardless of whether the
+        // parent key is in SCRUB_FIELDS. NER stays scoped to SCRUB_FIELDS
+        // (NER is expensive; regex is cheap). This satisfies the FSD's
+        // year-residue invariant — "no year escapes" — even when a year
+        // appears in a field the agent didn't think to flag for scrubbing.
         let trace = json!({
             "metadata": {
-                "non_scrub_field": "Year 1989 stays here"
+                "non_scrub_field": "Year 1989 ought to be redacted"
             }
         });
         let mut stats = ScrubStats::default();
-        let out = walk(trace.clone(), &fields(), &mut stats, false).unwrap();
-        // Field is not in SCRUB_FIELDS, year stays.
-        assert!(out["metadata"]["non_scrub_field"]
-            .as_str()
-            .unwrap()
-            .contains("1989"));
+        let out = walk(trace, &fields(), &mut stats, false).unwrap();
+        let scrubbed = out["metadata"]["non_scrub_field"].as_str().unwrap();
+        assert!(!scrubbed.contains("1989"), "year leaked: {scrubbed}");
+        assert!(scrubbed.contains("[YEAR]"), "year placeholder missing: {scrubbed}");
     }
 
     #[test]
