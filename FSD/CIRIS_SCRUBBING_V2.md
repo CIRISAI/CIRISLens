@@ -347,9 +347,17 @@ All R1.x can be developed **[parallel]** with each other; only R1.5 is **[serial
   invariant. Implemented in `cirislens-core/src/scrubber/proptests.rs`
   (5 properties, 256 cases each; proptest regression seeds checked in).
   Walker contract tightened: regex applies globally; NER stays scoped.
-- **R3.2** **[parallel, after Stage 1]** Golden corpus: ~50 traces
-  covering 29 languages × major entity types × known-difficult contexts.
-  Each input has a frozen expected output; CI fails on any drift.
+- **R3.2** ✅ **[parallel, after Stage 1]** Golden corpus
+  (`cirislens-core/tests/golden/detailed/`, 35 input/expected pairs).
+  Coverage: every regex pattern type (year, year-bearing identifier,
+  email, phone, IPv4, URL, SSN, credit card), 18 of the 29 CIRIS
+  languages × the historical-year scenario, plus structural cases
+  (lists of strings, deep nesting, fields outside SCRUB_FIELDS,
+  empty/whitespace-only strings, year-cutoff exclusions, mixed
+  scripts). Runner is `tests/golden_test.rs`; CI fails on drift,
+  intentional rule changes go through `CIRISLENS_GOLDEN_REGENERATE=1`.
+  Full-traces tier (`tests/golden/full_traces/`) is scaffolded with
+  a README and self-skips when NER weights aren't configured.
 - **R3.3** ✅ **[parallel, after Stage 1]** Performance benchmark
   (`cirislens-core/benches/scrubber_bench.rs`, criterion). Initial
   numbers on the regex path (no NER): tiny trace 5.3 µs, realistic

@@ -1,0 +1,15 @@
+{
+  "dma_results": {
+    "csdma": {
+      "flags": [
+        "[IDENTIFIER]"
+      ],
+      "reasoning": {
+        "alternatives": [
+          "Year [YEAR] alternative phrasing"
+        ],
+        "primary": "Year [YEAR] is in scope."
+      }
+    }
+  }
+}

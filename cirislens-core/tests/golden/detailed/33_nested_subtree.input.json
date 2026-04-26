@@ -1,0 +1,11 @@
+{
+  "dma_results": {
+    "csdma": {
+      "flags": ["historical_event_1989"],
+      "reasoning": {
+        "primary": "Year 1989 is in scope.",
+        "alternatives": ["Year 1989 alternative phrasing"]
+      }
+    }
+  }
+}
