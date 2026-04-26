@@ -109,6 +109,38 @@ pub fn walk_batch(
 
 // ─── Phase 1: collect ───
 
+/// Heuristic: skip NER on strings that look like programmatic labels
+/// (`"string"`, `"object"`, `"completed"`, `"agent_001"`, …). No
+/// uppercase, no whitespace, ASCII-only, short — a single-word
+/// snake_case/lowercase token is overwhelmingly a schema label or
+/// internal identifier, not a phrase that contains a named entity.
+/// The regex pass still applies to these strings, so emails / years /
+/// IPs / phones in a label-shaped string still get caught.
+///
+/// CJK / Arabic / Cyrillic strings are NOT subject to this skip — the
+/// "no uppercase" condition only applies to ASCII text.
+fn looks_like_schema_label(s: &str) -> bool {
+    if s.len() > 24 {
+        return false;
+    }
+    let mut all_ascii = true;
+    let mut has_upper = false;
+    let mut has_ws = false;
+    for c in s.chars() {
+        if !c.is_ascii() {
+            all_ascii = false;
+            break;
+        }
+        if c.is_ascii_uppercase() {
+            has_upper = true;
+        }
+        if c.is_ascii_whitespace() {
+            has_ws = true;
+        }
+    }
+    all_ascii && !has_upper && !has_ws
+}
+
 fn collect_ner_inputs(
     value: &Value,
     scrub_fields: &HashSet<&'static str>,
@@ -121,7 +153,7 @@ fn collect_ner_inputs(
     }
     match value {
         Value::String(s) => {
-            if in_scope && !s.trim().is_empty() {
+            if in_scope && !s.trim().is_empty() && !looks_like_schema_label(s) {
                 inputs.push(s.clone());
             }
         }
@@ -162,7 +194,9 @@ fn inject_walk(
         Value::String(s) => {
             // For NER-eligible strings, replace with the next NER output;
             // for everything else, keep the original. Then regex on either.
-            let after_ner = if in_scope && !s.trim().is_empty() {
+            // Schema-label heuristic must mirror collect_ner_inputs exactly,
+            // or the iterator pulls out of sync.
+            let after_ner = if in_scope && !s.trim().is_empty() && !looks_like_schema_label(&s) {
                 ner_outputs.next().unwrap_or(s)
             } else {
                 s

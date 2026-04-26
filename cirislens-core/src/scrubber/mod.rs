@@ -21,6 +21,9 @@ pub mod distilbert_loader;
 #[cfg(feature = "ner")]
 pub mod xlm_r_loader;
 
+#[cfg(feature = "ner-ort")]
+pub mod ort_loader;
+
 #[cfg(test)]
 mod proptests;
 

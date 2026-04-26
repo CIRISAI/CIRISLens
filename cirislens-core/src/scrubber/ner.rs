@@ -40,12 +40,44 @@ use super::{ScrubError, ScrubStats};
 /// when this returns `false`.
 #[cfg(feature = "ner")]
 pub fn is_configured() -> bool {
+    #[cfg(feature = "ner-ort")]
+    if backend_choice() == BackendChoice::Ort {
+        return ort_backend::is_configured();
+    }
     backend::is_configured()
 }
 
 #[cfg(not(feature = "ner"))]
 pub fn is_configured() -> bool {
     false
+}
+
+/// Backend selector. ort wins when `CIRISLENS_NER_BACKBONE=ort` AND the
+/// `ner-ort` feature was compiled in. Otherwise we fall through to the
+/// candle backend (which itself can dispatch xlm-r vs distilbert via the
+/// same env var).
+#[cfg(feature = "ner")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BackendChoice {
+    Candle,
+    #[cfg(feature = "ner-ort")]
+    Ort,
+}
+
+#[cfg(feature = "ner")]
+fn backend_choice() -> BackendChoice {
+    #[cfg(feature = "ner-ort")]
+    {
+        match std::env::var("CIRISLENS_NER_BACKBONE")
+            .as_deref()
+            .map(str::trim)
+            .map(str::to_ascii_lowercase)
+        {
+            Ok(s) if s == "ort" || s == "ort-int8" || s == "onnx" => return BackendChoice::Ort,
+            _ => {}
+        }
+    }
+    BackendChoice::Candle
 }
 
 /// Run NER over a single text and replace entity spans with placeholders.
@@ -128,7 +160,11 @@ pub fn scrub_batch(texts: &[String], stats: &mut ScrubStats) -> Result<Vec<Strin
     if !deduped_misses.is_empty() {
         stats.ner_cache_misses += deduped_misses.len();
         #[cfg(feature = "ner")]
-        let computed = backend::scrub_batch(&deduped_misses, stats)?;
+        let computed = match backend_choice() {
+            #[cfg(feature = "ner-ort")]
+            BackendChoice::Ort => ort_backend::scrub_batch(&deduped_misses, stats)?,
+            BackendChoice::Candle => backend::scrub_batch(&deduped_misses, stats)?,
+        };
         #[cfg(not(feature = "ner"))]
         let computed: Vec<String> = {
             let _ = stats;
@@ -582,6 +618,199 @@ mod backend {
             let label_ids: Vec<usize> = label_ids_2d[i].iter().map(|&x| x as usize).collect();
             let offsets = encodings[i].get_offsets();
             let chunk_spans = collapse_bio(&label_ids, offsets, backend.model.labels());
+            for (s, e, tag) in chunk_spans {
+                per_text_spans[origin_idx]
+                    .push((s + byte_offset_in_origin, e + byte_offset_in_origin, tag));
+            }
+        }
+        Ok(())
+    }
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// ort backend (behind `ner-ort` feature) — INT8-quantized ONNX Runtime
+// ───────────────────────────────────────────────────────────────────────────
+
+#[cfg(feature = "ner-ort")]
+mod ort_backend {
+    use super::{collapse_bio, replace_spans, ScrubError, ScrubStats};
+    use crate::scrubber::ort_loader::{OrtSource, OrtTokenClassifier};
+    use ndarray::Array2;
+    use parking_lot::Mutex;
+    use std::sync::OnceLock;
+    use tokenizers::Tokenizer;
+
+    static BACKEND: OnceLock<Option<Mutex<Backend>>> = OnceLock::new();
+
+    struct Backend {
+        model: OrtTokenClassifier,
+        tokenizer: Tokenizer,
+    }
+
+    fn init() -> Option<Mutex<Backend>> {
+        let load_result = OrtSource::from_env().and_then(|src| src.load());
+        match load_result {
+            Ok((model, tokenizer)) => {
+                let msg = format!(
+                    "NER backend ready (ort / ONNX): {} labels",
+                    model.labels.len()
+                );
+                log::info!("{msg}");
+                eprintln!("[cirislens_core] {msg}");
+                Some(Mutex::new(Backend { model, tokenizer }))
+            }
+            Err(e) => {
+                let msg = format!("ort NER backend load failed: {e:#}");
+                log::error!("{msg}");
+                eprintln!("[cirislens_core] {msg}");
+                None
+            }
+        }
+    }
+
+    pub fn is_configured() -> bool {
+        BACKEND.get_or_init(init).is_some()
+    }
+
+    /// Same chunking + bucketing strategy as the candle backend, but
+    /// running through ort INT8.
+    const MAX_TOKENS_PER_CHUNK: usize = 192;
+    const MAX_BATCH_CHUNKS: usize = 64;
+
+    fn pre_chunk<'a>(
+        text: &'a str,
+        tokenizer: &Tokenizer,
+    ) -> Result<Vec<(usize, &'a str)>, ScrubError> {
+        let full = tokenizer
+            .encode(text, false)
+            .map_err(|e| ScrubError::NerFailed(format!("tokenize: {e}")))?;
+        let total = full.get_ids().len();
+        if total == 0 {
+            return Ok(Vec::new());
+        }
+        let offsets = full.get_offsets();
+        let mut chunks = Vec::new();
+        let mut tok_start = 0usize;
+        while tok_start < total {
+            let tok_end = (tok_start + MAX_TOKENS_PER_CHUNK).min(total);
+            let byte_start = offsets[tok_start].0;
+            let byte_end = offsets[tok_end - 1].1;
+            if byte_end > byte_start {
+                chunks.push((byte_start, &text[byte_start..byte_end]));
+            }
+            tok_start = tok_end;
+        }
+        Ok(chunks)
+    }
+
+    pub fn scrub_batch(
+        texts: &[String],
+        stats: &mut ScrubStats,
+    ) -> Result<Vec<String>, ScrubError> {
+        let backend = BACKEND
+            .get_or_init(init)
+            .as_ref()
+            .ok_or(ScrubError::NerNotConfigured)?;
+        let mut backend = backend.lock();
+
+        if texts.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut flat_chunks: Vec<(usize, usize, &str)> = Vec::new();
+        for (i, text) in texts.iter().enumerate() {
+            for (offset, chunk) in pre_chunk(text, &backend.tokenizer)? {
+                flat_chunks.push((i, offset, chunk));
+            }
+        }
+        flat_chunks.sort_by_key(|(_, _, s)| s.len());
+
+        let mut per_text_spans: Vec<Vec<(usize, usize, String)>> = vec![Vec::new(); texts.len()];
+        for batch in flat_chunks.chunks(MAX_BATCH_CHUNKS) {
+            run_batch(&mut backend, batch, &mut per_text_spans)?;
+        }
+
+        let mut out = Vec::with_capacity(texts.len());
+        for (i, text) in texts.iter().enumerate() {
+            out.push(replace_spans(text, &per_text_spans[i], stats));
+        }
+        Ok(out)
+    }
+
+    fn run_batch(
+        backend: &mut Backend,
+        batch: &[(usize, usize, &str)],
+        per_text_spans: &mut [Vec<(usize, usize, String)>],
+    ) -> Result<(), ScrubError> {
+        if batch.is_empty() {
+            return Ok(());
+        }
+
+        let chunk_strs: Vec<&str> = batch.iter().map(|(_, _, s)| *s).collect();
+        let encodings = backend
+            .tokenizer
+            .encode_batch(chunk_strs, true)
+            .map_err(|e| ScrubError::NerFailed(format!("encode_batch: {e}")))?;
+
+        let pad_id = backend
+            .tokenizer
+            .token_to_id("<pad>")
+            .or_else(|| backend.tokenizer.token_to_id("[PAD]"))
+            .unwrap_or(1);
+
+        let max_len = encodings.iter().map(|e| e.get_ids().len()).max().unwrap_or(0);
+        if max_len == 0 {
+            return Ok(());
+        }
+        let batch_size = encodings.len();
+
+        // Build padded ndarray inputs.
+        let mut ids = Array2::<i64>::zeros((batch_size, max_len));
+        let mut mask = Array2::<i64>::zeros((batch_size, max_len));
+        for (b, enc) in encodings.iter().enumerate() {
+            let e_ids = enc.get_ids();
+            let e_mask = enc.get_attention_mask();
+            for j in 0..max_len {
+                if j < e_ids.len() {
+                    ids[(b, j)] = e_ids[j] as i64;
+                    mask[(b, j)] = e_mask[j] as i64;
+                } else {
+                    ids[(b, j)] = pad_id as i64;
+                    mask[(b, j)] = 0;
+                }
+            }
+        }
+
+        let (logits_flat, batch_out, seq_out, num_labels) =
+            backend.model.forward(ids, mask).map_err(|e| {
+                ScrubError::NerFailed(format!("ort forward: {e:#}"))
+            })?;
+        debug_assert_eq!(batch_out, batch_size);
+        debug_assert_eq!(seq_out, max_len);
+
+        // Argmax along label axis. logits shape [batch, seq, num_labels].
+        let mut label_ids_2d: Vec<Vec<usize>> = vec![Vec::with_capacity(seq_out); batch_out];
+        for b in 0..batch_out {
+            let row = &mut label_ids_2d[b];
+            for s in 0..seq_out {
+                let base = (b * seq_out + s) * num_labels;
+                let mut best = 0usize;
+                let mut best_v = f32::NEG_INFINITY;
+                for k in 0..num_labels {
+                    let v = logits_flat[base + k];
+                    if v > best_v {
+                        best_v = v;
+                        best = k;
+                    }
+                }
+                row.push(best);
+            }
+        }
+
+        let labels = &backend.model.labels;
+        for (i, &(origin_idx, byte_offset_in_origin, _)) in batch.iter().enumerate() {
+            let offsets = encodings[i].get_offsets();
+            let chunk_spans = collapse_bio(&label_ids_2d[i], offsets, labels);
             for (s, e, tag) in chunk_spans {
                 per_text_spans[origin_idx]
                     .push((s + byte_offset_in_origin, e + byte_offset_in_origin, tag));
