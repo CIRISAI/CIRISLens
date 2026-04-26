@@ -293,6 +293,51 @@ fn ner_is_configured() -> PyResult<bool> {
     Ok(scrubber::ner::is_configured())
 }
 
+/// Scrub a batch of traces with one batched NER forward pass shared
+/// across the whole batch. Takes a list of JSON strings, one per
+/// trace, plus the trace level. Returns a list of `{trace, level, stats}`
+/// dicts in the same order. Stats are aggregated across the batch.
+#[pyfunction]
+fn scrub_traces_batch<'a>(
+    py: Python<'a>,
+    traces_json: Vec<&str>,
+    level: &str,
+) -> PyResult<&'a PyList> {
+    use pyo3::exceptions::{PyRuntimeError, PyValueError};
+
+    let trace_level = scrubber::TraceLevel::from_str(level)
+        .map_err(|e| PyValueError::new_err(format!("{e}")))?;
+
+    let trace_values: Vec<serde_json::Value> = traces_json
+        .iter()
+        .map(|s| serde_json::from_str(s))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| PyValueError::new_err(format!("invalid trace JSON in batch: {e}")))?;
+
+    let scrubbed = scrubber::scrub_traces_batch(trace_values, trace_level)
+        .map_err(|e| PyRuntimeError::new_err(format!("scrub failed: {e}")))?;
+
+    let out = PyList::empty(py);
+    for st in &scrubbed {
+        let trace_json = serde_json::to_string(&st.value)
+            .map_err(|e| PyRuntimeError::new_err(format!("scrubbed serialize: {e}")))?;
+        let item = PyDict::new(py);
+        item.set_item("trace", trace_json)?;
+        item.set_item("level", level)?;
+        let stats = PyDict::new(py);
+        stats.set_item("entities_redacted", st.stats.entities_redacted)?;
+        stats.set_item("regex_redactions", st.stats.regex_redactions)?;
+        stats.set_item("fields_modified", st.stats.fields_modified)?;
+        stats.set_item("walker_max_depth", st.stats.walker_max_depth)?;
+        stats.set_item("ner_ran", st.stats.ner_ran)?;
+        stats.set_item("ner_cache_hits", st.stats.ner_cache_hits)?;
+        stats.set_item("ner_cache_misses", st.stats.ner_cache_misses)?;
+        item.set_item("stats", stats)?;
+        out.append(item)?;
+    }
+    Ok(out)
+}
+
 /// Python module definition
 #[pymodule]
 fn cirislens_core(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
@@ -305,6 +350,7 @@ fn cirislens_core(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(get_public_key_count, m)?)?;
     m.add_function(wrap_pyfunction!(check_cache_status, m)?)?;
     m.add_function(wrap_pyfunction!(scrub_trace, m)?)?;
+    m.add_function(wrap_pyfunction!(scrub_traces_batch, m)?)?;
     m.add_function(wrap_pyfunction!(ner_is_configured, m)?)?;
     Ok(())
 }

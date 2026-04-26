@@ -58,6 +58,55 @@ pub fn walk(
     Ok(out)
 }
 
+/// Walk and scrub a *batch* of traces in one go. Collects NER inputs
+/// across **all** traces, runs ONE batched forward pass over the
+/// concatenation, then injects per-trace. This amortises tokenizer +
+/// model setup costs across the whole batch — the win over calling
+/// [`walk`] in a loop comes from a single padded forward pass and
+/// from cache-warmth bleeding across traces in the same batch.
+pub fn walk_batch(
+    values: Vec<Value>,
+    scrub_fields: &HashSet<&'static str>,
+    stats: &mut ScrubStats,
+    run_ner: bool,
+) -> Result<Vec<Value>, ScrubError> {
+    if !run_ner {
+        // No NER → no batching benefit. Fall through to per-trace regex pass.
+        return values
+            .into_iter()
+            .map(|v| walk_regex_only(v, stats, 0))
+            .collect();
+    }
+
+    // Phase 1: collect per trace, recording boundary indices into the
+    // flat ner_inputs list so phase 3 can slice each trace's outputs.
+    let mut ner_inputs: Vec<String> = Vec::new();
+    let mut boundaries: Vec<usize> = Vec::with_capacity(values.len() + 1);
+    boundaries.push(0);
+    for v in &values {
+        collect_ner_inputs(v, scrub_fields, false, &mut ner_inputs, 0)?;
+        boundaries.push(ner_inputs.len());
+    }
+
+    // Phase 2: ONE batched NER call across the entire batch.
+    let ner_outputs = if ner_inputs.is_empty() {
+        Vec::new()
+    } else {
+        super::ner::scrub_batch(&ner_inputs, stats)?
+    };
+
+    // Phase 3: per trace, slice the outputs Vec and inject in order.
+    let mut out: Vec<Value> = Vec::with_capacity(values.len());
+    for (i, v) in values.into_iter().enumerate() {
+        let slice = ner_outputs[boundaries[i]..boundaries[i + 1]].to_vec();
+        let mut iter = slice.into_iter();
+        let scrubbed = inject_walk(v, scrub_fields, false, stats, &mut iter, 0)?;
+        debug_assert!(iter.next().is_none(), "trace {i} consumed != collected");
+        out.push(scrubbed);
+    }
+    Ok(out)
+}
+
 // ─── Phase 1: collect ───
 
 fn collect_ner_inputs(

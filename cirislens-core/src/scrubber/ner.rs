@@ -93,42 +93,60 @@ pub fn scrub_batch(texts: &[String], stats: &mut ScrubStats) -> Result<Vec<Strin
         return Ok(Vec::new());
     }
 
-    // Split inputs into cache hits and misses, preserving input order.
+    // Split inputs into cache hits and misses. **Within-batch dedupe**:
+    // if the same novel string appears N times in this batch, we only
+    // send it to the model once and broadcast the result. On the
+    // production HF corpus a single batch can contain hundreds of
+    // occurrences of the same schema label.
     let cache = ner_cache();
     let mut out: Vec<Option<String>> = vec![None; texts.len()];
-    let mut miss_indices: Vec<usize> = Vec::new();
-    let mut miss_texts: Vec<String> = Vec::new();
+    // For each input, either (a) it hit the cache and out[i] is set,
+    // or (b) it's a miss; we record the dedup-index it maps to so we
+    // can fill out[i] after running the model on the dedup'd misses.
+    let mut miss_dedup_index: Vec<usize> = vec![usize::MAX; texts.len()];
+    let mut deduped_misses: Vec<String> = Vec::new();
+    let mut miss_lookup: HashMap<String, usize> = HashMap::new();
     {
         let guard = cache.lock();
         for (i, t) in texts.iter().enumerate() {
             if let Some(cached) = guard.get(t) {
                 out[i] = Some(cached.clone());
                 stats.ner_cache_hits += 1;
+            } else if let Some(&dedup_idx) = miss_lookup.get(t) {
+                // Same novel string seen earlier in this batch; reuse slot.
+                miss_dedup_index[i] = dedup_idx;
             } else {
-                miss_indices.push(i);
-                miss_texts.push(t.clone());
+                let dedup_idx = deduped_misses.len();
+                miss_lookup.insert(t.clone(), dedup_idx);
+                deduped_misses.push(t.clone());
+                miss_dedup_index[i] = dedup_idx;
             }
         }
     }
 
-    // Run NER on the misses only (single batched forward pass).
-    if !miss_texts.is_empty() {
-        stats.ner_cache_misses += miss_texts.len();
+    // Run NER on the deduped misses only (single batched forward pass).
+    if !deduped_misses.is_empty() {
+        stats.ner_cache_misses += deduped_misses.len();
         #[cfg(feature = "ner")]
-        let computed = backend::scrub_batch(&miss_texts, stats)?;
+        let computed = backend::scrub_batch(&deduped_misses, stats)?;
         #[cfg(not(feature = "ner"))]
         let computed: Vec<String> = {
             let _ = stats;
             return Err(ScrubError::NerNotConfigured);
         };
 
-        // Populate cache + fill results.
-        let mut guard = cache.lock();
-        for (i, idx) in miss_indices.iter().enumerate() {
-            let scrubbed = computed[i].clone();
-            // Cache by input text so future identical inputs hit.
-            guard.insert(miss_texts[i].clone(), scrubbed.clone());
-            out[*idx] = Some(scrubbed);
+        // Populate cache and broadcast the deduped results back to all
+        // occurrences in the input order.
+        {
+            let mut guard = cache.lock();
+            for (text, scrubbed) in deduped_misses.iter().zip(computed.iter()) {
+                guard.insert(text.clone(), scrubbed.clone());
+            }
+        }
+        for (i, dedup_idx) in miss_dedup_index.iter().enumerate() {
+            if *dedup_idx != usize::MAX {
+                out[i] = Some(computed[*dedup_idx].clone());
+            }
         }
     }
 
@@ -278,7 +296,8 @@ mod backend {
     //! unconfigured (full_traces traces will be rejected).
 
     use super::{collapse_bio, replace_spans, ScrubError, ScrubStats};
-    use crate::scrubber::xlm_r_loader::{ModelSource, XLMRTokenClassifier};
+    use crate::scrubber::distilbert_loader::{DistilBertSource, DistilBertTokenClassifier};
+    use crate::scrubber::xlm_r_loader::{ModelSource as XlmrSource, XLMRTokenClassifier};
     use candle_core::Tensor;
     use parking_lot::Mutex;
     use std::sync::OnceLock;
@@ -289,18 +308,83 @@ mod backend {
     /// thread-safe by default for shared models without external sync).
     static BACKEND: OnceLock<Option<Mutex<Backend>>> = OnceLock::new();
 
+    /// Two model variants: distilbert (default — half the layers of XLM-R,
+    /// roughly 2× faster on CPU, includes B-DATE/I-DATE labels) and
+    /// xlm-r (legacy / bigger). Pick via `CIRISLENS_NER_BACKBONE=distilbert|xlm-r`.
+    enum Model {
+        DistilBert(DistilBertTokenClassifier),
+        XlmR(XLMRTokenClassifier),
+    }
+
+    impl Model {
+        fn forward(&self, ids: &Tensor, mask: &Tensor) -> anyhow::Result<Tensor> {
+            match self {
+                Self::DistilBert(m) => m.forward(ids, mask),
+                Self::XlmR(m) => m.forward(ids, mask),
+            }
+        }
+        fn device(&self) -> &candle_core::Device {
+            match self {
+                Self::DistilBert(m) => &m.device,
+                Self::XlmR(m) => &m.device,
+            }
+        }
+        fn labels(&self) -> &[String] {
+            match self {
+                Self::DistilBert(m) => &m.labels,
+                Self::XlmR(m) => &m.labels,
+            }
+        }
+        fn name(&self) -> &'static str {
+            match self {
+                Self::DistilBert(_) => "DistilBERT-multilingual",
+                Self::XlmR(_) => "XLM-R-base",
+            }
+        }
+    }
+
     struct Backend {
-        model: XLMRTokenClassifier,
+        model: Model,
         tokenizer: Tokenizer,
     }
 
+    fn pick_backbone() -> &'static str {
+        // Defaults to XLM-R. DistilBERT-multilingual was tested as a
+        // smaller/faster alternative but candle's reference DistilBERT
+        // implementation regressed end-to-end throughput vs XLM-R on
+        // the production HF corpus benchmark (0.78 vs 2.0 traces/sec) —
+        // probably a combination of less-optimized layer code and
+        // WordPiece producing slightly more tokens than XLM-R's
+        // sentencepiece on the same text. Kept the loader as an option
+        // (`CIRISLENS_NER_BACKBONE=distilbert`) so we can re-evaluate
+        // when candle's distilbert improves or we swap to a
+        // quantized backend.
+        match std::env::var("CIRISLENS_NER_BACKBONE")
+            .as_deref()
+            .map(str::trim)
+            .map(str::to_ascii_lowercase)
+        {
+            Ok(s) if s == "distilbert" => "distilbert",
+            _ => "xlm-r",
+        }
+    }
+
     fn init() -> Option<Mutex<Backend>> {
-        let source = ModelSource::from_env();
-        match source.load() {
+        let backbone = pick_backbone();
+        let load_result: anyhow::Result<(Model, Tokenizer)> = match backbone {
+            "xlm-r" => XlmrSource::from_env()
+                .load()
+                .map(|(m, t)| (Model::XlmR(m), t)),
+            _ => DistilBertSource::from_env()
+                .load()
+                .map(|(m, t)| (Model::DistilBert(m), t)),
+        };
+        match load_result {
             Ok((model, tokenizer)) => {
                 let msg = format!(
-                    "NER backend ready (candle / XLM-R): {} labels",
-                    model.labels.len()
+                    "NER backend ready (candle / {}): {} labels",
+                    model.name(),
+                    model.labels().len()
                 );
                 log::info!("{msg}");
                 // Also surface to stderr so it's visible without a configured
@@ -321,25 +405,28 @@ mod backend {
         BACKEND.get_or_init(init).is_some()
     }
 
-    /// XLM-R hard caps at 514 positional embeddings (12 above the 512
-    /// content tokens). Texts longer than that get chunked.
+    /// Chunk size has two competing effects:
+    ///   1. Attention is O(n²) per chunk — smaller `n` → faster per chunk.
+    ///   2. Smaller chunks → more total chunks per text → more forward calls.
     ///
-    /// The window has to leave generous margin against re-tokenization
-    /// variance: when we slice the original text on a token boundary
-    /// from the *full* encoding and then re-encode that slice, BPE can
-    /// produce a different (usually larger) token count because the
-    /// missing left context changes how subwords merge. Reproducible
-    /// real-world case: a 232-char Amharic field that the full encoding
-    /// resolves to ~210 tokens re-encodes to >280. With a 510-token
-    /// window plus 2 special tokens the re-encode pushes past 514 and
-    /// the forward pass errors out. A 384-token window leaves >100
-    /// tokens of safety; the tokenizer-side `with_truncation(512)`
-    /// added in the loader is the second backstop.
-    const MAX_TOKENS_PER_CHUNK: usize = 384;
+    /// XLM-R caps at 514 position embeddings (510 content + 2 specials).
+    /// We deliberately stay well below to give margin against BPE
+    /// re-fragmentation when slicing the original text on boundaries
+    /// from the full encoding. 192 was empirically the sweet spot on
+    /// the production HF corpus benchmark: dropping from 384 → 192
+    /// roughly halved per-chunk forward time without noticeably
+    /// increasing total chunk count (most fields are short enough to
+    /// fit in one 192-token chunk anyway).
+    ///
+    /// The tokenizer-side `with_truncation(512)` added in the loader is
+    /// the hard backstop that protects the position-embedding lookup
+    /// even if a chunk re-fragments past this target.
+    const MAX_TOKENS_PER_CHUNK: usize = 192;
 
-    /// Cap on the number of chunks per forward call. Padding cost grows
-    /// with batch size × longest sequence; 64 chunks of 384 tokens each
-    /// keeps the per-call hidden state under ~75 MB even at fp32.
+    /// Cap on the number of chunks per forward call. Empirically 64 is
+    /// the sweet spot on the corpus — larger batches (128, 256) regress
+    /// because cache lines / SIMD utilization don't scale linearly with
+    /// batch dim once the tensors exceed L2.
     const MAX_BATCH_CHUNKS: usize = 64;
 
     /// Pre-chunk a single text into MAX_TOKENS_PER_CHUNK windows. Returns
@@ -398,8 +485,16 @@ mod backend {
         // Per-text accumulator of entity spans (offsets are global to each text).
         let mut per_text_spans: Vec<Vec<(usize, usize, String)>> = vec![Vec::new(); texts.len()];
 
-        // 2. Process chunks in mini-batches of up to MAX_BATCH_CHUNKS so the
-        //    padded tensor never blows up memory on pathological inputs.
+        // 2. Sort chunks by length, then bucket into mini-batches of up to
+        //    MAX_BATCH_CHUNKS. With sort+bucket the padded sequence
+        //    length within a batch is bounded by the variance of similar-
+        //    length chunks rather than by the global max — short
+        //    schema-label chunks no longer get padded out to the
+        //    longest reasoning-text chunk in the batch. Empirically
+        //    this is the difference between cross-trace batching helping
+        //    and hurting on real corpus shape.
+        flat_chunks.sort_by_key(|(_, _, s)| s.len());
+
         for batch in flat_chunks.chunks(MAX_BATCH_CHUNKS) {
             run_batch(&backend, batch, &mut per_text_spans)?;
         }
@@ -462,7 +557,7 @@ mod backend {
             }
         }
 
-        let device = &backend.model.device;
+        let device = backend.model.device();
         let input_ids = Tensor::from_vec(ids_flat, (batch_size, max_len), device)
             .map_err(|e| ScrubError::NerFailed(format!("ids tensor: {e}")))?;
         let attention_mask = Tensor::from_vec(mask_flat, (batch_size, max_len), device)
@@ -486,7 +581,7 @@ mod backend {
         for (i, &(origin_idx, byte_offset_in_origin, _)) in batch.iter().enumerate() {
             let label_ids: Vec<usize> = label_ids_2d[i].iter().map(|&x| x as usize).collect();
             let offsets = encodings[i].get_offsets();
-            let chunk_spans = collapse_bio(&label_ids, offsets, &backend.model.labels);
+            let chunk_spans = collapse_bio(&label_ids, offsets, backend.model.labels());
             for (s, e, tag) in chunk_spans {
                 per_text_spans[origin_idx]
                     .push((s + byte_offset_in_origin, e + byte_offset_in_origin, tag));

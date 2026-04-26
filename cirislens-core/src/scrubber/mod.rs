@@ -16,6 +16,9 @@ pub mod regex;
 pub mod walker;
 
 #[cfg(feature = "ner")]
+pub mod distilbert_loader;
+
+#[cfg(feature = "ner")]
 pub mod xlm_r_loader;
 
 #[cfg(test)]
@@ -136,6 +139,62 @@ pub fn scrub_trace(trace: Value, level: TraceLevel) -> Result<ScrubbedTrace, Scr
         stats,
         level,
     })
+}
+
+/// Scrub a batch of traces with one NER forward pass shared across the
+/// whole batch. Significantly higher throughput than calling
+/// [`scrub_trace`] in a loop when level=`FullTraces`; for other levels
+/// it's just a per-trace regex pass.
+pub fn scrub_traces_batch(
+    traces: Vec<Value>,
+    level: TraceLevel,
+) -> Result<Vec<ScrubbedTrace>, ScrubError> {
+    if traces.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut stats = ScrubStats::default();
+
+    let scrubbed_values: Vec<Value> = match level {
+        TraceLevel::Generic => traces, // pass-through
+        TraceLevel::Detailed => {
+            walker::walk_batch(traces, &SCRUB_FIELDS, &mut stats, /* run_ner = */ false)?
+        }
+        TraceLevel::FullTraces => {
+            stats.ner_ran = ner::is_configured();
+            if !stats.ner_ran {
+                return Err(ScrubError::NerNotConfigured);
+            }
+            walker::walk_batch(traces, &SCRUB_FIELDS, &mut stats, /* run_ner = */ true)?
+        }
+    };
+
+    // Per-trace invariant check: residue / probe match. Reject the
+    // whole batch if any single trace fails — an opt-in
+    // partial-success mode is left for a future API once it has a
+    // real-world need.
+    if let TraceLevel::Detailed | TraceLevel::FullTraces = level {
+        for v in &scrubbed_values {
+            let residue = regex::count_year_residue(v);
+            if residue > 0 {
+                return Err(ScrubError::YearResidue(residue));
+            }
+            if regex::probe_match(v) {
+                return Err(ScrubError::ProbeMatch);
+            }
+        }
+    }
+
+    Ok(scrubbed_values
+        .into_iter()
+        .map(|v| ScrubbedTrace {
+            value: v,
+            // Copy the aggregated stats into each ScrubbedTrace so the
+            // caller can attribute them; per-trace breakdown is left
+            // for a future ScrubStats refactor if the API needs it.
+            stats: stats.clone(),
+            level,
+        })
+        .collect())
 }
 
 #[cfg(test)]

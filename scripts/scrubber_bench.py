@@ -40,6 +40,12 @@ def main() -> int:
         help="JSONL source (default: HF release raw corpus)",
     )
     p.add_argument("--warmup", type=int, default=2, help="warmup traces (excluded from stats)")
+    p.add_argument(
+        "--batch",
+        type=int,
+        default=1,
+        help="batch size for scrub_traces_batch (1 = use scrub_trace per call)",
+    )
     args = p.parse_args()
 
     # Load N+warmup lines from the corpus.
@@ -70,23 +76,32 @@ def main() -> int:
             print(f"warmup error: {e}", file=sys.stderr)
             return 1
 
-    # Timed run.
+    # Timed run. When --batch > 1, dispatch via scrub_traces_batch.
     durations_ms: list[float] = []
     failures = 0
     cum_hits = cum_misses = 0
     t_total = time.perf_counter()
-    for line in lines[args.warmup : args.warmup + args.n]:
+    work = lines[args.warmup : args.warmup + args.n]
+    bs = max(1, args.batch)
+    for i in range(0, len(work), bs):
+        chunk = work[i : i + bs]
         t0 = time.perf_counter()
         try:
-            res = cirislens_core.scrub_trace(line, args.level)
+            if bs == 1:
+                results = [cirislens_core.scrub_trace(chunk[0], args.level)]
+            else:
+                results = cirislens_core.scrub_traces_batch(chunk, args.level)
         except Exception as e:
-            failures += 1
+            failures += len(chunk)
             print(f"  scrub error: {e}", file=sys.stderr)
             continue
-        durations_ms.append((time.perf_counter() - t0) * 1000)
-        s = res.get("stats", {})
-        cum_hits += s.get("ner_cache_hits", 0)
-        cum_misses += s.get("ner_cache_misses", 0)
+        elapsed_chunk = (time.perf_counter() - t0) * 1000
+        per = elapsed_chunk / len(chunk)
+        durations_ms.extend([per] * len(chunk))
+        for r in results:
+            s = r.get("stats", {})
+            cum_hits += s.get("ner_cache_hits", 0)
+            cum_misses += s.get("ner_cache_misses", 0)
     elapsed = time.perf_counter() - t_total
 
     n = len(durations_ms)
