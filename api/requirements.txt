@@ -28,4 +28,11 @@ pandas>=2.1.0
 pynacl>=1.5.0
 
 # PII scrubbing for full_traces
-spacy>=3.7.0
+# Pin spaCy + model wheels together so the build is reproducible and
+# nothing has to phone home at runtime. The non-root container user
+# (cirislens, uid 1000) cannot write to /opt/venv, so any
+# `spacy.cli.download()` invocation at request time is fatal —
+# `download()` calls `sys.exit()` when its pip subprocess fails.
+spacy==3.8.11
+en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl
+xx_ent_wiki_sm @ https://github.com/explosion/spacy-models/releases/download/xx_ent_wiki_sm-3.8.0/xx_ent_wiki_sm-3.8.0-py3-none-any.whl

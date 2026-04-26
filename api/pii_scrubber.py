@@ -28,10 +28,49 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# Lazy load spaCy to avoid startup overhead
-_nlp = None             # English NER (en_core_web_sm)
-_nlp_xx = None          # Multilingual NER (xx_ent_wiki_sm) — fallback for non-Latin text
-_spacy_available = None
+# Eager-load spaCy + both NER models at import time. Per FSD §1 ("no
+# unscrubbed text touches storage") the multilingual model is required —
+# without it, non-Latin trace content (CJK, Arabic, Cyrillic, …) can
+# leak named entities. Missing model = refuse to start, so the
+# orchestrator rolls back to a known-good image rather than silently
+# accepting under-scrubbed traces.
+#
+# spaCy itself is allowed to be absent only in environments that
+# explicitly opt out by clearing it from requirements (e.g. some unit
+# tests). In any environment that has spaCy installed, both models
+# must load — partial coverage is treated as a configuration error.
+_nlp: Any = None        # English NER (en_core_web_sm)
+_nlp_xx: Any = None     # Multilingual NER (xx_ent_wiki_sm)
+_spacy_available: bool = False
+
+try:
+    import spacy as _spacy
+except ImportError:
+    logger.warning(
+        "spaCy not installed; PII scrubbing will use regex-only fallback. "
+        "This is acceptable in test environments only — production must have "
+        "spaCy + both NER model wheels pinned in requirements.txt.",
+    )
+else:
+    try:
+        _nlp = _spacy.load("en_core_web_sm")
+    except OSError as _err:
+        raise RuntimeError(
+            "spaCy en_core_web_sm not installed. The wheel is pinned in "
+            "api/requirements.txt; if you see this in production the image "
+            "build is broken. Refusing to start.",
+        ) from _err
+    try:
+        _nlp_xx = _spacy.load("xx_ent_wiki_sm")
+    except OSError as _err:
+        raise RuntimeError(
+            "spaCy xx_ent_wiki_sm not installed. Multilingual NER coverage is "
+            "required by the FSD §1 scrub invariant for non-Latin trace content. "
+            "The wheel is pinned in api/requirements.txt; if you see this in "
+            "production the image build is broken. Refusing to start.",
+        ) from _err
+    _spacy_available = True
+    logger.info("Loaded spaCy en_core_web_sm + xx_ent_wiki_sm")
 
 
 def _has_non_latin(text: str) -> bool:
@@ -45,48 +84,12 @@ def _has_non_latin(text: str) -> bool:
 
 
 def _get_nlp(text: str | None = None) -> Any:
-    """Lazy load spaCy NLP model. Returns the multilingual model when the
-    text contains substantial non-Latin script; otherwise the English model."""
-    global _nlp, _nlp_xx, _spacy_available  # noqa: PLW0603
-
-    if _spacy_available is False:
+    """Return the spaCy model appropriate for `text`. Multilingual model
+    is used when the text contains substantial non-Latin script; English
+    model otherwise. Returns None only when spaCy itself is uninstalled
+    (test-environment opt-out)."""
+    if not _spacy_available:
         return None
-
-    if _nlp is None:
-        try:
-            import spacy  # noqa: PLC0415
-            try:
-                _nlp = spacy.load("en_core_web_sm")
-                _spacy_available = True
-                logger.info("Loaded spaCy en_core_web_sm")
-            except OSError:
-                from spacy.cli import download  # noqa: PLC0415
-                download("en_core_web_sm")
-                _nlp = spacy.load("en_core_web_sm")
-                _spacy_available = True
-                logger.info("Downloaded en_core_web_sm")
-            # Try multilingual model as a secondary; non-fatal if missing
-            try:
-                _nlp_xx = spacy.load("xx_ent_wiki_sm")
-                logger.info("Loaded spaCy xx_ent_wiki_sm (multilingual)")
-            except OSError:
-                try:
-                    from spacy.cli import download  # noqa: PLC0415
-                    download("xx_ent_wiki_sm")
-                    _nlp_xx = spacy.load("xx_ent_wiki_sm")
-                    logger.info("Downloaded xx_ent_wiki_sm (multilingual)")
-                except Exception as e:
-                    logger.warning(
-                        "Multilingual NER unavailable (xx_ent_wiki_sm): %s; "
-                        "non-Latin text will fall back to English NER + regex.", e
-                    )
-                    _nlp_xx = None
-        except ImportError:
-            logger.warning("spaCy not available - PII scrubbing will use regex fallback")
-            _spacy_available = False
-            return None
-
-    # Choose model based on text content
     if text is not None and _nlp_xx is not None and _has_non_latin(text):
         return _nlp_xx
     return _nlp

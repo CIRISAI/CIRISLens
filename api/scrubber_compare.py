@@ -50,14 +50,17 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import IO, Any
 
-from api import scrubber_v2 as v2
-
-# v1 path is optional in non-package contexts (e.g., running this file
-# standalone with PYTHONPATH=.); the package import is the normal route.
+# Import order tries the flat module first (production layout: the
+# Dockerfile does `WORKDIR /app` + `COPY api/ .`, so api/ files land
+# directly under /app and there's no `api` package at runtime). If the
+# flat form fails (development layout where the repo root is on path),
+# fall back to the package form.
 try:
-    from api import pii_scrubber as v1
+    import pii_scrubber as v1
+    import scrubber_v2 as v2
 except ImportError:  # pragma: no cover
-    import pii_scrubber as v1  # type: ignore
+    from api import pii_scrubber as v1  # type: ignore
+    from api import scrubber_v2 as v2  # type: ignore
 
 logger = logging.getLogger(__name__)
 
