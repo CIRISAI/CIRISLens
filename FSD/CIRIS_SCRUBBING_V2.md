@@ -336,9 +336,24 @@ All R1.x can be developed **[parallel]** with each other; only R1.5 is **[serial
 - **R2.2** **[parallel]** Trace handler refactor. Consume the input
   trace; only the value returned by the scrubber is passed forward.
   Rust ownership prevents accidental pre-scrub writes.
-- **R2.3** **[serial, after R2.1+R2.2]** Storage signature change. Type
-  the persistence layer to require `ScrubbedTrace`, not raw `Value`, so
-  any pre-scrub write fails to compile.
+- **R2.3** ✅ **[serial, after R2.1+R2.2]** Storage signature change.
+  Closed in two parts:
+  1. Rust side: `scrubber::scrub_trace` is the only constructor of
+     `ScrubbedTrace` (private fields), so any code that wants the typed
+     value must go through the scrubber — pre-scrub writes fail to
+     compile (Stage 1 R1.x already shipped this).
+  2. Python side: the trace handler in `api/accord_api.py` extends
+     scrubbing to fire on **both** `detailed` and `full_traces`
+     (previously only `full_traces`), closing the FSD §1 gap where
+     detailed traces were reaching storage unscrubbed. The regex pass
+     runs on detailed; NER + regex + cryptographic envelope on
+     full_traces. Generic remains a no-op pass-through.
+
+  Caveat on the Python side: dynamic typing means the "compile-fail"
+  guarantee is enforced by discipline + the `ScrubbedTrace` nominal
+  wrapper (construct-token gating), not by static analysis. Any new
+  persistence path must call `_scrub_compare_and_persist` (or a
+  successor that returns the typed wrapper) before writing.
 
 ### Stage 3 — Verification (unblocks promotion)
 

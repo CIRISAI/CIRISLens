@@ -1938,22 +1938,26 @@ async def receive_accord_events(
                     errors.append(f"{trace.trace_id}: {error}")
                 continue
 
-            # PII Scrubbing for full_traces level
-            # Must happen BEFORE metadata extraction to scrub text fields
+            # PII Scrubbing — FSD §1 invariant: no unscrubbed text touches
+            # storage. Generic traces are scores-only (no text). Detailed
+            # runs the regex pass. Full_traces runs NER + regex and gets a
+            # cryptographic envelope (original-content hash + CIRISLens
+            # scrub signature) so the agent's signature can still be
+            # re-verified post-scrub. Must run BEFORE metadata extraction.
             pii_scrubbed = False
             original_content_hash = None
             scrub_timestamp = None
             scrub_signature = None
             scrub_key_id = None
 
-            if request.trace_level == "full_traces":
-                scrubber = get_scrubber()
-
-                # Compute hash of original content before any modification
-                original_message = json.dumps(
-                    [c.model_dump() for c in trace.components], sort_keys=True
-                ).encode('utf-8')
-                original_content_hash = hashlib.sha256(original_message).hexdigest()
+            if request.trace_level in ("detailed", "full_traces"):
+                # Hash original content before any mutation (full_traces only —
+                # detailed has no signature envelope).
+                if request.trace_level == "full_traces":
+                    original_message = json.dumps(
+                        [c.model_dump() for c in trace.components], sort_keys=True
+                    ).encode('utf-8')
+                    original_content_hash = hashlib.sha256(original_message).hexdigest()
 
                 # Scrub PII from each component's data. The
                 # `compare_and_persist` call runs v1 (Python spaCy) and
@@ -1973,8 +1977,7 @@ async def receive_accord_events(
                             trace_id=trace.trace_id,
                         )
                         if scrubbed_data is None:
-                            # v1 itself errored → reject the trace per
-                            # FSD §1: no unscrubbed text touches storage.
+                            # v1 errored → reject per FSD §1.
                             v1_failed = True
                             break
                         comp_dict["data"] = scrubbed_data
@@ -1986,27 +1989,36 @@ async def receive_accord_events(
                     errors.append(f"{trace.trace_id}: scrubber rejected the trace")
                     continue
 
-                # Re-sign scrubbed content with CIRISLens key
-                scrub_timestamp = datetime.now(UTC)
-                scrub_key_id = scrubber.scrub_key_id
-                if scrubber._signing_key:
-                    scrubbed_message = json.dumps(scrubbed_components, sort_keys=True).encode('utf-8')
-                    scrub_signature = scrubber._signing_key  # Will be signed in scrubber
-                    from pii_scrubber import sign_content
-                    scrub_signature = sign_content(scrubbed_message, scrubber._signing_key)
-
-                # Update trace components with scrubbed data
-                # We modify the trace object in place for metadata extraction
+                # Apply scrubbed data back to trace components in place
+                # so downstream metadata extraction + sanitization see the
+                # scrubbed content.
                 for i, comp in enumerate(trace.components):
+                    if i >= len(scrubbed_components):
+                        break
                     for key, value in scrubbed_components[i].get("data", {}).items():
                         if hasattr(comp, "data") and isinstance(comp.data, dict):
                             comp.data[key] = value
 
                 pii_scrubbed = True
-                logger.info(
-                    "Scrubbed PII from full_traces %s (hash: %s...)",
-                    trace.trace_id, original_content_hash[:16]
-                )
+
+                if request.trace_level == "full_traces":
+                    # Re-sign scrubbed content with the CIRISLens scrub key
+                    # for tamper-evidence on the post-scrub artifact.
+                    scrubber = get_scrubber()
+                    scrub_timestamp = datetime.now(UTC)
+                    scrub_key_id = scrubber.scrub_key_id
+                    if scrubber._signing_key:
+                        scrubbed_message = json.dumps(
+                            scrubbed_components, sort_keys=True
+                        ).encode('utf-8')
+                        from pii_scrubber import sign_content
+                        scrub_signature = sign_content(scrubbed_message, scrubber._signing_key)
+                    logger.info(
+                        "Scrubbed PII from full_traces %s (hash: %s...)",
+                        trace.trace_id, original_content_hash[:16],
+                    )
+                else:
+                    logger.debug("Scrubbed detailed trace %s", trace.trace_id)
 
             # =================================================================
             # SECURITY SANITIZATION - applies to ALL trace levels
