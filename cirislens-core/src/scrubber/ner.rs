@@ -196,14 +196,20 @@ mod backend {
         let source = ModelSource::from_env();
         match source.load() {
             Ok((model, tokenizer)) => {
-                log::info!(
+                let msg = format!(
                     "NER backend ready (candle / XLM-R): {} labels",
                     model.labels.len()
                 );
+                log::info!("{msg}");
+                // Also surface to stderr so it's visible without a configured
+                // logger (PyO3 callers don't always wire one up).
+                eprintln!("[cirislens_core] {msg}");
                 Some(Mutex::new(Backend { model, tokenizer }))
             }
             Err(e) => {
-                log::error!("NER backend load failed: {e:#}");
+                let msg = format!("NER backend load failed: {e:#}");
+                log::error!("{msg}");
+                eprintln!("[cirislens_core] {msg}");
                 None
             }
         }

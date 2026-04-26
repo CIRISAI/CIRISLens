@@ -147,9 +147,15 @@ mod tests {
         assert!(!out.stats.ner_ran);
     }
 
+    #[cfg(not(feature = "ner"))]
     #[test]
     fn full_traces_without_ner_rejects() {
-        // Without ner::is_configured() returning true, full_traces must fail loudly.
+        // Without the `ner` feature, `is_configured()` is hard-coded to
+        // false; full_traces must fail loudly. Gated under `cfg(not(feature
+        // = "ner"))` because under `--features ner` a cached model on disk
+        // (e.g. `CIRISLENS_NER_MODEL_DIR` set, or HF cache populated)
+        // legitimately makes the backend ready and this assertion would
+        // misfire.
         let trace = json!({"task_description": "anything"});
         let result = scrub_trace(trace, TraceLevel::FullTraces);
         assert!(matches!(result, Err(ScrubError::NerNotConfigured)));
