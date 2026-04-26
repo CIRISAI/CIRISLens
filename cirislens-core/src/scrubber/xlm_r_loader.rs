@@ -104,9 +104,22 @@ impl XLMRTokenClassifier {
             candle_nn::linear(candle_config.hidden_size, num_labels, vb.pp("classifier"))
                 .context("classifier head linear")?;
 
-        // 4. Tokenizer.
-        let tokenizer = Tokenizer::from_file(tokenizer_path)
+        // 4. Tokenizer. Configure truncation at 512 tokens as a backstop:
+        //    chunked NER (`scrubber::ner`) keeps each chunk below 384 raw
+        //    tokens already, but if BPE re-fragmentation pushes any chunk
+        //    over 512, truncation prevents the forward pass from
+        //    out-of-bounds-indexing the position embeddings (XLM-R caps
+        //    at position 513, sequence length 514).
+        let mut tokenizer = Tokenizer::from_file(tokenizer_path)
             .map_err(|e| anyhow!("Tokenizer::from_file: {e}"))?;
+        tokenizer
+            .with_truncation(Some(tokenizers::TruncationParams {
+                max_length: 512,
+                strategy: tokenizers::TruncationStrategy::LongestFirst,
+                stride: 0,
+                direction: tokenizers::TruncationDirection::Right,
+            }))
+            .map_err(|e| anyhow!("set truncation: {e}"))?;
 
         Ok((
             Self {

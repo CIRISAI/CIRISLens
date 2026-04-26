@@ -219,12 +219,21 @@ mod backend {
         BACKEND.get_or_init(init).is_some()
     }
 
-    /// XLM-R hard caps at 512 positional embeddings (with 2 special tokens
-    /// → 510 effective). Texts longer than that have to be chunked: tokenize
-    /// the whole input once, walk it in 510-token windows, run NER on each
-    /// window, then translate per-window byte offsets back to the original
-    /// text and merge.
-    const MAX_TOKENS_PER_CHUNK: usize = 510;
+    /// XLM-R hard caps at 514 positional embeddings (12 above the 512
+    /// content tokens). Texts longer than that get chunked.
+    ///
+    /// The window has to leave generous margin against re-tokenization
+    /// variance: when we slice the original text on a token boundary
+    /// from the *full* encoding and then re-encode that slice, BPE can
+    /// produce a different (usually larger) token count because the
+    /// missing left context changes how subwords merge. Reproducible
+    /// real-world case: a 232-char Amharic field that the full encoding
+    /// resolves to ~210 tokens re-encodes to >280. With a 510-token
+    /// window plus 2 special tokens the re-encode pushes past 514 and
+    /// the forward pass errors out. A 384-token window leaves >100
+    /// tokens of safety; the tokenizer-side `with_truncation(512)`
+    /// added in the loader is the second backstop.
+    const MAX_TOKENS_PER_CHUNK: usize = 384;
 
     pub fn scrub(text: &str, stats: &mut ScrubStats) -> Result<String, ScrubError> {
         let backend = BACKEND
