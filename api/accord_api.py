@@ -36,6 +36,15 @@ try:
 except ImportError:
     from api.pii_scrubber import get_scrubber, scrub_dict_recursive
 
+# Scrubbing v2 shadow-mode harness (FSD §8 R3.4). When v2's Rust core is
+# loaded the same input is run through both scrubbers and divergences are
+# logged for offline classification (R3.5). v1's output remains what gets
+# persisted until promotion (Stage 4).
+try:
+    from scrubber_compare import compare_and_persist as _scrub_compare_and_persist
+except ImportError:
+    from api.scrubber_compare import compare_and_persist as _scrub_compare_and_persist
+
 try:
     from security_sanitizer import (
         sanitize_trace_for_storage,
@@ -1946,13 +1955,36 @@ async def receive_accord_events(
                 ).encode('utf-8')
                 original_content_hash = hashlib.sha256(original_message).hexdigest()
 
-                # Scrub PII from each component's data
+                # Scrub PII from each component's data. The
+                # `compare_and_persist` call runs v1 (Python spaCy) and
+                # v2 (Rust core) in parallel when v2 is available, logs
+                # any divergence to the configured sink for R3.5
+                # classification, and returns v1's output — v1 remains
+                # the persistence source-of-truth until Stage 4 promotion.
+                # If v2 isn't loaded the call collapses to v1 directly.
                 scrubbed_components = []
+                v1_failed = False
                 for comp in trace.components:
                     comp_dict = comp.model_dump()
                     if "data" in comp_dict:
-                        comp_dict["data"] = scrub_dict_recursive(comp_dict["data"])
+                        scrubbed_data = _scrub_compare_and_persist(
+                            comp_dict["data"],
+                            request.trace_level,
+                            trace_id=trace.trace_id,
+                        )
+                        if scrubbed_data is None:
+                            # v1 itself errored → reject the trace per
+                            # FSD §1: no unscrubbed text touches storage.
+                            v1_failed = True
+                            break
+                        comp_dict["data"] = scrubbed_data
                     scrubbed_components.append(comp_dict)
+
+                if v1_failed:
+                    rejected += 1
+                    rejected_traces.append(trace.trace_id)
+                    errors.append(f"{trace.trace_id}: scrubber rejected the trace")
+                    continue
 
                 # Re-sign scrubbed content with CIRISLens key
                 scrub_timestamp = datetime.now(UTC)

@@ -214,9 +214,18 @@ def compare_and_persist(
     """
     v1_value, record = compare(trace, level, trace_id=trace_id)
 
-    # Only emit divergence records when there's something interesting:
-    # any non-trivial outcome class.
-    if record["shape"] != "both" or not record["value_eq"]:
+    # Filter rules for the divergence sink:
+    #   - both ran + agreed: nothing to log (the happy path).
+    #   - v2 not_configured: expected during the rollout window, not a
+    #     divergence to investigate. Skip so we don't drown the sink.
+    #   - both ran + disagreed: log (this is the real signal R3.5
+    #     classifies).
+    #   - v1 errored / v2 errored: log (always interesting).
+    skip = (
+        (record["shape"] == "both" and record["value_eq"])
+        or record["v2_status"] == "not_configured"
+    )
+    if not skip:
         log_divergence(record)
 
     return v1_value
