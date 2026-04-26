@@ -283,44 +283,116 @@ A `tests/scrubber/` directory holds ~50 hand-picked traces covering:
 Each input has a frozen "expected scrubbed" output. CI fails on any drift —
 intentional change requires updating the golden file in the same commit.
 
-## 8. Migration plan
+## 8. Critical path
 
-### Phase 1 — parallel run (1 week)
+Requirements are listed in waterfall stages — each stage is unblocked when
+the previous stage's requirements are met. Within a stage, items marked
+**[parallel]** can be developed concurrently; items marked **[serial]**
+must follow the prior item in the same stage.
 
-- Land v2 behind a feature flag (`SCRUBBER_VERSION=v2|v1`, default `v1`).
-- All ingest writes go through the existing v1 path.
-- v2 also runs on every trace; outputs compared against v1, divergences logged
-  but not acted on.
-- After 1 week, evaluate: percentage of traces where v2 output differs from v1,
-  classify each class of difference (improvement / regression / equivalent).
+### Stage 0 — Foundation (currently shipped in `d8413e5`)
 
-### Phase 2 — promotion (1 day)
+- ✅ **R0.1** Regex patterns (structured PII + year + year-identifier)
+- ✅ **R0.2** `SCRUB_FIELDS` authoritative list
+- ✅ **R0.3** Subtree walker (lists-of-strings bug fixed; depth-limited)
+- ✅ **R0.4** `TraceLevel` routing
+- ✅ **R0.5** `ScrubError` taxonomy + fail-loud invariants
+- ✅ **R0.6** Year-residue + operator-probe invariant checks
+- ✅ **R0.7** Crate scaffold + 19 unit tests passing
 
-- Flip default to `SCRUBBER_VERSION=v2`.
-- v1 path still exists, can be toggled back via env var.
-- Monitor reject rate and downstream Grafana dashboards for 48 hours.
+### Stage 1 — NER inference (unblocks full_traces persistence)
 
-### Phase 3 — cleanup (after 30 days at v2 default)
+All R1.x can be developed **[parallel]** with each other; only R1.5 is **[serial]**.
 
-- Delete v1 Python scrubber.
-- Delete the parallel-run comparison code.
-- Update `pii_scrubber.py` to a thin shim that calls the Rust path
-  (preserved for backwards-compatible imports).
+- **R1.1** **[parallel]** ONNX runtime integration. Add `ort = "2"` and
+  initialize a per-process `Session`. Pool size matches Uvicorn worker count.
+- **R1.2** **[parallel]** Tokenizer integration. Add `tokenizers = "0.20"`,
+  load XLM-R SentencePiece BPE vocabulary. Confirm coverage across all 29
+  CIRIS scripts via tokenizer round-trip test.
+- **R1.3** **[parallel]** NER model export pipeline. Convert
+  `Davlan/xlm-roberta-base-wikiann-ner` to ONNX, INT8-quantize, bundle
+  under `cirislens-core/models/`. One-shot tooling (Python script in
+  `scripts/`); the .onnx artifact is the deliverable.
+- **R1.4** **[parallel]** Span alignment. Map sub-token entity predictions
+  back to character offsets in the original string. Standard BIO-tag
+  collapse; well-known logic.
+- **R1.5** **[serial, after R1.1+R1.2+R1.3+R1.4]** Implement
+  `ner::scrub_with_ner` end-to-end and flip `is_configured()` to `true`
+  when the session loads.
 
-### Phase 4 — historical re-scrub (one-time, post-promotion)
+### Stage 2 — Pipeline integration (unblocks production deployment)
 
-The existing TimescaleDB tables contain traces scrubbed under v1 rules
-(year-retaining, single-language, walker-bug-affected). Run a one-shot
-job that:
+- **R2.1** **[parallel]** PyO3 binding. Expose
+  `cirislens_core.scrub_trace(trace_dict, level: str) -> trace_dict`
+  from Rust. Map `ScrubError` to Python exceptions.
+- **R2.2** **[parallel]** Trace handler refactor. Consume the input
+  trace; only the value returned by the scrubber is passed forward.
+  Rust ownership prevents accidental pre-scrub writes.
+- **R2.3** **[serial, after R2.1+R2.2]** Storage signature change. Type
+  the persistence layer to require `ScrubbedTrace`, not raw `Value`, so
+  any pre-scrub write fails to compile.
 
-1. Reads each row from `cirislens.accord_traces` where `trace_level IN ('detailed', 'full_traces')` and `scrub_version != 'v2'`
-2. Re-applies the v2 scrubber to the in-memory record
-3. Compares to the stored row; if different, writes the new scrubbed version
-4. Updates `scrub_version`, `scrub_timestamp`, `scrub_signature` columns
-5. Logs progress; throttled to avoid impact on live ingest
+### Stage 3 — Verification (unblocks promotion)
 
-Estimated runtime: ~2 hours on a single CPU at 200 traces/sec, against the
-current ~3,000-trace corpus.
+- **R3.1** **[parallel, after Stage 0]** Property tests: idempotence,
+  no-text-no-change, generic invariance, entity-preservation.
+- **R3.2** **[parallel, after Stage 1]** Golden corpus: ~50 traces
+  covering 29 languages × major entity types × known-difficult contexts.
+  Each input has a frozen expected output; CI fails on any drift.
+- **R3.3** **[parallel, after Stage 1]** Performance benchmark.
+  Verify ≤2 ms NER per text, ≥200 traces/sec single-worker, ≤100 MB
+  resident memory. Run on representative trace mix from the existing
+  corpus.
+- **R3.4** **[parallel, after Stage 2]** Parallel-run comparison
+  harness. Behind a feature flag, run v1 (Python) and v2 (Rust) on the
+  same trace; emit a divergence report. v1 result is what gets persisted
+  during this stage; v2 output is observed only.
+- **R3.5** **[serial, after R3.4 has produced data]** Divergence
+  classification. Each class of difference between v1 and v2 must be
+  labeled improvement / regression / equivalent. Promotion is gated on
+  zero regressions.
+
+### Stage 4 — Promotion (single switch)
+
+- **R4.1** Flip the feature flag default from v1 to v2. Both paths
+  remain in source; toggle is reversible without code change.
+- **R4.2** Acceptance gate (FSD §11) verified on production traffic.
+  All criteria green for an operator-defined soak window before R4.3.
+- **R4.3** v1 path declared deprecated; future commits only land in v2.
+
+### Stage 5 — Cleanup (lazy; doesn't block production)
+
+- **R5.1** Delete v1 Python scrubber. `pii_scrubber.py` becomes a thin
+  PyO3-call shim for backwards-compatible imports, or is removed
+  outright if no callers remain.
+- **R5.2** Delete the parallel-run comparison code (R3.4 harness) and
+  the feature flag.
+- **R5.3** Documentation pass: README + CLAUDE.md reflect v2 as the
+  only scrubber.
+
+### Stage 6 — Historical re-scrub (lazy; doesn't block production)
+
+The TimescaleDB tables contain traces scrubbed under v1 rules.
+
+- **R6.1** **[serial]** Add `scrub_version` column to `accord_traces`.
+  Default `'v1'`. Index for filter efficiency.
+- **R6.2** **[serial, after R6.1]** Re-scrub job. Reads rows where
+  `scrub_version != 'v2'` and `trace_level IN ('detailed', 'full_traces')`,
+  re-applies the v2 scrubber, writes the new value, updates
+  `scrub_version` + `scrub_timestamp` + `scrub_signature`. Throttled to
+  avoid live-ingest contention.
+- **R6.3** **[parallel, after R6.1]** Decide re-sign policy: re-sign
+  with current scrub key (preserves provenance under new rules) vs.
+  preserve old scrubbed version + new in parallel columns (audit-friendly).
+  This is an open question (§10) that needs a decision before R6.2 runs
+  at scale.
+
+### Critical path
+
+The minimum unblock-production path is: **R0.x → R1.5 → R2.3 → R3.5 → R4.1**.
+
+Everything else (Stage 5 cleanup, Stage 6 historical re-scrub, R3.1–R3.3
+verification) is parallelizable around or lazy after that path.
 
 ## 9. Out of scope (for v2)
 
@@ -354,7 +426,7 @@ current ~3,000-trace corpus.
 
 4. **One-shot historical re-scrub policy**: re-sign with new `scrub_key_id`?
    Preserve old scrubbed version + new in parallel columns? Decision required
-   before phase 4.
+   before R6.2 runs at scale (referenced as R6.3).
 
 ## 11. Acceptance criteria
 
