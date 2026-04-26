@@ -8,7 +8,10 @@ authors = ["CIRIS Team"]
 
 [lib]
 name = "cirislens_core"
-crate-type = ["cdylib"]
+# `cdylib` for the PyO3 extension module shipped as `cirislens_core.so`.
+# `rlib` so benches and integration tests can link against the crate's
+# public API directly.
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 # Python bindings
@@ -71,11 +74,15 @@ ner = ["dep:candle-core", "dep:candle-nn", "dep:candle-transformers", "dep:hf-hu
 
 [dev-dependencies]
 proptest = "1.4"
-# criterion = "0.5"  # Uncomment when adding benchmarks
+criterion = { version = "0.5", default-features = false, features = ["html_reports"] }
 
-# [[bench]]
-# name = "ingestion_bench"
-# harness = false
+# R3.3 — scrubber throughput benchmark. Default build runs the regex-only
+# (Detailed) path; the NER path is wired behind `--features ner` so the
+# benchmark binary can also report full-pipeline numbers when model
+# weights are available.
+[[bench]]
+name = "scrubber_bench"
+harness = false
 
 [profile.release]
 opt-level = 3

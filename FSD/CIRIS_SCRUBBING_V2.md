@@ -342,19 +342,29 @@ All R1.x can be developed **[parallel]** with each other; only R1.5 is **[serial
 
 ### Stage 3 — Verification (unblocks promotion)
 
-- **R3.1** **[parallel, after Stage 0]** Property tests: idempotence,
-  no-text-no-change, generic invariance, entity-preservation.
+- **R3.1** ✅ **[parallel, after Stage 0]** Property tests: idempotence,
+  no-text-no-change, generic invariance, entity-preservation, year-residue
+  invariant. Implemented in `cirislens-core/src/scrubber/proptests.rs`
+  (5 properties, 256 cases each; proptest regression seeds checked in).
+  Walker contract tightened: regex applies globally; NER stays scoped.
 - **R3.2** **[parallel, after Stage 1]** Golden corpus: ~50 traces
   covering 29 languages × major entity types × known-difficult contexts.
   Each input has a frozen expected output; CI fails on any drift.
-- **R3.3** **[parallel, after Stage 1]** Performance benchmark.
-  Verify ≤2 ms NER per text, ≥200 traces/sec single-worker, ≤100 MB
-  resident memory. Run on representative trace mix from the existing
-  corpus.
-- **R3.4** **[parallel, after Stage 2]** Parallel-run comparison
-  harness. Behind a feature flag, run v1 (Python) and v2 (Rust) on the
-  same trace; emit a divergence report. v1 result is what gets persisted
-  during this stage; v2 output is observed only.
+- **R3.3** ✅ **[parallel, after Stage 1]** Performance benchmark
+  (`cirislens-core/benches/scrubber_bench.rs`, criterion). Initial
+  numbers on the regex path (no NER): tiny trace 5.3 µs, realistic
+  65 µs, large 275 µs — i.e. 3.6 K traces/sec on the worst case,
+  ≥18× over the 200 traces/sec target. NER group is wired behind
+  `--features ner` and reports `not_configured` when model weights
+  are absent, so the bench remains CI-runnable without a 1 GB
+  download. Memory and per-text NER timing get measured once the
+  model lands locally.
+- **R3.4** ✅ **[parallel, after Stage 2]** Parallel-run comparison
+  harness. Implemented in `api/scrubber_compare.py`: classifies every
+  pair into {v1_only, v2_only, both, neither}, emits structured JSONL
+  divergence records, ships with `compare_and_persist()` for in-process
+  shadow mode and a CLI for offline corpus replay. v1 result remains
+  the persistence path during this stage.
 - **R3.5** **[serial, after R3.4 has produced data]** Divergence
   classification. Each class of difference between v1 and v2 must be
   labeled improvement / regression / equivalent. Promotion is gated on
