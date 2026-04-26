@@ -15,6 +15,9 @@ pub mod ner;
 pub mod regex;
 pub mod walker;
 
+#[cfg(feature = "ner")]
+pub mod xlm_r_loader;
+
 pub use fields::SCRUB_FIELDS;
 
 /// Trace privacy level — controls which scrub passes run.

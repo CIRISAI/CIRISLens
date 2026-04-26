@@ -77,6 +77,7 @@ pub fn scrub_with_ner(text: &str, stats: &mut ScrubStats) -> Result<String, Scru
 
 /// Collapse BIO-tagged sub-tokens into character-offset entity spans.
 /// Returns `(start_byte, end_byte, tag)` triples in token order.
+#[cfg_attr(not(any(feature = "ner", test)), allow(dead_code))]
 pub(crate) fn collapse_bio(
     label_ids: &[usize],
     offsets: &[(usize, usize)],
@@ -126,6 +127,7 @@ pub(crate) fn collapse_bio(
 
 /// Replace byte-offset spans with `[<TAG>_<n>]` placeholders. Per-tag
 /// counter so two PERSON spans become `[PER_1]` and `[PER_2]`.
+#[cfg_attr(not(any(feature = "ner", test)), allow(dead_code))]
 pub(crate) fn replace_spans(
     text: &str,
     spans: &[(usize, usize, String)],
@@ -166,20 +168,100 @@ pub(crate) fn replace_spans(
 
 #[cfg(feature = "ner")]
 mod backend {
-    //! candle-based XLM-R NER inference. Currently a stub that returns
-    //! [`ScrubError::NerNotConfigured`] — the call sites are wired but
-    //! model loading is not yet implemented. See module docstring above
-    //! for the remaining steps.
+    //! candle-based XLM-R NER inference.
+    //!
+    //! Lazy-loads model + tokenizer from HF Hub (or a local dir via
+    //! `CIRISLENS_NER_MODEL_DIR`). On first call, attempts to construct
+    //! the backend; on success caches it; on failure logs and stays
+    //! unconfigured (full_traces traces will be rejected).
 
-    use super::{ScrubError, ScrubStats};
+    use super::{collapse_bio, replace_spans, ScrubError, ScrubStats};
+    use crate::scrubber::xlm_r_loader::{ModelSource, XLMRTokenClassifier};
+    use candle_core::Tensor;
+    use parking_lot::Mutex;
+    use std::sync::OnceLock;
+    use tokenizers::Tokenizer;
 
-    pub fn is_configured() -> bool {
-        // Will return true once xlm_r_loader successfully loads weights.
-        false
+    /// Per-process backend. `OnceLock` ensures init runs at most once;
+    /// `Mutex` serializes concurrent inference calls (candle is not
+    /// thread-safe by default for shared models without external sync).
+    static BACKEND: OnceLock<Option<Mutex<Backend>>> = OnceLock::new();
+
+    struct Backend {
+        model: XLMRTokenClassifier,
+        tokenizer: Tokenizer,
     }
 
-    pub fn scrub(_text: &str, _stats: &mut ScrubStats) -> Result<String, ScrubError> {
-        Err(ScrubError::NerNotConfigured)
+    fn init() -> Option<Mutex<Backend>> {
+        let source = ModelSource::from_env();
+        match source.load() {
+            Ok((model, tokenizer)) => {
+                log::info!(
+                    "NER backend ready (candle / XLM-R): {} labels",
+                    model.labels.len()
+                );
+                Some(Mutex::new(Backend { model, tokenizer }))
+            }
+            Err(e) => {
+                log::error!("NER backend load failed: {e:#}");
+                None
+            }
+        }
+    }
+
+    pub fn is_configured() -> bool {
+        BACKEND.get_or_init(init).is_some()
+    }
+
+    pub fn scrub(text: &str, stats: &mut ScrubStats) -> Result<String, ScrubError> {
+        let backend = BACKEND
+            .get_or_init(init)
+            .as_ref()
+            .ok_or(ScrubError::NerNotConfigured)?;
+        let backend = backend.lock();
+
+        // 1. Tokenize. Capture char offsets for span mapping.
+        let encoding = backend
+            .tokenizer
+            .encode(text, true)
+            .map_err(|e| ScrubError::NerFailed(format!("tokenize: {e}")))?;
+        let ids: Vec<i64> = encoding.get_ids().iter().map(|&x| x as i64).collect();
+        let mask: Vec<i64> = encoding
+            .get_attention_mask()
+            .iter()
+            .map(|&x| x as i64)
+            .collect();
+        let n = ids.len();
+        if n == 0 {
+            return Ok(text.to_string());
+        }
+
+        // 2. Build input tensors. Shape: [batch=1, seq_len].
+        let device = &backend.model.device;
+        let input_ids = Tensor::from_vec(ids, (1, n), device)
+            .map_err(|e| ScrubError::NerFailed(format!("ids tensor: {e}")))?;
+        let attention_mask = Tensor::from_vec(mask, (1, n), device)
+            .map_err(|e| ScrubError::NerFailed(format!("mask tensor: {e}")))?;
+
+        // 3. Forward → logits [seq_len, num_labels].
+        let logits = backend
+            .model
+            .forward(&input_ids, &attention_mask)
+            .map_err(|e| ScrubError::NerFailed(format!("forward: {e:#}")))?;
+
+        // 4. Argmax over label axis → label IDs per token.
+        let label_ids_tensor = logits
+            .argmax(1)
+            .map_err(|e| ScrubError::NerFailed(format!("argmax: {e}")))?;
+        let label_ids_u32: Vec<u32> = label_ids_tensor
+            .to_vec1::<u32>()
+            .map_err(|e| ScrubError::NerFailed(format!("argmax to_vec: {e}")))?;
+        let label_ids: Vec<usize> = label_ids_u32.iter().map(|&x| x as usize).collect();
+
+        // 5. BIO collapse → byte-offset entity spans → placeholder replacement.
+        let offsets = encoding.get_offsets();
+        let spans = collapse_bio(&label_ids, offsets, &backend.model.labels);
+        Ok(replace_spans(text, &spans, stats))
     }
 }
 
