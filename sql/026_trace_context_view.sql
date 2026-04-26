@@ -108,6 +108,14 @@ SELECT
     (b.correlation_metadata->>'user_longitude')::numeric(5,1)
         AS user_longitude_cell,
 
+    -- Agent version (from snapshot_and_context — flat or nested)
+    -- Critical for splitting analysis when trailing agent versions are in the wild
+    -- (e.g., max_ponder_depth=5 vs depth=7 cohorts coexist for months).
+    COALESCE(
+        t.snapshot_and_context->>'agent_version',
+        t.snapshot_and_context->'system_snapshot'->>'agent_version'
+    ) AS agent_version,
+
     -- Primary model (first element of models_used array)
     CASE
         WHEN t.models_used IS NULL                  THEN NULL
