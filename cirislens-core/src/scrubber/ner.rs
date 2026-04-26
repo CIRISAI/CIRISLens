@@ -219,6 +219,13 @@ mod backend {
         BACKEND.get_or_init(init).is_some()
     }
 
+    /// XLM-R hard caps at 512 positional embeddings (with 2 special tokens
+    /// → 510 effective). Texts longer than that have to be chunked: tokenize
+    /// the whole input once, walk it in 510-token windows, run NER on each
+    /// window, then translate per-window byte offsets back to the original
+    /// text and merge.
+    const MAX_TOKENS_PER_CHUNK: usize = 510;
+
     pub fn scrub(text: &str, stats: &mut ScrubStats) -> Result<String, ScrubError> {
         let backend = BACKEND
             .get_or_init(init)
@@ -226,11 +233,53 @@ mod backend {
             .ok_or(ScrubError::NerNotConfigured)?;
         let backend = backend.lock();
 
-        // 1. Tokenize. Capture char offsets for span mapping.
+        // 1. Tokenize the WHOLE text without truncation. Use offsets from
+        //    this single encode to slice the original text into safe chunks.
+        let full = backend
+            .tokenizer
+            .encode(text, false) // skip special tokens; we add them per-chunk
+            .map_err(|e| ScrubError::NerFailed(format!("tokenize: {e}")))?;
+        let total = full.get_ids().len();
+        if total == 0 {
+            return Ok(text.to_string());
+        }
+        let full_offsets = full.get_offsets();
+
+        // 2. Walk in MAX_TOKENS_PER_CHUNK windows and run NER on each chunk.
+        let mut all_spans: Vec<(usize, usize, String)> = Vec::new();
+        let mut tok_start = 0usize;
+        while tok_start < total {
+            let tok_end = (tok_start + MAX_TOKENS_PER_CHUNK).min(total);
+            // Map token window → byte window in the original text.
+            let byte_start = full_offsets[tok_start].0;
+            let byte_end = full_offsets[tok_end - 1].1;
+            // Defensive: empty char-range or special-token-only chunk.
+            if byte_end <= byte_start {
+                tok_start = tok_end;
+                continue;
+            }
+            let chunk = &text[byte_start..byte_end];
+            let chunk_spans = run_chunk(&backend, chunk)?;
+            // Translate chunk-relative offsets back to global.
+            for (s, e, tag) in chunk_spans {
+                all_spans.push((s + byte_start, e + byte_start, tag));
+            }
+            tok_start = tok_end;
+        }
+
+        Ok(replace_spans(text, &all_spans, stats))
+    }
+
+    /// Run a single forward pass over a text chunk that's already known to
+    /// fit inside the 512-token limit. Returns chunk-relative spans.
+    fn run_chunk(
+        backend: &Backend,
+        chunk: &str,
+    ) -> Result<Vec<(usize, usize, String)>, ScrubError> {
         let encoding = backend
             .tokenizer
-            .encode(text, true)
-            .map_err(|e| ScrubError::NerFailed(format!("tokenize: {e}")))?;
+            .encode(chunk, true) // add special tokens for the forward pass
+            .map_err(|e| ScrubError::NerFailed(format!("tokenize chunk: {e}")))?;
         let ids: Vec<i64> = encoding.get_ids().iter().map(|&x| x as i64).collect();
         let mask: Vec<i64> = encoding
             .get_attention_mask()
@@ -239,23 +288,20 @@ mod backend {
             .collect();
         let n = ids.len();
         if n == 0 {
-            return Ok(text.to_string());
+            return Ok(Vec::new());
         }
 
-        // 2. Build input tensors. Shape: [batch=1, seq_len].
         let device = &backend.model.device;
         let input_ids = Tensor::from_vec(ids, (1, n), device)
             .map_err(|e| ScrubError::NerFailed(format!("ids tensor: {e}")))?;
         let attention_mask = Tensor::from_vec(mask, (1, n), device)
             .map_err(|e| ScrubError::NerFailed(format!("mask tensor: {e}")))?;
 
-        // 3. Forward → logits [seq_len, num_labels].
         let logits = backend
             .model
             .forward(&input_ids, &attention_mask)
             .map_err(|e| ScrubError::NerFailed(format!("forward: {e:#}")))?;
 
-        // 4. Argmax over label axis → label IDs per token.
         let label_ids_tensor = logits
             .argmax(1)
             .map_err(|e| ScrubError::NerFailed(format!("argmax: {e}")))?;
@@ -264,10 +310,8 @@ mod backend {
             .map_err(|e| ScrubError::NerFailed(format!("argmax to_vec: {e}")))?;
         let label_ids: Vec<usize> = label_ids_u32.iter().map(|&x| x as usize).collect();
 
-        // 5. BIO collapse → byte-offset entity spans → placeholder replacement.
         let offsets = encoding.get_offsets();
-        let spans = collapse_bio(&label_ids, offsets, &backend.model.labels);
-        Ok(replace_spans(text, &spans, stats))
+        Ok(collapse_bio(&label_ids, offsets, &backend.model.labels))
     }
 }
 
