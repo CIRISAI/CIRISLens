@@ -233,6 +233,64 @@ fn check_cache_status() -> PyResult<(bool, bool, Option<u64>, Option<u64>)> {
     ))
 }
 
+/// Scrubbing v2 entry point — the only path to persistence for trace text.
+///
+/// Takes a JSON-serialized trace and a level string, runs the scrubber, and
+/// returns a JSON-serialized scrubbed trace. JSON-string interface (rather
+/// than PyDict) matches the existing `process_trace_batch` pattern and
+/// avoids PyDict↔serde conversion overhead per call.
+///
+/// # Errors
+/// - `ValueError` if `level` is not one of `generic` / `detailed` / `full_traces`
+/// - `RuntimeError` if scrubbing fails (NER not configured for full_traces,
+///   walker depth exceeded, year-residue invariant violation, operator
+///   probe match — see FSD §6 failure modes)
+///
+/// Per FSD invariant: any error means the trace MUST be rejected. The
+/// caller must propagate the exception and never persist the input.
+///
+/// # Returns
+/// JSON string of the scrubbed trace, plus a stats dict with redaction
+/// counts.
+#[pyfunction]
+fn scrub_trace(py: Python<'_>, trace_json: &str, level: &str) -> PyResult<Py<PyAny>> {
+    use pyo3::exceptions::{PyRuntimeError, PyValueError};
+
+    let trace_value: serde_json::Value = serde_json::from_str(trace_json)
+        .map_err(|e| PyValueError::new_err(format!("invalid trace JSON: {e}")))?;
+
+    let trace_level = scrubber::TraceLevel::from_str(level)
+        .map_err(|e| PyValueError::new_err(format!("{e}")))?;
+
+    let scrubbed = scrubber::scrub_trace(trace_value, trace_level)
+        .map_err(|e| PyRuntimeError::new_err(format!("scrub failed: {e}")))?;
+
+    let scrubbed_json = serde_json::to_string(&scrubbed.value)
+        .map_err(|e| PyRuntimeError::new_err(format!("scrubbed serialize: {e}")))?;
+
+    let result = PyDict::new(py);
+    result.set_item("trace", scrubbed_json)?;
+    result.set_item("level", level)?;
+
+    let stats = PyDict::new(py);
+    stats.set_item("entities_redacted", scrubbed.stats.entities_redacted)?;
+    stats.set_item("regex_redactions", scrubbed.stats.regex_redactions)?;
+    stats.set_item("fields_modified", scrubbed.stats.fields_modified)?;
+    stats.set_item("walker_max_depth", scrubbed.stats.walker_max_depth)?;
+    stats.set_item("ner_ran", scrubbed.stats.ner_ran)?;
+    result.set_item("stats", stats)?;
+
+    Ok(result.into())
+}
+
+/// Returns whether the NER backend is configured and ready. Python ingest
+/// path uses this to decide whether to call into Rust or fall back to the
+/// Python scrubber for `full_traces` traces during the migration window.
+#[pyfunction]
+fn ner_is_configured() -> PyResult<bool> {
+    Ok(scrubber::ner::is_configured())
+}
+
 /// Python module definition
 #[pymodule]
 fn cirislens_core(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
@@ -244,5 +302,7 @@ fn cirislens_core(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(refresh_public_key_cache, m)?)?;
     m.add_function(wrap_pyfunction!(get_public_key_count, m)?)?;
     m.add_function(wrap_pyfunction!(check_cache_status, m)?)?;
+    m.add_function(wrap_pyfunction!(scrub_trace, m)?)?;
+    m.add_function(wrap_pyfunction!(ner_is_configured, m)?)?;
     Ok(())
 }

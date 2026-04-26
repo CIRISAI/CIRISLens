@@ -110,11 +110,19 @@ regex-only — see §6 (failure modes).
 
 ### 4.2 NER pass (full_traces only)
 
-**Model**: XLM-RoBERTa fine-tuned on WikiAnn NER, exported to ONNX, quantized
-INT8. Initial deployment uses
+**Inference framework**: [`candle`](https://github.com/huggingface/candle),
+HuggingFace's pure-Rust ML framework. Selected over ONNX runtime crates
+after evaluation: native XLM-R support (no ONNX export round-trip),
+HF-maintained (same shop as the model weights), pure Rust + optional
+CUDA/Metal acceleration, immune to the ort/ort-sys version-skew problems
+that block tagged ONNX runtime releases. See §10 open-question 1 for
+the rejected alternatives.
+
+**Model**: XLM-RoBERTa fine-tuned on WikiAnn NER. Initial deployment uses
 [Davlan/xlm-roberta-base-wikiann-ner](https://huggingface.co/Davlan/xlm-roberta-base-wikiann-ner)
 (20 fine-tuned languages, 100 pre-trained languages → reasonable zero-shot
-transfer to the remaining 9 CIRIS languages).
+transfer to the remaining 9 CIRIS languages). Loaded directly from HF Hub
+via the `hf-hub` crate as `safetensors`; no ONNX export needed.
 
 **Entity classes redacted** (all replaced with `[<TYPE>_<n>]` placeholders):
 
@@ -412,21 +420,42 @@ verification) is parallelizable around or lazy after that path.
 
 ## 10. Open questions
 
-1. **Tokenizer choice**: `tokenizers` (rust crate from HF) is the obvious pick,
-   but does it support all 29 CIRIS scripts via XLM-R's SentencePiece BPE?
-   Verify with golden corpus before promotion.
+1. **Inference framework: candle (resolved)**. Original draft assumed
+   `ort` (Rust ONNX Runtime bindings). After evaluation the decision is
+   `candle`. Rejected alternatives:
+   - **`ort` 2.0.0-rc.\***: tagged releases have version-skew bugs between
+     `ort` and `ort-sys`; rc.10 has TLS issues with `download-binaries`,
+     rc.12 has the `SessionOptionsAppendExecutionProvider_VitisAI` field
+     mismatch (fix merged to main but not released), rc.9 fails 263 ways.
+     `ort = "1.16"` is yanked. Workable only by pinning to a git rev,
+     which is not deterministic enough for prod.
+   - **`tract-onnx`**: production-proven (Sonos), pure-Rust, would be the
+     fallback if candle's NER head needs work. Rejected only because
+     candle eliminates the ONNX layer entirely.
+   - **`wonnx`**: dead — last commit 2024-05.
+   - **PyO3-to-spaCy**: defeats the architecture; ships Python interpreter
+     to the edge.
 
-2. **Quantization accuracy**: INT8 quantization typically loses 1-3% F1 on NER.
-   For full_traces this is acceptable since regex catches most structured PII.
-   For unstructured PII in obscure languages, may need to retain FP16 fallback.
+   **Decision**: candle 0.10. Native XLM-R, no native deps,
+   HF-maintained, optional CUDA/Metal.
 
-3. **Concurrent inference**: ONNX Runtime in Rust supports session-per-thread.
-   Pool size = ingest worker count = 4 (matches Uvicorn config). Verify no
-   contention.
+2. **Tokenizer choice**: `tokenizers` 0.20 (HF rust crate) is the obvious
+   pick, but verify it covers all 29 CIRIS scripts via XLM-R's
+   SentencePiece BPE in the golden corpus before promotion.
 
-4. **One-shot historical re-scrub policy**: re-sign with new `scrub_key_id`?
-   Preserve old scrubbed version + new in parallel columns? Decision required
-   before R6.2 runs at scale (referenced as R6.3).
+3. **Quantization & precision**: candle supports F16, BF16, F32 natively.
+   Initial deployment will run F16 on CPU; ~2× memory savings vs F32, ~1%
+   F1 loss. Custom quantization (Q4/Q8 via `candle-quant`) is a follow-up
+   if memory or latency targets are missed.
+
+4. **Concurrent inference**: candle `Tensor` types are `Send` + `Sync` for
+   inference workloads when wrapped in an `Arc<Mutex<..>>`. Pool size =
+   ingest worker count = 4 (matches Uvicorn config). Verify no contention
+   under load.
+
+5. **One-shot historical re-scrub policy**: re-sign with new `scrub_key_id`?
+   Preserve old scrubbed version + new in parallel columns? Decision
+   required before R6.2 runs at scale (referenced as R6.3).
 
 ## 11. Acceptance criteria
 
