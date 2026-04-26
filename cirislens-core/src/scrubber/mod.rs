@@ -58,6 +58,10 @@ pub struct ScrubStats {
     pub walker_max_depth: usize,
     /// True if NER pass actually ran (only on FullTraces).
     pub ner_ran: bool,
+    /// Number of NER inputs served from the content cache (no model call).
+    pub ner_cache_hits: usize,
+    /// Number of NER inputs that missed the cache and went to the model.
+    pub ner_cache_misses: usize,
 }
 
 /// Output of a successful scrub. Holds owned JSON; the input is consumed.

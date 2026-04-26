@@ -278,6 +278,8 @@ fn scrub_trace(py: Python<'_>, trace_json: &str, level: &str) -> PyResult<Py<PyA
     stats.set_item("fields_modified", scrubbed.stats.fields_modified)?;
     stats.set_item("walker_max_depth", scrubbed.stats.walker_max_depth)?;
     stats.set_item("ner_ran", scrubbed.stats.ner_ran)?;
+    stats.set_item("ner_cache_hits", scrubbed.stats.ner_cache_hits)?;
+    stats.set_item("ner_cache_misses", scrubbed.stats.ner_cache_misses)?;
     result.set_item("stats", stats)?;
 
     Ok(result.into())
