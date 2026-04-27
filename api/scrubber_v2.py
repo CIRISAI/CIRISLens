@@ -35,6 +35,23 @@ try:
     _RUST_AVAILABLE = hasattr(cirislens_core, "scrub_trace")
     if _RUST_AVAILABLE:
         logger.info("Scrubber v2 (Rust core) loaded")
+        # Eager-load the NER backend at module import. Without this the
+        # backend stays lazy until the first `full_traces` request — meaning
+        # a misconfigured ort path (missing model, wrong ORT_DYLIB_PATH,
+        # incompatible onnxruntime) only surfaces on a real production
+        # POST. Forcing the load at startup gives the boot log the
+        # `[cirislens_core] NER backend ready (...)` signature operators
+        # rely on for deploy verification, and the orchestrator can roll
+        # back a broken image before traffic ever hits it.
+        try:
+            ner_ready = cirislens_core.ner_is_configured()
+            logger.info("Scrubber v2 NER backend eager-load: ner_ready=%s", ner_ready)
+        except Exception as e:
+            # Don't kill the worker on NER-init failure: detailed traces
+            # still scrub via the regex path. Log loud and keep going so
+            # the partial-coverage state is visible in operator dashboards
+            # rather than producing a hard boot failure.
+            logger.warning("Scrubber v2 NER eager-load raised: %s", e)
     else:
         logger.warning(
             "cirislens_core present but scrub_trace not exposed — rebuild required"
