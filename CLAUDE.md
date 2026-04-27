@@ -228,6 +228,67 @@ reads SQL from stdin (see script docstring). Analysis reads the
 columns on top of `accord_traces`. All trace analysis queries should
 read from `trace_context`, not `accord_traces` directly.
 
+### Measure Effective Independent Participatory Constraints (N_eff)
+
+The load-bearing measurement for the Proof-of-Benefit independence
+claim — see [FSD/PROOF_OF_BENEFIT_FEDERATION.md §2.4](FSD/PROOF_OF_BENEFIT_FEDERATION.md).
+Computes the participation ratio and entropy-perplexity of the
+eigenvalue spectrum of a z-scored 17-dim constraint vector. Two
+formulas:
+
+```
+participation_ratio:  N_eff_PR = (Σ λ_i)² / Σ λ_i²
+entropy_perplexity:   N_eff_H  = exp(-Σ p_i · log p_i)   p_i = λ_i / Σ λ_i
+```
+
+The 17-dim vector is drawn from `cirislens.trace_context`: CSDMA score,
+DSDMA domain alignment, raw coherence, raw entropy, IDMA k_eff, IDMA
+correlation_risk, post-IRIS entropy_score, post-IRIS coherence_score,
+opt_veto_entropy_ratio, epistemic_certainty, fragile flag, four
+gate-pass flags (entropy / coherence / opt_veto / epistemic_humility),
+overall conscience_pass, and overridden. Both N_eff measures saturate
+at the dimension count when variance is spread evenly; collapse toward
+1 when one mode dominates. Reporting both bounds the answer because PR
+penalizes concentration more aggressively than entropy-perplexity.
+
+```bash
+# Single-shot on the most recent N traces (mixed corpus — see caveat below)
+scripts/measure_n_eff.py --n 500
+scripts/measure_n_eff.py --n 1000
+
+# Organic-only (federation-primitive independence reading)
+scripts/measure_n_eff.py --filter-qa
+
+# Time-windowed
+scripts/measure_n_eff.py --window 24h
+scripts/measure_n_eff.py --agent Ally
+
+# Rolling time series across corpus lifetime (drift over time)
+scripts/measure_n_eff_rolling.py                    # 500-trace window, step 100
+scripts/measure_n_eff_rolling.py --window 1000 --step 200
+scripts/measure_n_eff_rolling.py --filter-qa
+scripts/measure_n_eff_rolling.py --csv > neff.csv
+scripts/measure_n_eff_rolling.py --plot neff.png    # quick PNG
+```
+
+**Methodology discipline.** QA / wakeup_ritual traffic deterministically
+stresses the same gates with identical-shape inputs; conscience-then-
+override on those classes is one constraint observed N times, not N
+independent constraints, so N_eff correctly compresses. **For the PoB
+anti-Sybil independence claim, run with `--filter-qa`.** The mixed-corpus
+reading is informative for measurement-system health and stationarity
+drift but is not the right number to cite for federation-primitive
+independence.
+
+**Reading the output.** The "PoB high water mark" line is the
+historical-best `N_eff_H` (entropy-perplexity) seen on this corpus —
+9.2 was the value at the breakthrough. The rolling tool reports
+`min`/`mean`/`median`/`max` over the lifetime so drift is visible
+across releases. PC1 loadings tell you which mode is dominant — the
+expected shape is "conscience-veto axis" (overridden vs conscience_pass
+anti-correlated) carrying ~25–30% of variance; sharp deviation from
+that shape is itself a signal worth investigating.
+
 ### View Agent Metrics
 ```promql
 # In Grafana, query Mimir datasource
