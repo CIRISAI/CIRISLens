@@ -1,5 +1,9 @@
 # CIRISLens Security Configuration
 
+This document covers operator-facing setup. For the architectural threat
+model (adversary capabilities, attack vectors, trust boundaries),
+see [`THREAT_MODEL.md`](THREAT_MODEL.md).
+
 ## Storing Agent Service Tokens
 
 CIRISLens uses environment variables to securely store agent service tokens. This keeps sensitive credentials out of the codebase and allows for different tokens in different environments.

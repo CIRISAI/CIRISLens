@@ -42,6 +42,12 @@ logger = logging.getLogger(__name__)
 # Disable docs in production
 IS_PRODUCTION = os.getenv("ENV", "").lower() == "production"
 
+# Body-size cap for the /accord/events ingest path (THREAT_MODEL.md AV-13).
+# Matches CIRISPersist's DefaultBodyLimit::max(8 MiB) — the largest production
+# fixture is the 3 MiB full_traces case (CIRISPersist tests/fixtures/wire/2.7.0/
+# full_traces_ed713366.json) with ~2.6× headroom.
+MAX_INGEST_BODY_BYTES = 8 * 1024 * 1024
+
 # Initialize FastAPI app
 app = FastAPI(
     title="CIRISLens API",
@@ -76,8 +82,37 @@ async def cache_request_body(request: Request, call_next):
     """Cache request body so it can be read in exception handlers.
 
     Must restore the body stream after reading or downstream endpoints hang.
+
+    THREAT_MODEL.md AV-13: gate body-read on Content-Length header BEFORE
+    reading. Bodies above MAX_INGEST_BODY_BYTES are rejected with 413 so
+    an attacker cannot exhaust worker memory by streaming a multi-GB body
+    into await request.body() unconditionally. Bodies missing
+    Content-Length (chunked transfer) are also rejected — the deployment
+    edge is expected to materialize Content-Length before this layer.
     """
     if "/accord/events" in str(request.url) and request.method == "POST":
+        content_length_header = request.headers.get("content-length")
+        if content_length_header is None:
+            return JSONResponse(
+                status_code=411,
+                content={"detail": "Content-Length header required"},
+            )
+        try:
+            content_length = int(content_length_header)
+        except ValueError:
+            return JSONResponse(
+                status_code=400,
+                content={"detail": "Content-Length must be an integer"},
+            )
+        if content_length < 0 or content_length > MAX_INGEST_BODY_BYTES:
+            return JSONResponse(
+                status_code=413,
+                content={
+                    "detail": f"Body exceeds {MAX_INGEST_BODY_BYTES} bytes",
+                    "max_bytes": MAX_INGEST_BODY_BYTES,
+                },
+            )
+
         body = await request.body()
         request.state.cached_body = body
 
@@ -141,6 +176,17 @@ OAUTH_CALLBACK_URL = os.getenv(
 MANAGER_API_URL = os.getenv("MANAGER_API_URL", "http://host.docker.internal:8888/manager/v1")
 ALLOWED_DOMAIN = os.getenv("ALLOWED_DOMAIN", "ciris.ai")
 SESSION_SECRET = os.getenv("SESSION_SECRET", "dev-secret-change-in-production")
+
+# THREAT_MODEL.md AV-6: refuse to start in production with the default
+# OAUTH_CLIENT_ID, which would otherwise trigger the mock-OAuth bypass at
+# /api/admin/auth/login and grant anonymous admin access.
+if IS_PRODUCTION and OAUTH_CLIENT_ID == "mock-client-id":
+    raise SystemExit(
+        "FATAL: OAUTH_CLIENT_ID is unset (default 'mock-client-id') in "
+        "production. The mock-OAuth bypass would grant anonymous admin "
+        "access. Set OAUTH_CLIENT_ID to your Google OAuth client id "
+        "before starting."
+    )
 
 # In-memory storage for development
 sessions = {}
@@ -1677,17 +1723,32 @@ async def admin_interface(request: Request):
 
 
 # OAuth routes
+# THREAT_MODEL.md AV-7: oauth_state cookie carries the per-login random
+# token that the callback must match against Google's state echo.
+OAUTH_STATE_COOKIE = "oauth_state"
+OAUTH_STATE_MAX_AGE = 600  # 10 minutes is comfortable for a Google round-trip
+
+
 @app.get("/api/admin/auth/login")
 async def oauth_login():
     """Initiate OAuth flow"""
-    # For development, mock the OAuth flow
+    # For development, mock the OAuth flow. The startup gate above (AV-6)
+    # ensures this branch is unreachable in production deployments.
     if OAUTH_CLIENT_ID == "mock-client-id":
         # Development mode - auto-authenticate
         mock_user = OAuthUser(email="dev@ciris.ai", name="Development User", hd="ciris.ai")
         session_id = create_session(mock_user)
         response = RedirectResponse(url="/lens/admin/", status_code=302)
-        response.set_cookie(key="session_id", value=session_id, httponly=True, samesite="lax")
+        response.set_cookie(
+            key="session_id", value=session_id, httponly=True,
+            samesite="lax", secure=IS_PRODUCTION,
+        )
         return response
+
+    # THREAT_MODEL.md AV-7: bind this login attempt to a one-time state
+    # token. Cookie + query param must round-trip; mismatch on callback
+    # means CSRF.
+    state = secrets.token_urlsafe(32)
 
     # Production OAuth flow
     params = {
@@ -1697,14 +1758,41 @@ async def oauth_login():
         "scope": "openid email profile",
         "hd": ALLOWED_DOMAIN,
         "prompt": "select_account",
+        "state": state,
     }
     query = "&".join(f"{k}={v}" for k, v in params.items())
-    return RedirectResponse(f"https://accounts.google.com/o/oauth2/v2/auth?{query}")
+    response = RedirectResponse(f"https://accounts.google.com/o/oauth2/v2/auth?{query}")
+    response.set_cookie(
+        key=OAUTH_STATE_COOKIE,
+        value=state,
+        httponly=True,
+        samesite="lax",
+        secure=IS_PRODUCTION,
+        max_age=OAUTH_STATE_MAX_AGE,
+    )
+    return response
 
 
 @app.get("/api/admin/auth/callback")
-async def oauth_callback(code: str, state: str | None = None):
+async def oauth_callback(request: Request, code: str, state: str | None = None):
     """Handle OAuth callback from Google"""
+    # THREAT_MODEL.md AV-7: validate state BEFORE token-exchange.
+    # Reject any callback whose state-cookie is missing or doesn't match
+    # the query-param state. Mismatch indicates CSRF or a session that
+    # didn't originate from /api/admin/auth/login on this deployment.
+    cookie_state = request.cookies.get(OAUTH_STATE_COOKIE)
+    if not cookie_state or not state or not secrets.compare_digest(cookie_state, state):
+        logger.warning(
+            "OAUTH_STATE_MISMATCH: cookie_present=%s query_present=%s",
+            cookie_state is not None,
+            state is not None,
+        )
+        return HTMLResponse(
+            "<h1>Authentication failed</h1>"
+            "<p>OAuth state mismatch. Restart login from /api/admin/auth/login.</p>",
+            status_code=400,
+        )
+
     # Exchange code for token
     async with httpx.AsyncClient() as client:
         token_response = await client.post(
@@ -1755,6 +1843,8 @@ async def oauth_callback(code: str, state: str | None = None):
         key="session_id", value=session_id, httponly=True,
         samesite="lax", secure=IS_PRODUCTION
     )
+    # AV-7: state cookie was a one-shot binding for THIS login round-trip.
+    response.delete_cookie(key=OAUTH_STATE_COOKIE)
     return response
 
 
