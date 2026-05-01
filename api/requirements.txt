@@ -42,3 +42,15 @@ xx_ent_wiki_sm @ https://github.com/explosion/spacy-models/releases/download/xx_
 # dynamically via `ORT_DYLIB_PATH` set in the Dockerfile. Verified
 # compatible with ort 2.0.0-rc.10 (Rust crate) on the local bench.
 onnxruntime==1.25.0
+
+# CIRIS persistence engine (FSD CIRIS_PERSIST §3.5). PyO3 abi3-py311
+# wheel; one wheel per target — manylinux_2_34_x86_64 +
+# manylinux_2_34_aarch64 + macosx_11_0_arm64 — matches the lens
+# deployment + dev matrix. Replaces the previous in-Dockerfile
+# git-clone-and-maturin-compile-from-source pattern (~75 min cold
+# build per architecture) with pre-built PyPI wheel install (~10 s)
+# per CIRISPersist#3 close at v0.1.13. Bump this pin when persist
+# ships a new release we want; provenance proven via PyPI sigstore
+# attestation (PEP 740) + CIRISRegistry round-trip on the
+# BuildManifest hybrid signature.
+ciris-persist==0.1.13
