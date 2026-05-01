@@ -1834,14 +1834,21 @@ async def _delegate_to_persist(body: bytes) -> dict[str, Any]:
     """Hand a raw BatchEnvelope POST body to ciris-persist's Engine.
     Maps persist's typed errors (ValueError: schema/verify/scrub,
     RuntimeError: backend) to HTTP status codes per
-    CIRISPersist/docs/INTEGRATION_LENS.md §4 Error → HTTP mapping."""
+    CIRISPersist/docs/INTEGRATION_LENS.md §4 Error → HTTP mapping.
+
+    Logs a PERSIST_DELEGATE_RESULT line with the BatchSummary fields
+    on success — this is the diagnostic the bridge needs to see when
+    delegation fires but trace_events stays empty (e.g. all-conflict
+    on replay, or signatures_verified but trace_events_inserted=0
+    indicates a downstream bug in persist's decompose path)."""
     engine = persist_engine.get_engine()
     if engine is None:  # pragma: no cover — caller checked
         raise HTTPException(status_code=503, detail="persist engine unavailable")
     try:
-        return engine.receive_and_persist(body)
+        summary = engine.receive_and_persist(body)
     except ValueError as e:
         msg = str(e)
+        logger.warning("PERSIST_DELEGATE_REJECT class=ValueError msg=%s", msg[:200])
         # 401 only when verify failed because the signing key isn't in
         # the directory; everything else verify-related stays 422
         # (malformed sig, sig mismatch, etc.).
@@ -1849,11 +1856,31 @@ async def _delegate_to_persist(body: bytes) -> dict[str, Any]:
             raise HTTPException(status_code=401, detail=msg) from e
         raise HTTPException(status_code=422, detail=msg) from e
     except RuntimeError as e:
+        msg = str(e)
+        logger.error("PERSIST_DELEGATE_REJECT class=RuntimeError msg=%s", msg[:200])
         raise HTTPException(
             status_code=503,
-            detail=str(e),
+            detail=msg,
             headers={"Retry-After": "5"},
         ) from e
+
+    # Persist returned success. Surface the BatchSummary so operators
+    # can see envelopes_processed / trace_events_inserted /
+    # signatures_verified / etc. — this is the only signal that
+    # distinguishes "delegated and persisted N rows" from "delegated
+    # and silently filtered to 0 rows".
+    logger.info(
+        "PERSIST_DELEGATE_RESULT envelopes=%d events_inserted=%d "
+        "events_conflicted=%d llm_calls_inserted=%d scrubbed_fields=%d "
+        "signatures_verified=%d",
+        summary.get("envelopes_processed", -1),
+        summary.get("trace_events_inserted", -1),
+        summary.get("trace_events_conflicted", -1),
+        summary.get("trace_llm_calls_inserted", -1),
+        summary.get("scrubbed_fields", -1),
+        summary.get("signatures_verified", -1),
+    )
+    return summary
 
 
 @router.post("/events", response_model=AccordEventsResponse)
