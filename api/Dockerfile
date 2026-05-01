@@ -33,18 +33,27 @@ RUN pip install --no-cache-dir maturin>=1.4
 # Pinned tag — bump this when persist ships a new release we want to
 # integrate.
 #
-# v0.1.4 — initial cutover-ready release.
-# v0.1.5 — multi-worker boot race fix (advisory lock in run_migrations);
-#          makes the lens-side advisory lock in persist_engine.initialize
-#          redundant defense-in-depth. Harmless to keep until cleanup.
-# v0.1.6 — hygiene (clippy MSRV pin, signer-variant log, missing_docs).
-# v0.1.7 — warn-on-ephemeral keyring path; bench harness.
-# v0.1.8 — close AV-4 timestamp canonicalization drift (P0 production
-#          fix); WireDateTime preserves wire bytes verbatim through
-#          canonicalization. Required for verify against real Python-
-#          agent traffic (timestamps with zero microseconds previously
-#          failed verify_invalid_signature on every batch).
-ARG CIRIS_PERSIST_REF=v0.1.8
+# v0.1.4  — initial cutover-ready release.
+# v0.1.5  — multi-worker boot race fix (advisory lock in run_migrations);
+#           makes the lens-side advisory lock in persist_engine.initialize
+#           redundant defense-in-depth. Harmless to keep until cleanup.
+# v0.1.6  — hygiene (clippy MSRV pin, signer-variant log, missing_docs).
+# v0.1.7  — warn-on-ephemeral keyring path; bench harness.
+# v0.1.8  — close AV-4 timestamp canonicalization drift (P0 production
+#           fix); WireDateTime preserves wire bytes verbatim through
+#           canonicalization. Required for verify against real Python-
+#           agent traffic (timestamps with zero microseconds previously
+#           failed verify_invalid_signature on every batch).
+# v0.1.9  — consume CIRISVerify v1.8.0 substrate primitives
+#           (BuildManifest validator, HardwareSigner::storage_descriptor()
+#           replaces the v0.1.7 prediction shim). KNOWN-BROKEN for the
+#           lens — accidentally regressed maturin to a cp312-cp312 wheel,
+#           does not install on python:3.11-slim. Skip.
+# v0.1.10 — fixes the v0.1.9 abi3 regression by re-wiring the maturin
+#           bindings/abi3 config in mixed python/rust project mode.
+#           Wheel filename back to cp311-abi3-manylinux_2_34. Same
+#           v1.8.0 substrate consumer work as v0.1.9, lens-installable.
+ARG CIRIS_PERSIST_REF=v0.1.10
 RUN git clone --depth 1 --branch "${CIRIS_PERSIST_REF}" \
     https://github.com/CIRISAI/CIRISPersist /build/ciris-persist
 WORKDIR /build/ciris-persist
