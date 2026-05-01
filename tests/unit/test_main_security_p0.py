@@ -8,8 +8,8 @@ Tests for the P0 security hot-fix bundle (THREAT_MODEL.md AV-6/7/13).
 
 from __future__ import annotations
 
-import sys
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -41,7 +41,8 @@ class TestAV6ProductionStartupGate:
         re-fire it.
         """
         repo_root = Path(__file__).parent.parent.parent
-        result = subprocess.run(
+        # S603/S607: sys.executable + literal list, no shell, no untrusted input.
+        result = subprocess.run(  # noqa: S603
             [
                 sys.executable,
                 "-c",
@@ -55,6 +56,7 @@ class TestAV6ProductionStartupGate:
             },
             capture_output=True,
             text=True,
+            check=False,
         )
         assert result.returncode != 0
         assert "OAUTH_CLIENT_ID" in result.stderr
@@ -64,7 +66,8 @@ class TestAV6ProductionStartupGate:
     def test_module_import_succeeds_in_production_with_real_oauth_client_id(self):
         """Production with a real OAUTH_CLIENT_ID must import cleanly."""
         repo_root = Path(__file__).parent.parent.parent
-        result = subprocess.run(
+        # S603/S607: sys.executable + literal list, no shell, no untrusted input.
+        result = subprocess.run(  # noqa: S603
             [
                 sys.executable,
                 "-c",
@@ -78,6 +81,7 @@ class TestAV6ProductionStartupGate:
             },
             capture_output=True,
             text=True,
+            check=False,
         )
         assert result.returncode == 0, f"stderr: {result.stderr}"
         assert "ok" in result.stdout
@@ -85,7 +89,7 @@ class TestAV6ProductionStartupGate:
     def test_dev_mode_unaffected(self):
         """ENV unset → dev → mock-OAuth path remains operational."""
         # If we got this far, we already imported main.py without ENV=production
-        from main import OAUTH_CLIENT_ID, IS_PRODUCTION
+        from main import IS_PRODUCTION, OAUTH_CLIENT_ID
 
         assert IS_PRODUCTION is False
         # Dev default; the mock branch is reachable here, which is correct
@@ -173,7 +177,7 @@ class TestAV7OAuthStateCSRF:
         r1 = client.get("/api/admin/auth/login", follow_redirects=False)
         r2 = client.get("/api/admin/auth/login", follow_redirects=False)
         # Pull state out of the location URL
-        from urllib.parse import urlparse, parse_qs
+        from urllib.parse import parse_qs, urlparse
 
         s1 = parse_qs(urlparse(r1.headers["location"]).query)["state"][0]
         s2 = parse_qs(urlparse(r2.headers["location"]).query)["state"][0]

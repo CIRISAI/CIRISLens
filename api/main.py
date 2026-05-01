@@ -43,9 +43,9 @@ logger = logging.getLogger(__name__)
 IS_PRODUCTION = os.getenv("ENV", "").lower() == "production"
 
 # Body-size cap for the /accord/events ingest path (THREAT_MODEL.md AV-13).
-# Matches CIRISPersist's DefaultBodyLimit::max(8 MiB) — the largest production
+# Matches CIRISPersist's DefaultBodyLimit::max(8 MiB) -- the largest production
 # fixture is the 3 MiB full_traces case (CIRISPersist tests/fixtures/wire/2.7.0/
-# full_traces_ed713366.json) with ~2.6× headroom.
+# full_traces_ed713366.json) with ~2.6x headroom.
 MAX_INGEST_BODY_BYTES = 8 * 1024 * 1024
 
 # Initialize FastAPI app
