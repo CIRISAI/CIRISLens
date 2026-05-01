@@ -2,7 +2,7 @@
 # Multi-stage build with Rust extension support
 
 # ============================================
-# Stage 1: Rust builder for cirislens-core
+# Stage 1: Rust builder for cirislens-core + ciris-persist
 # ============================================
 FROM python:3.11-slim AS rust-builder
 
@@ -11,9 +11,11 @@ WORKDIR /build
 # Install Rust toolchain and build dependencies. `patchelf` is needed
 # by maturin to fix up the wheel's RPATH on Linux when the wheel
 # imports a dynamic library (in our case `libonnxruntime.so` via the
-# `ort` crate's `load-dynamic` linkage).
+# `ort` crate's `load-dynamic` linkage). `git` is needed to clone
+# CIRISPersist for the maturin build of the persistence-engine wheel.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
+    git \
     build-essential \
     pkg-config \
     libssl-dev \
@@ -27,6 +29,17 @@ ENV PATH="/root/.cargo/bin:$PATH"
 # Install maturin for building PyO3 extensions
 RUN pip install --no-cache-dir maturin>=1.4
 
+# ─── ciris-persist (the unified persistence Engine, FSD §3.5) ────────
+# Pinned tag — bump this when persist ships a new release we want to
+# integrate. v0.1.4 is the first fully-green release with the
+# scrub-signing pipeline + QA harness (see CIRISPersist release notes).
+ARG CIRIS_PERSIST_REF=v0.1.4
+RUN git clone --depth 1 --branch "${CIRIS_PERSIST_REF}" \
+    https://github.com/CIRISAI/CIRISPersist /build/ciris-persist
+WORKDIR /build/ciris-persist
+RUN maturin build --release --strip --features pyo3 --out /build/wheels
+
+# ─── cirislens-core (the legacy NER scrubber + signature verifier) ───
 # Copy Rust crate source
 COPY cirislens-core/ /build/cirislens-core/
 

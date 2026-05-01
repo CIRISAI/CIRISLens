@@ -20,6 +20,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, EmailStr
 
+import persist_engine
+
 # Import Accord API routers (primary)
 from accord_api import router as accord_v1_router  # Non-Rust version
 from accord_api_v2 import initialize_rust_caches
@@ -466,6 +468,20 @@ async def startup():
         except Exception as e:
             logger.warning(f"Rust cache initialization failed (will retry on first request): {e}")
 
+        # Initialize ciris-persist Engine — runs V001+V003 migrations,
+        # bootstraps the lens identity in ciris-keyring (creates the
+        # signing key on first deploy, returns existing afterward).
+        # FSD CIRISPersist §3.5 unified persistence; the lens process
+        # never holds private signing-key bytes — they live in
+        # hardware-backed keyring storage.
+        # Failure to initialize is logged but does NOT fail startup —
+        # the lens falls back to the legacy ingest path until the
+        # next restart. This is intentional during the cutover window.
+        try:
+            persist_engine.initialize()
+        except Exception as e:
+            logger.error("ciris-persist Engine init failed: %s", e, exc_info=True)
+
         # Initialize log ingest service
         log_ingest_service = LogIngestService(db_pool)
         logger.info("Log ingest service initialized")
@@ -530,7 +546,11 @@ async def root():
 @app.get("/health")
 async def health():
     """Health check endpoint"""
-    return {"status": "healthy", "timestamp": datetime.now(UTC).isoformat()}
+    return {
+        "status": "healthy",
+        "timestamp": datetime.now(UTC).isoformat(),
+        "persist_engine": persist_engine.status(),
+    }
 
 
 # Status check models
