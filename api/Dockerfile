@@ -31,9 +31,20 @@ RUN pip install --no-cache-dir maturin>=1.4
 
 # ─── ciris-persist (the unified persistence Engine, FSD §3.5) ────────
 # Pinned tag — bump this when persist ships a new release we want to
-# integrate. v0.1.4 is the first fully-green release with the
-# scrub-signing pipeline + QA harness (see CIRISPersist release notes).
-ARG CIRIS_PERSIST_REF=v0.1.4
+# integrate.
+#
+# v0.1.4 — initial cutover-ready release.
+# v0.1.5 — multi-worker boot race fix (advisory lock in run_migrations);
+#          makes the lens-side advisory lock in persist_engine.initialize
+#          redundant defense-in-depth. Harmless to keep until cleanup.
+# v0.1.6 — hygiene (clippy MSRV pin, signer-variant log, missing_docs).
+# v0.1.7 — warn-on-ephemeral keyring path; bench harness.
+# v0.1.8 — close AV-4 timestamp canonicalization drift (P0 production
+#          fix); WireDateTime preserves wire bytes verbatim through
+#          canonicalization. Required for verify against real Python-
+#          agent traffic (timestamps with zero microseconds previously
+#          failed verify_invalid_signature on every batch).
+ARG CIRIS_PERSIST_REF=v0.1.8
 RUN git clone --depth 1 --branch "${CIRIS_PERSIST_REF}" \
     https://github.com/CIRISAI/CIRISPersist /build/ciris-persist
 WORKDIR /build/ciris-persist
