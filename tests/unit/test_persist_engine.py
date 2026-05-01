@@ -42,10 +42,11 @@ class TestStatusShape:
         from persist_engine import status
 
         s = status()
-        assert set(s.keys()) == {"initialized", "disabled", "init_error"}
+        assert set(s.keys()) == {"initialized", "disabled", "init_error", "scrubber_ready"}
         assert s["initialized"] is False
         assert s["disabled"] is False
         assert s["init_error"] is None
+        assert s["scrubber_ready"] is False
 
 
 class TestEnvironmentGates:

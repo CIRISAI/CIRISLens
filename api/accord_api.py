@@ -18,6 +18,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import traceback
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -27,6 +28,8 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field, model_validator
+
+import persist_engine
 
 if TYPE_CHECKING:
     import asyncpg
@@ -1771,9 +1774,92 @@ async def debug_accord_events(request: Request) -> dict[str, Any]:
     return {"status": "debug", "body_length": len(body)}
 
 
+def _is_connectivity_batch(request: AccordEventsRequest) -> bool:
+    """Sniff: every event in the batch is a startup/shutdown event.
+    Connectivity events have a different shape and target a different
+    table (cirislens.connectivity_events) — they bypass the persist
+    Engine entirely."""
+    connectivity_event_types = {"startup", "shutdown"}
+    for event in request.events:
+        if not event.trace.components:
+            return False
+        first_event_type = (event.trace.components[0].event_type or "").lower()
+        if first_event_type not in connectivity_event_types:
+            return False
+    return bool(request.events)
+
+
+def _has_mock_llm_traces(request: AccordEventsRequest) -> bool:
+    """Sniff: any component's data names a mock LLM model. Best-effort
+    only — generic-tier traces don't include models_used so this misses
+    those (rare in practice; mock testing uses detailed/full_traces)."""
+    for event in request.events:
+        for comp in event.trace.components:
+            data = comp.data if isinstance(comp.data, dict) else {}
+            models = data.get("models_used") or []
+            if isinstance(models, list) and any(
+                isinstance(m, str) and "mock" in m.lower() for m in models
+            ):
+                return True
+    return False
+
+
+def _persist_engine_active(trace_level: str) -> bool:
+    """Phase 2a feature gate. Three conditions must all hold for the
+    persist Engine to handle a request:
+
+    - CIRISLENS_USE_PERSIST_ENGINE env var is truthy
+    - persist_engine.get_engine() is not None (Engine init succeeded)
+    - lens scrubber is wired OR the request is generic (where the
+      callback is bypassed by design — see lens_scrubber module
+      docstring)
+    """
+    use_flag = os.environ.get("CIRISLENS_USE_PERSIST_ENGINE", "").strip().lower()
+    if use_flag not in {"1", "true", "yes", "on"}:
+        return False
+    if persist_engine.get_engine() is None:
+        return False
+    if trace_level != "generic" and not persist_engine.scrubber_ready():
+        # Refusing non-generic ingest without a scrubber is mission
+        # constraint MISSION.md §3 anti-pattern — never silent acceptance
+        # of unscrubbed PII. Falls back to legacy path.
+        logger.warning(
+            "Persist scrubber not ready; non-generic ingest falling back to legacy path"
+        )
+        return False
+    return True
+
+
+async def _delegate_to_persist(body: bytes) -> dict[str, Any]:
+    """Hand a raw BatchEnvelope POST body to ciris-persist's Engine.
+    Maps persist's typed errors (ValueError: schema/verify/scrub,
+    RuntimeError: backend) to HTTP status codes per
+    CIRISPersist/docs/INTEGRATION_LENS.md §4 Error → HTTP mapping."""
+    engine = persist_engine.get_engine()
+    if engine is None:  # pragma: no cover — caller checked
+        raise HTTPException(status_code=503, detail="persist engine unavailable")
+    try:
+        return engine.receive_and_persist(body)
+    except ValueError as e:
+        msg = str(e)
+        # 401 only when verify failed because the signing key isn't in
+        # the directory; everything else verify-related stays 422
+        # (malformed sig, sig mismatch, etc.).
+        if msg.lower().startswith("verify:") and "unknown key" in msg.lower():
+            raise HTTPException(status_code=401, detail=msg) from e
+        raise HTTPException(status_code=422, detail=msg) from e
+    except RuntimeError as e:
+        raise HTTPException(
+            status_code=503,
+            detail=str(e),
+            headers={"Retry-After": "5"},
+        ) from e
+
+
 @router.post("/events", response_model=AccordEventsResponse)
 async def receive_accord_events(
     request: AccordEventsRequest,
+    raw_request: Request,
 ) -> dict[str, Any]:
     """
     Receive Ed25519-signed reasoning traces from CIRIS agents.
@@ -1782,10 +1868,38 @@ async def receive_accord_events(
     immutable records of agent decision-making for transparency and
     alignment validation.
 
-    Reference: Covenant Section IV - Ethical Integrity Surveillance
+    Phase 2a (CIRISPersist v0.1.4 cutover): when
+    CIRISLENS_USE_PERSIST_ENGINE=true and Engine init succeeded, standard
+    trace ingest delegates to ciris-persist's Engine.receive_and_persist
+    (writes trace_events + trace_llm_calls + scrub envelope columns).
+    Connectivity events (startup/shutdown) and mock-LLM traces stay on
+    the legacy code path because persist doesn't model those shapes.
+    Pre-cutover history in `accord_traces` is read-only from the cutover
+    moment forward (FSD CIRIS_PERSIST §3.5 — no dual-write window).
+
+    Reference: Accord Section IV - Ethical Integrity Surveillance
     """
     import base64
 
+    # ─── Phase 2a: try to delegate to ciris-persist Engine ───────────
+    if (
+        _persist_engine_active(request.trace_level)
+        and not _is_connectivity_batch(request)
+        and not _has_mock_llm_traces(request)
+    ):
+        body = getattr(raw_request.state, "cached_body", None)
+        if body is not None:
+            logger.info(
+                "PERSIST_DELEGATE trace_level=%s events=%d body_bytes=%d",
+                request.trace_level, len(request.events), len(body),
+            )
+            return await _delegate_to_persist(body)
+        # Body cache missing (middleware didn't fire?) — fall through to
+        # legacy path. This shouldn't happen in normal deployment; the
+        # cache_request_body middleware in main.py covers /accord/events.
+        logger.warning("Persist delegation skipped: cached_body absent; falling back to legacy")
+
+    # ─── Legacy path (pre-cutover trace ingest) ──────────────────────
     db_pool = get_db_pool()
     if db_pool is None:
         raise HTTPException(status_code=503, detail="Database not available")

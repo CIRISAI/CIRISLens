@@ -76,6 +76,10 @@ class _State:
     engine: Engine | None = None
     disabled: bool = False
     init_error: str | None = None
+    # True when the lens scrubber callback wired successfully into
+    # Engine. False means Engine is using NullScrubber (correct at
+    # GENERIC, unsafe at higher levels — handler must refuse).
+    scrubber_ready: bool = False
 
 
 async def initialize() -> Engine | None:
@@ -112,11 +116,34 @@ async def initialize() -> Engine | None:
         return None
 
     key_id = os.getenv("CIRISLENS_SCRUB_KEY_ID", "lens-scrub-v1")
+
+    # Wire the lens scrubber as persist's scrubber callback. Persist
+    # bypasses it at trace_level=generic (content-free); at detailed/
+    # full_traces, the callable runs cirislens_core PII scrub + the
+    # security sanitizer. Constructed once per Engine (i.e. once per
+    # worker process) — holds no per-request state.
+    try:
+        import lens_scrubber  # noqa: PLC0415  — lazy; depends on cirislens_core / spaCy availability
+        scrubber_cb = lens_scrubber.make_persist_scrubber()
+        logger.info("Lens scrubber wired into Engine")
+    except Exception as e:
+        # If the scrubber pipeline can't load (model files missing,
+        # etc.), persist falls back to NullScrubber — which is correct
+        # at GENERIC and emits a tracing::warn at higher levels. The
+        # lens handler should refuse non-generic ingest in that state;
+        # see _State.scrubber_ready.
+        logger.error("Lens scrubber NOT wired — non-generic ingest will be rejected: %s", e)
+        scrubber_cb = None
+        _State.scrubber_ready = False
+    else:
+        _State.scrubber_ready = True
+
     logger.info(
-        "Constructing ciris_persist.Engine: version=%s schemas=%s key_id=%s",
+        "Constructing ciris_persist.Engine: version=%s schemas=%s key_id=%s scrubber=%s",
         cp.__version__,
         cp.SUPPORTED_SCHEMA_VERSIONS,
         key_id,
+        "wired" if scrubber_cb is not None else "null",
     )
 
     # Serialize across uvicorn workers via Postgres advisory lock —
@@ -128,7 +155,7 @@ async def initialize() -> Engine | None:
         logger.debug("acquired migration advisory lock %#x", _MIGRATION_LOCK_ID)
 
         try:
-            engine = cp.Engine(dsn=dsn, signing_key_id=key_id)
+            engine = cp.Engine(dsn=dsn, signing_key_id=key_id, scrubber=scrubber_cb)
         except Exception as e:
             # Catch every engine-init failure mode — RuntimeError from
             # PyO3, schema-version mismatch, keyring inaccessible, etc.
@@ -173,4 +200,12 @@ def status() -> dict[str, Any]:
         "initialized": _State.engine is not None,
         "disabled": _State.disabled,
         "init_error": _State.init_error,
+        "scrubber_ready": _State.scrubber_ready,
     }
+
+
+def scrubber_ready() -> bool:
+    """True iff the lens scrubber wired into Engine successfully.
+    Handler must refuse non-generic trace ingest when this is False
+    (NullScrubber would let PII land unscrubbed at detailed/full_traces)."""
+    return _State.scrubber_ready
