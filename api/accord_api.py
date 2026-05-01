@@ -1881,12 +1881,33 @@ async def receive_accord_events(
     """
     import base64
 
+    # ─── Phase 2a: routing decision (always logged for diagnostics) ──
+    # Emit a structured per-request trace of why delegation did or did
+    # not fire. Operators tail this log to confirm cutover health
+    # without having to add ad-hoc instrumentation each time.
+    flag = os.environ.get("CIRISLENS_USE_PERSIST_ENGINE", "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+    engine_present = persist_engine.get_engine() is not None
+    scrubber_ready = persist_engine.scrubber_ready()
+    is_connectivity = _is_connectivity_batch(request)
+    is_mock = _has_mock_llm_traces(request)
+    delegate = (
+        flag
+        and engine_present
+        and (request.trace_level == "generic" or scrubber_ready)
+        and not is_connectivity
+        and not is_mock
+    )
+    logger.info(
+        "PERSIST_ROUTE flag=%s engine=%s scrubber=%s level=%s "
+        "connectivity=%s mock=%s delegate=%s events=%d",
+        flag, engine_present, scrubber_ready, request.trace_level,
+        is_connectivity, is_mock, delegate, len(request.events),
+    )
+
     # ─── Phase 2a: try to delegate to ciris-persist Engine ───────────
-    if (
-        _persist_engine_active(request.trace_level)
-        and not _is_connectivity_batch(request)
-        and not _has_mock_llm_traces(request)
-    ):
+    if delegate:
         body = getattr(raw_request.state, "cached_body", None)
         if body is not None:
             logger.info(
