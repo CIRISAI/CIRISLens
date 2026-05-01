@@ -17,15 +17,30 @@ envelope signer, registry-published lens identity, and (Phase 2.3)
 the deployment's Reticulum destination. `engine.public_key_b64()` is
 what gets published to CIRISRegistry at deploy time.
 
-Environment:
+## Concurrent-worker boot serialization
+
+Multi-worker uvicorn deployments construct `Engine` once per worker
+process. ciris-persist v0.1.4's migration runner does not yet take
+its own advisory lock — concurrent workers race on `assert migrations
+table` and N-1 of them fail. The race is fixed upstream in v0.1.5
+(see CIRISPersist `run_migrations` PR), but until that ships we
+serialize lens-side: a per-deploy `pg_advisory_lock` held across the
+`cp.Engine()` call. First worker to enter the function holds the
+lock, runs migrations + bootstraps keyring; the rest queue up,
+acquire the lock in turn, and find migrations already applied.
+~50-200 ms wait per worker on cold start.
+
+The lock is released on Engine success OR failure (via finally), and
+the lock connection is short-lived — if a worker panics mid-Engine,
+session close releases the lock automatically.
+
+## Environment
+
 - CIRISLENS_DB_URL   — preferred DSN. Falls back to DATABASE_URL.
 - CIRISLENS_SCRUB_KEY_ID — keyring alias for the lens identity
   (default `lens-scrub-v1`).
 - CIRISLENS_PERSIST_DISABLED — if set to truthy, skip Engine
-  construction (degraded mode for environments where the wheel isn't
-  available, e.g. local dev without TimescaleDB). Lens then falls
-  back to the legacy ingest path. THREAT_MODEL.md AV-26 (forthcoming):
-  must be off in production deployments.
+  construction. Lens then falls back to the legacy ingest path.
 """
 
 from __future__ import annotations
@@ -34,10 +49,19 @@ import logging
 import os
 from typing import TYPE_CHECKING, Any
 
+import asyncpg
+
 if TYPE_CHECKING:  # pragma: no cover
     from ciris_persist import Engine
 
 logger = logging.getLogger(__name__)
+
+# Per-deploy advisory lock id for the Engine-init / migration phase.
+# Must be a stable int64. Bytes "LENSMIGR" interpreted as ASCII.
+# Independent of any namespace ciris-persist may use internally for
+# its own intra-Engine locking — that's a separate concern (and
+# v0.1.5 will add it).
+_MIGRATION_LOCK_ID = 0x4C454E534D494752  # "LENSMIGR"
 
 
 def _truthy(v: str | None) -> bool:
@@ -54,17 +78,17 @@ class _State:
     init_error: str | None = None
 
 
-def initialize() -> Engine | None:
+async def initialize() -> Engine | None:
     """
     Construct the global Engine. Idempotent; safe to call on every
     startup hook. Returns None when:
     - CIRISLENS_PERSIST_DISABLED is truthy, OR
     - the `ciris_persist` wheel is not installed, OR
-    - DSN is unset.
-
-    Raises RuntimeError on hard errors (Postgres unreachable,
-    migrations fail, keyring inaccessible) — those should fail the
-    deploy fast rather than silently degrade.
+    - DSN is unset, OR
+    - `cp.Engine()` raises (Postgres unreachable, migration race,
+      keyring inaccessible) — error captured in `_State.init_error`
+      and surfaced via `/health`; the worker continues without
+      persist.
     """
     if _State.engine is not None:
         return _State.engine
@@ -95,9 +119,34 @@ def initialize() -> Engine | None:
         key_id,
     )
 
-    # Engine construction runs migrations (V001+V003 today) and
-    # bootstraps the keyring identity. Fail-fast on any issue.
-    engine = cp.Engine(dsn=dsn, signing_key_id=key_id)
+    # Serialize across uvicorn workers via Postgres advisory lock —
+    # see module docstring §"Concurrent-worker boot serialization".
+    lock_conn: asyncpg.Connection | None = None
+    try:
+        lock_conn = await asyncpg.connect(dsn)
+        await lock_conn.execute("SELECT pg_advisory_lock($1)", _MIGRATION_LOCK_ID)
+        logger.debug("acquired migration advisory lock %#x", _MIGRATION_LOCK_ID)
+
+        try:
+            engine = cp.Engine(dsn=dsn, signing_key_id=key_id)
+        except Exception as e:
+            # Catch every engine-init failure mode — RuntimeError from
+            # PyO3, schema-version mismatch, keyring inaccessible, etc.
+            # — and surface via _State.init_error rather than crashing
+            # the worker.
+            _State.init_error = f"{type(e).__name__}: {e}"
+            logger.error("ciris_persist.Engine init failed: %s", _State.init_error)
+            return None
+    finally:
+        # Release lock + close lock-conn even on failure. Session
+        # close auto-releases the advisory lock if the explicit
+        # unlock didn't run (e.g. on connection error).
+        if lock_conn is not None:
+            try:
+                await lock_conn.execute("SELECT pg_advisory_unlock($1)", _MIGRATION_LOCK_ID)
+            except Exception as e:
+                logger.warning("advisory_unlock failed (lock will release on conn close): %s", e)
+            await lock_conn.close()
 
     pub_b64 = engine.public_key_b64()
     logger.info(

@@ -474,11 +474,17 @@ async def startup():
         # FSD CIRISPersist §3.5 unified persistence; the lens process
         # never holds private signing-key bytes — they live in
         # hardware-backed keyring storage.
-        # Failure to initialize is logged but does NOT fail startup —
-        # the lens falls back to the legacy ingest path until the
-        # next restart. This is intentional during the cutover window.
+        #
+        # Multi-worker boot is serialized via a Postgres advisory lock
+        # held across cp.Engine() — workaround for the v0.1.4
+        # migration race; persist v0.1.5 takes its own lock internally.
+        #
+        # Failure during init is captured into persist_engine.status()
+        # and surfaced via /health. The worker continues without
+        # persist in that case (legacy ingest path stays operational
+        # — Phase 1 is dormant by design).
         try:
-            persist_engine.initialize()
+            await persist_engine.initialize()
         except Exception as e:
             logger.error("ciris-persist Engine init failed: %s", e, exc_info=True)
 
