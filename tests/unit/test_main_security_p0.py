@@ -41,8 +41,8 @@ class TestAV6ProductionStartupGate:
         re-fire it.
         """
         repo_root = Path(__file__).parent.parent.parent
-        # S603/S607: sys.executable + literal list, no shell, no untrusted input.
-        result = subprocess.run(  # noqa: S603
+        # sys.executable + literal list — no shell, no untrusted input.
+        result = subprocess.run(
             [
                 sys.executable,
                 "-c",
@@ -66,8 +66,8 @@ class TestAV6ProductionStartupGate:
     def test_module_import_succeeds_in_production_with_real_oauth_client_id(self):
         """Production with a real OAUTH_CLIENT_ID must import cleanly."""
         repo_root = Path(__file__).parent.parent.parent
-        # S603/S607: sys.executable + literal list, no shell, no untrusted input.
-        result = subprocess.run(  # noqa: S603
+        # sys.executable + literal list — no shell, no untrusted input.
+        result = subprocess.run(
             [
                 sys.executable,
                 "-c",
