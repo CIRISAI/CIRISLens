@@ -21,6 +21,11 @@ jobs:
     permissions:
       contents: read
       packages: write
+    outputs:
+      # Surface the OCI image digest so the build-manifest job below
+      # can sign over it as the canonical "binary" identifier (lens's
+      # release artifact is the image, not a wheel).
+      image_digest: ${{ steps.docker_build.outputs.digest }}
 
     steps:
       - name: Checkout repository
@@ -54,6 +59,7 @@ jobs:
             type=raw,value=latest,enable=${{ github.ref == format('refs/heads/{0}', 'main') }}
 
       - name: Build and push Docker image
+        id: docker_build
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -72,6 +78,173 @@ jobs:
         uses: anchore/sbom-action@v0
         with:
           image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+
+  # ───────────────────────────────────────────────────────────────────
+  # Build manifest publication (CIRISLens#2 close, mirrors CIRISPersist)
+  #
+  # Signs a hybrid Ed25519 + ML-DSA-65 BuildManifest over the published
+  # Docker image digest + LensExtras (fastapi_routes, sql_migrations,
+  # persist_ref, scrubber_model_sha256). POST to CIRISRegistry's
+  # /v1/verify/binary-manifest is gated with continue-on-error until
+  # the registry team confirms `--primitive lens` registration +
+  # RegisterTrustedPrimitiveKey for our key (open question on
+  # CIRISLens#3). Signing + emit + steward-key pre-flight all run
+  # unconditionally — provenance pieces are always emitted; only the
+  # POST is conditional.
+  # ───────────────────────────────────────────────────────────────────
+  build-manifest:
+    name: Sign + publish lens BuildManifest
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install lens deps for emit_lens_extras
+        # emit_lens_extras imports api.main (transitively pulls fastapi
+        # for app.routes introspection + spaCy for the pii_scrubber
+        # import-time guard). Install only what the import path needs;
+        # tests + DB drivers are unnecessary here.
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r api/requirements.txt
+
+      - name: Emit LensExtras JSON
+        env:
+          ENV: build  # AV-6 startup gate: skip the IS_PRODUCTION SystemExit
+          CIRIS_LENS_MODEL_DIR: /tmp/no-such-dir   # CI doesn't have the model bundle on this runner
+        run: |
+          mkdir -p dist
+          python scripts/emit_lens_extras.py > dist/lens-extras.json
+          echo "LensExtras emitted ($(wc -c < dist/lens-extras.json) bytes)"
+          jq 'keys' dist/lens-extras.json || true
+
+      - name: Install ciris-build-sign (prebuilt from CIRISVerify v1.8.0 release)
+        # Same prebuilt-tarball approach CIRISPersist v0.1.15 settled
+        # on — avoids the 5-min cargo install + libtss2-dev dance.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd "$RUNNER_TEMP"
+          gh release download v1.8.0 --repo CIRISAI/CIRISVerify \
+            --pattern 'ciris-verify-v1.8.0-build-tool-linux-x86_64.tar.gz'
+          tar -xzf ciris-verify-v1.8.0-build-tool-linux-x86_64.tar.gz
+          sudo install -m755 build-tool/ciris-build-sign /usr/local/bin/ciris-build-sign
+          sudo install -m755 build-tool/ciris-build-verify /usr/local/bin/ciris-build-verify
+          ciris-build-sign --version
+
+      - name: Capture Docker image digest as binary input
+        # Docker's release artifact is the OCI image digest; we sign
+        # over a small file containing that digest string. Verifiers
+        # round-trip: pull image by digest, confirm the same digest
+        # string lands in BuildManifest.binary_hash via sha256(digest_file).
+        run: |
+          DIGEST="${{ needs.build-and-push.outputs.image_digest }}"
+          # If the build step didn't expose a digest (older buildx versions),
+          # fall back to the commit SHA. Either way, the binary_hash signs
+          # something stable + verifiable.
+          if [ -z "$DIGEST" ]; then
+            DIGEST="commit:${{ github.sha }}"
+          fi
+          echo "$DIGEST" > dist/binary_digest.txt
+          echo "binary digest input: $DIGEST"
+
+      - name: Sign manifest with hybrid Ed25519 + ML-DSA-65
+        env:
+          CIRIS_BUILD_ED25519_SECRET: ${{ secrets.CIRIS_BUILD_ED25519_SECRET }}
+          CIRIS_BUILD_MLDSA_SECRET:   ${{ secrets.CIRIS_BUILD_MLDSA_SECRET }}
+        run: |
+          if [ -z "${CIRIS_BUILD_ED25519_SECRET}" ] || [ -z "${CIRIS_BUILD_MLDSA_SECRET}" ]; then
+            echo "::error::Hybrid signing secrets not configured (CIRISLens#3)."
+            exit 1
+          fi
+          umask 077
+          ED_KEY_PATH=$(mktemp)
+          MLDSA_KEY_PATH=$(mktemp)
+          printf '%s' "${CIRIS_BUILD_ED25519_SECRET}" | base64 -d > "$ED_KEY_PATH"
+          printf '%s' "${CIRIS_BUILD_MLDSA_SECRET}" | base64 -d > "$MLDSA_KEY_PATH"
+          ciris-build-sign sign \
+            --primitive lens \
+            --build-id "${{ github.sha }}" \
+            --target linux/amd64 \
+            --binary dist/binary_digest.txt \
+            --binary-version "${{ github.sha }}" \
+            --extras dist/lens-extras.json \
+            --ed25519-seed "$ED_KEY_PATH" \
+            --mldsa-secret "$MLDSA_KEY_PATH" \
+            --key-id ciris-lens-build-v1 \
+            --output dist/lens-manifest.json
+          shred -uz "$ED_KEY_PATH" "$MLDSA_KEY_PATH" 2>/dev/null || rm -f "$ED_KEY_PATH" "$MLDSA_KEY_PATH"
+          echo "Signed manifest:"
+          jq '. | del(.signature_classical, .signature_pqc) | .' dist/lens-manifest.json | head -40
+
+      - name: Pre-flight registry steward-key snapshot
+        env:
+          REGISTRY_URL: ${{ vars.REGISTRY_URL }}
+        run: |
+          REG="${REGISTRY_URL:-https://registry.ciris.ai}"
+          echo "Registry steward-key snapshot for ${REG}:"
+          curl -sf "${REG}/v1/steward-key" | tee dist/steward-key.json | jq . || \
+            echo "::warning::steward-key fetch failed; registry may be down or path differs"
+
+      - name: Register lens BuildManifest with CIRISRegistry
+        # GATED: registry-side `--primitive lens` registration +
+        # RegisterTrustedPrimitiveKey for our pubkey are open questions
+        # on CIRISLens#3. Without those, this POST returns 401 (per the
+        # exact symptom CIRISVerify v1.8.3 hit, documented in
+        # CIRISRegistry#5 §3). continue-on-error keeps CI green during
+        # the negotiation window; manifest is still signed + uploaded
+        # as a build artifact for the bridge to pick up out-of-band.
+        continue-on-error: true
+        env:
+          REGISTRY_URL: ${{ vars.REGISTRY_URL }}
+          REGISTRY_ADMIN_TOKEN: ${{ secrets.REGISTRY_ADMIN_TOKEN }}
+        run: |
+          REG="${REGISTRY_URL:-https://registry.ciris.ai}"
+          if [ -z "${REGISTRY_ADMIN_TOKEN}" ]; then
+            echo "::warning::REGISTRY_ADMIN_TOKEN not set; skipping POST"
+            exit 0
+          fi
+          echo "POSTing lens BuildManifest to ${REG}/v1/verify/binary-manifest"
+          HTTP_CODE=$(curl -sS -o dist/registry_response.json -w '%{http_code}' \
+            -X POST "${REG}/v1/verify/binary-manifest" \
+            -H "Authorization: Bearer ${REGISTRY_ADMIN_TOKEN}" \
+            -H "Content-Type: application/json" \
+            --data-binary @dist/lens-manifest.json) || HTTP_CODE="curl_failed"
+          echo "registry response: ${HTTP_CODE}"
+          jq . dist/registry_response.json 2>/dev/null || cat dist/registry_response.json || true
+          case "${HTTP_CODE}" in
+            2*)  echo "::notice::manifest registered" ;;
+            401) echo "::warning::401 — registry needs RegisterTrustedPrimitiveKey for ciris-lens-build-v1 (CIRISLens#3 / CIRISRegistry#5 §3)" ;;
+            404) echo "::warning::404 — registry may not yet support --primitive lens (CIRISLens#3 Q2)" ;;
+            *)   echo "::warning::registry POST returned ${HTTP_CODE}" ;;
+          esac
+
+      - name: Upload signed manifest as build artifact
+        # Always upload — even if the POST was gated. Provides a Path-C
+        # (per CIRISRegistry#5 taxonomy) consumption surface: bridge
+        # operators can pull the signed manifest from the GH Actions
+        # artifact store while the registry-side POST registration is
+        # in flight.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lens-build-manifest-${{ github.sha }}
+          path: |
+            dist/lens-extras.json
+            dist/lens-manifest.json
+            dist/binary_digest.txt
+            dist/steward-key.json
+            dist/registry_response.json
+          if-no-files-found: warn
+          retention-days: 90
 
   test:
     runs-on: ubuntu-latest
