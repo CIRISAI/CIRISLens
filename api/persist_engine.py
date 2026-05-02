@@ -80,7 +80,7 @@ def _credential_free_dsn_label(dsn: str) -> str:
         from urllib.parse import urlparse  # noqa: PLC0415
         parsed = urlparse(dsn)
         return f"{parsed.hostname}:{parsed.port or '?'}{parsed.path}"
-    except Exception:  # noqa: BLE001
+    except Exception:
         return "<unparseable>"
 
 
