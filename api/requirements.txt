@@ -90,4 +90,31 @@ onnxruntime==1.25.0
 #           re-emit incorrectly. Verified byte-exact against all 3
 #           YO-REJECTED captures (6/6 hash matches; both 2-field and
 #           9-field forms). Lens unblocked.
-ciris-persist==0.1.20
+# v0.2.0  — federation directory (registry-aligned). Adds V004 schema
+#           with `cirislens.federation_keys` table + Engine federation
+#           methods (put_public_key, lookup_public_key, ...). Schema
+#           applies cleanly alongside `cirislens.accord_public_keys`.
+# v0.2.1  — Engine.sign / Engine.canonicalize_envelope on the PyO3
+#           surface. Backend::lookup_public_key dual-reads federation_keys
+#           first then falls back to accord_public_keys — so the trace-
+#           verify path picks up federation_keys writes immediately
+#           with no per-version cutover dance. Legacy accord_public_keys
+#           fallback retires at v0.4.0 per persist roadmap.
+# v0.2.2  — separate steward identity. Engine takes optional
+#           `steward_key_id` + `steward_key_path` (32-byte raw Ed25519
+#           seed); exposes `engine.steward_sign(bytes) -> bytes` and
+#           `engine.steward_public_key_b64()`. Distinct from the
+#           keyring-managed P-256 scrub identity (signing_key_id), so
+#           lens-scrub-v1 keeps signing per-row scrub envelopes (P-256)
+#           while lens-steward signs federation_keys rows (Ed25519).
+#           Both-or-neither construction — passing only one of
+#           steward_key_id / steward_key_path raises ValueError.
+#
+# The lens-steward row in federation_keys is bootstrapped out-of-band
+# by the bridge (one-time per deploy, parametrized SQL using
+# Engine.canonicalize_envelope from a v0.2.2 install). The lens code
+# below MIRRORS subsequent agent registrations into federation_keys
+# alongside the existing accord_public_keys INSERT — additive during
+# the v0.2.x/v0.3.x migration window; accord_public_keys writes drop
+# at v0.4.0 when persist retires the dual-read fallback.
+ciris-persist==0.2.2

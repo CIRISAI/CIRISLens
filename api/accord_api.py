@@ -2619,6 +2619,20 @@ async def register_public_key(
 
     logger.info("Registered public key: %s", key.key_id)
 
+    # v0.2.2 federation directory mirror — best-effort, never raises.
+    # When the lens-steward identity is configured AND the bootstrap
+    # row exists in federation_keys, this call writes a hybrid-pending
+    # row (Ed25519-signed, PQC-pending) into federation_keys that
+    # CIRISRegistry / peer lenses / agents querying peer keys can
+    # discover. accord_public_keys remains load-bearing for verify
+    # until v0.4.0; this is purely additive directory propagation.
+    import federation_mirror  # lazy import — persist_engine is optional
+    federation_mirror.mirror_agent_registration(
+        key_id=key.key_id,
+        public_key_base64=key.public_key_base64,
+        description=key.description,
+    )
+
     return {"status": "registered", "key_id": key.key_id}
 
 

@@ -42,11 +42,18 @@ class TestStatusShape:
         from persist_engine import status
 
         s = status()
-        assert set(s.keys()) == {"initialized", "disabled", "init_error", "scrubber_ready"}
+        # v0.2.2 added steward_ready alongside scrubber_ready when the
+        # federation steward identity became a separate concern from
+        # the scrub identity. /health consumes both flags.
+        assert set(s.keys()) == {
+            "initialized", "disabled", "init_error",
+            "scrubber_ready", "steward_ready",
+        }
         assert s["initialized"] is False
         assert s["disabled"] is False
         assert s["init_error"] is None
         assert s["scrubber_ready"] is False
+        assert s["steward_ready"] is False
 
 
 class TestEnvironmentGates:

@@ -37,10 +37,27 @@ session close releases the lock automatically.
 ## Environment
 
 - CIRISLENS_DB_URL   — preferred DSN. Falls back to DATABASE_URL.
-- CIRISLENS_SCRUB_KEY_ID — keyring alias for the lens identity
-  (default `lens-scrub-v1`).
+- CIRISLENS_SCRUB_KEY_ID — keyring alias for the lens scrub identity
+  (default `lens-scrub-v1`). P-256, signs per-row scrub envelopes
+  on trace_events.
+- CIRISLENS_STEWARD_KEY_ID — federation steward identifier (default
+  `lens-steward`). Distinct from the scrub identity per persist
+  v0.2.2 separation: Ed25519, signs federation_keys / federation_*
+  rows the lens publishes.
+- CIRISLENS_STEWARD_KEY_PATH — filesystem path to the 32-byte raw
+  Ed25519 seed for the steward identity. Bridge generates the
+  keypair offline + vaults it; the path here is whatever bind-mount
+  the deployment exposes (e.g. /run/secrets/lens-steward, or a
+  Docker secret). Must be readable by uid 1000 (cirislens user) and
+  not world-readable.
 - CIRISLENS_PERSIST_DISABLED — if set to truthy, skip Engine
   construction. Lens then falls back to the legacy ingest path.
+
+Both-or-neither steward construction: persist v0.2.2 raises
+ValueError if exactly one of steward_key_id/path is set. When neither
+is set, federation-mirror writes from `federation_mirror.py` no-op
+(legacy-only path); when both are set, every agent registration is
+mirrored into federation_keys signed by the steward.
 """
 
 from __future__ import annotations
@@ -66,6 +83,81 @@ _MIGRATION_LOCK_ID = 0x4C454E534D494752  # "LENSMIGR"
 
 def _truthy(v: str | None) -> bool:
     return (v or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _resolve_dsn_and_module() -> tuple[str | None, str | None, object | None]:
+    """Return `(dsn, dsn_source_label, ciris_persist_module)` for Engine
+    construction, or `(None, None, None)` after recording the reason in
+    `_State.init_error`. Handles the two early-exit paths (DSN unset,
+    wheel not installed) so `initialize()` stays under the function-
+    size lint thresholds."""
+    dsn_source = "CIRISLENS_DB_URL" if os.getenv("CIRISLENS_DB_URL") else "DATABASE_URL"
+    dsn = os.getenv("CIRISLENS_DB_URL") or os.getenv("DATABASE_URL")
+    if not dsn:
+        _State.init_error = "neither CIRISLENS_DB_URL nor DATABASE_URL is set"
+        logger.warning("ciris-persist not initialized: %s", _State.init_error)
+        return None, None, None
+    try:
+        import ciris_persist as cp  # noqa: PLC0415  — lazy; may be absent in dev
+    except ImportError as e:
+        _State.init_error = f"ciris_persist wheel not installed: {e}"
+        logger.warning("ciris-persist not initialized: %s", _State.init_error)
+        return None, None, None
+    return dsn, dsn_source, cp
+
+
+def _wire_scrubber() -> object | None:
+    """Build the lens scrubber callback for persist's Engine. Returns
+    None when the pipeline can't load (model bundle missing, etc.) —
+    persist falls back to NullScrubber, which is correct at GENERIC
+    and emits a tracing::warn at higher levels. The handler refuses
+    non-generic ingest in that state via `_State.scrubber_ready`.
+    """
+    try:
+        import lens_scrubber  # noqa: PLC0415  — lazy
+        callback = lens_scrubber.make_persist_scrubber()
+    except Exception as e:
+        logger.error("Lens scrubber NOT wired — non-generic ingest will be rejected: %s", e)
+        _State.scrubber_ready = False
+        return None
+    else:
+        logger.info("Lens scrubber wired into Engine")
+        _State.scrubber_ready = True
+        return callback
+
+
+def _resolve_steward_args() -> tuple[str | None, str | None, str | None]:
+    """Read CIRISLENS_STEWARD_KEY_ID + CIRISLENS_STEWARD_KEY_PATH and
+    return `(key_id, key_path, error)` to pass to the Engine
+    constructor. The third tuple element is set when configuration is
+    invalid (path set but file missing) — caller surfaces it via
+    `_State.init_error` and aborts initialization.
+
+    When the path env var is unset (the common case until bridge ships
+    the steward keypair), returns `(None, None, None)` — Engine is
+    constructed without a federation steward, federation_mirror writes
+    will no-op, and the lens runs accord_public_keys-only.
+    """
+    from pathlib import Path  # noqa: PLC0415  — lazy
+
+    steward_key_id = os.getenv("CIRISLENS_STEWARD_KEY_ID", "lens-steward")
+    steward_key_path = os.getenv("CIRISLENS_STEWARD_KEY_PATH")
+    if steward_key_path is None:
+        logger.info(
+            "Federation steward not configured (CIRISLENS_STEWARD_KEY_PATH unset); "
+            "running accord_public_keys-only — federation_mirror writes will no-op"
+        )
+        return None, None, None
+    if not Path(steward_key_path).exists():
+        # Path set but file missing — almost always a deploy-config
+        # issue (secret-mount missing, wrong path). Surface loudly.
+        return None, None, f"CIRISLENS_STEWARD_KEY_PATH={steward_key_path} not found"
+    logger.info(
+        "Federation steward configured: key_id=%s key_path=%s",
+        steward_key_id,
+        steward_key_path,
+    )
+    return steward_key_id, steward_key_path, None
 
 
 def _credential_free_dsn_label(dsn: str) -> str:
@@ -96,6 +188,13 @@ class _State:
     # Engine. False means Engine is using NullScrubber (correct at
     # GENERIC, unsafe at higher levels — handler must refuse).
     scrubber_ready: bool = False
+    # True when the federation steward identity is configured (both
+    # steward_key_id and steward_key_path were present and Engine
+    # accepted them). When False, federation_mirror writes no-op and
+    # the lens runs accord_public_keys-only (legacy path) — still
+    # works because persist's Backend dual-reads both tables on
+    # verify (v0.2.1+).
+    steward_ready: bool = False
 
 
 async def initialize() -> Engine | None:
@@ -118,43 +217,28 @@ async def initialize() -> Engine | None:
         logger.warning("CIRISLENS_PERSIST_DISABLED is set; falling back to legacy ingest path")
         return None
 
-    dsn_source = "CIRISLENS_DB_URL" if os.getenv("CIRISLENS_DB_URL") else "DATABASE_URL"
-    dsn = os.getenv("CIRISLENS_DB_URL") or os.getenv("DATABASE_URL")
-    if not dsn:
-        _State.init_error = "neither CIRISLENS_DB_URL nor DATABASE_URL is set"
-        logger.warning("ciris-persist not initialized: %s", _State.init_error)
+    dsn, dsn_source, cp = _resolve_dsn_and_module()
+    if dsn is None:
         return None
     dsn_label = _credential_free_dsn_label(dsn)
 
-    try:
-        import ciris_persist as cp  # noqa: PLC0415  — lazy import; may be absent in dev
-    except ImportError as e:
-        _State.init_error = f"ciris_persist wheel not installed: {e}"
-        logger.warning("ciris-persist not initialized: %s", _State.init_error)
-        return None
-
     key_id = os.getenv("CIRISLENS_SCRUB_KEY_ID", "lens-scrub-v1")
 
-    # Wire the lens scrubber as persist's scrubber callback. Persist
-    # bypasses it at trace_level=generic (content-free); at detailed/
-    # full_traces, the callable runs cirislens_core PII scrub + the
-    # security sanitizer. Constructed once per Engine (i.e. once per
-    # worker process) — holds no per-request state.
-    try:
-        import lens_scrubber  # noqa: PLC0415  — lazy; depends on cirislens_core / spaCy availability
-        scrubber_cb = lens_scrubber.make_persist_scrubber()
-        logger.info("Lens scrubber wired into Engine")
-    except Exception as e:
-        # If the scrubber pipeline can't load (model files missing,
-        # etc.), persist falls back to NullScrubber — which is correct
-        # at GENERIC and emits a tracing::warn at higher levels. The
-        # lens handler should refuse non-generic ingest in that state;
-        # see _State.scrubber_ready.
-        logger.error("Lens scrubber NOT wired — non-generic ingest will be rejected: %s", e)
-        scrubber_cb = None
-        _State.scrubber_ready = False
-    else:
-        _State.scrubber_ready = True
+    # v0.2.2 steward identity: federation steward (Ed25519). Both-or-
+    # neither — passing only one raises ValueError on the persist side.
+    # We pre-validate via the helper so the error message points at
+    # our env vars rather than at persist's constructor signature.
+    steward_key_id_arg, steward_key_path_arg, steward_err = _resolve_steward_args()
+    if steward_err is not None:
+        _State.init_error = steward_err
+        logger.error("Refusing init: %s", steward_err)
+        return None
+
+    # Persist bypasses the scrubber callback at trace_level=generic
+    # (content-free); at detailed/full_traces the callable runs
+    # cirislens_core PII scrub + the security sanitizer. Helper sets
+    # _State.scrubber_ready as a side effect.
+    scrubber_cb = _wire_scrubber()
 
     logger.info(
         "Constructing ciris_persist.Engine: version=%s schemas=%s key_id=%s "
@@ -176,7 +260,14 @@ async def initialize() -> Engine | None:
         logger.debug("acquired migration advisory lock %#x", _MIGRATION_LOCK_ID)
 
         try:
-            engine = cp.Engine(dsn=dsn, signing_key_id=key_id, scrubber=scrubber_cb)
+            engine = cp.Engine(
+                dsn=dsn,
+                signing_key_id=key_id,
+                scrubber=scrubber_cb,
+                steward_key_id=steward_key_id_arg,
+                steward_key_path=steward_key_path_arg,
+            )
+            _State.steward_ready = steward_key_path_arg is not None
         except Exception as e:
             # Catch every engine-init failure mode — RuntimeError from
             # PyO3, schema-version mismatch, keyring inaccessible, etc.
@@ -222,6 +313,7 @@ def status() -> dict[str, Any]:
         "disabled": _State.disabled,
         "init_error": _State.init_error,
         "scrubber_ready": _State.scrubber_ready,
+        "steward_ready": _State.steward_ready,
     }
 
 
@@ -230,3 +322,9 @@ def scrubber_ready() -> bool:
     Handler must refuse non-generic trace ingest when this is False
     (NullScrubber would let PII land unscrubbed at detailed/full_traces)."""
     return _State.scrubber_ready
+
+
+def steward_ready() -> bool:
+    """True iff the federation steward identity is configured. When
+    False, federation_mirror writes no-op (legacy-only path)."""
+    return _State.steward_ready
