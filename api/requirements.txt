@@ -76,17 +76,18 @@ onnxruntime==1.25.0
 #           Ok(None), persist now logs envelope_signer_id +
 #           looked_up_id_bytes_hex + accord_public_keys_size +
 #           sample of known ids. Capture with RUST_LOG=ciris_persist=warn.
-# v0.1.18 — extended breadcrumb to verify_signature_mismatch path
-#           (canonical_9field_sha256 + canonical_2field_sha256 +
-#           wire_body_sha256 + signature_b64_prefix) AND added
-#           Engine.debug_canonicalize(body) PyO3 method for offline
-#           comparison. With this lens-side, scripts/diagnostic/canonical_diff.py
-#           ran against the bridge's 3 YO-REJECTED captures and pinned
-#           the divergence: float-formatting drift between Python
-#           json.dumps (uses float.__repr__) and Rust serde_json (uses
-#           ryu shortest-round-trip). Both produce valid shortest
-#           round-trip strings for the same IEEE 754 doubles but
-#           disagree byte-for-byte on which string to pick.
-#           CIRISPersist#7 tracks the fix; expect v0.1.19 with
-#           Python-compatible float formatting in the canonicalizer.
-ciris-persist==0.1.18
+# v0.1.18 — extended breadcrumb + Engine.debug_canonicalize(body) PyO3
+#           method. canonical_diff at scripts/diagnostic/ pinned the
+#           drift to float formatting (Python repr vs Rust serde_json/ryu).
+# v0.1.19 — initial float-formatter attempt (lexical-core); INCOMPLETE
+#           — still byte-diverged from Python's repr because both
+#           libraries implement "shortest round-trip" with different
+#           tie-breaking from CPython's Py_dg_dtoa. Skipped.
+# v0.1.20 — architectural correction (closes CIRISPersist#7 for real).
+#           Preserves wire-token bytes verbatim through canonicalization
+#           via serde_json's arbitrary_precision feature — never decodes
+#           a float to f64 in the first place, so there's nothing to
+#           re-emit incorrectly. Verified byte-exact against all 3
+#           YO-REJECTED captures (6/6 hash matches; both 2-field and
+#           9-field forms). Lens unblocked.
+ciris-persist==0.1.20
