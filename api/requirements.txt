@@ -75,9 +75,18 @@ onnxruntime==1.25.0
 #           (per CIRISPersist#6). When lookup_public_key returns
 #           Ok(None), persist now logs envelope_signer_id +
 #           looked_up_id_bytes_hex + accord_public_keys_size +
-#           sample of known ids. Capture with RUST_LOG=ciris_persist=warn
-#           and the next flag-on soak window pins which of the four
-#           remaining persist-internal hypotheses is the bug
-#           (init-time cache scope, transaction snapshot, deserializer
-#           transform, or search_path drift).
-ciris-persist==0.1.17
+#           sample of known ids. Capture with RUST_LOG=ciris_persist=warn.
+# v0.1.18 — extended breadcrumb to verify_signature_mismatch path
+#           (canonical_9field_sha256 + canonical_2field_sha256 +
+#           wire_body_sha256 + signature_b64_prefix) AND added
+#           Engine.debug_canonicalize(body) PyO3 method for offline
+#           comparison. With this lens-side, scripts/diagnostic/canonical_diff.py
+#           ran against the bridge's 3 YO-REJECTED captures and pinned
+#           the divergence: float-formatting drift between Python
+#           json.dumps (uses float.__repr__) and Rust serde_json (uses
+#           ryu shortest-round-trip). Both produce valid shortest
+#           round-trip strings for the same IEEE 754 doubles but
+#           disagree byte-for-byte on which string to pick.
+#           CIRISPersist#7 tracks the fix; expect v0.1.19 with
+#           Python-compatible float formatting in the canonicalizer.
+ciris-persist==0.1.18
