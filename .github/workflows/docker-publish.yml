@@ -126,19 +126,12 @@ jobs:
           echo "LensExtras emitted ($(wc -c < dist/lens-extras.json) bytes)"
           jq 'keys' dist/lens-extras.json || true
 
-      - name: Install ciris-build-sign (prebuilt from CIRISVerify v1.8.0 release)
-        # Same prebuilt-tarball approach CIRISPersist v0.1.15 settled
-        # on — avoids the 5-min cargo install + libtss2-dev dance.
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          cd "$RUNNER_TEMP"
-          gh release download v1.8.0 --repo CIRISAI/CIRISVerify \
-            --pattern 'ciris-verify-v1.8.0-build-tool-linux-x86_64.tar.gz'
-          tar -xzf ciris-verify-v1.8.0-build-tool-linux-x86_64.tar.gz
-          sudo install -m755 build-tool/ciris-build-sign /usr/local/bin/ciris-build-sign
-          sudo install -m755 build-tool/ciris-build-verify /usr/local/bin/ciris-build-verify
-          ciris-build-sign --version
+      # ciris-build-sign / ciris-build-verify are now on PATH via the
+      # `pip install -r api/requirements.txt` step above — persist 0.3.0
+      # transitively installs ciris-verify >=1.8.6,<2, which ships the
+      # CLIs as console_scripts. The previous gh-release download +
+      # tarball install is redundant; one install command for the whole
+      # verify+persist stack.
 
       - name: Capture Docker image digest as binary input
         # Docker's release artifact is the OCI image digest; we sign

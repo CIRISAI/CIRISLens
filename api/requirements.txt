@@ -117,4 +117,27 @@ onnxruntime==1.25.0
 # alongside the existing accord_public_keys INSERT — additive during
 # the v0.2.x/v0.3.x migration window; accord_public_keys writes drop
 # at v0.4.0 when persist retires the dual-read fallback.
-ciris-persist==0.2.2
+#
+# v0.3.0  — wire format 2.7.9 support. Persist deterministically
+#           dispatches by `trace_schema_version`:
+#             - 2.7.0 → 4-field canonical (legacy fleet)
+#             - 2.7.9 → 5-field canonical with per-component
+#                       agent_id_hash + required parent_event_type /
+#                       parent_attempt_index on LLMCallEvent
+#           Per-component agent_id_hash injection at 2.7.0 is stripped
+#           on the wire so the cross-shape attack surface is closed.
+#           Anything else rejects with typed UnsupportedSchemaVersion.
+#           Closes the spec gap CIRISAgent#712 named (binds the AV-9
+#           dedup tuple structurally in the wire format), shipped with
+#           the agent's release/2.7.9 cutover (PR #714 → cc41f315f).
+#
+#           Transitively installs ciris-verify >=1.8.6,<2, which puts
+#           `ciris-build-sign` + `ciris-build-verify` on PATH via
+#           console_scripts. The CI workflow's separate gh-release
+#           download for ciris-build-sign retires with this bump (see
+#           .github/workflows/docker-publish.yml).
+#
+#           Lens-side change scope for 2.7.9 traffic readiness: this
+#           pin bump + the CI cleanup. Persist owns the gate; lens
+#           just consumes whatever persist accepts.
+ciris-persist==0.3.0
