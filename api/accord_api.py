@@ -1882,18 +1882,44 @@ async def _delegate_to_persist(body: bytes) -> dict[str, Any]:
     # signatures_verified / etc. — this is the only signal that
     # distinguishes "delegated and persisted N rows" from "delegated
     # and silently filtered to 0 rows".
+    envelopes = summary.get("envelopes_processed", -1)
+    events_inserted = summary.get("trace_events_inserted", -1)
+    events_conflicted = summary.get("trace_events_conflicted", -1)
     logger.info(
         "PERSIST_DELEGATE_RESULT envelopes=%d events_inserted=%d "
         "events_conflicted=%d llm_calls_inserted=%d scrubbed_fields=%d "
         "signatures_verified=%d",
-        summary.get("envelopes_processed", -1),
-        summary.get("trace_events_inserted", -1),
-        summary.get("trace_events_conflicted", -1),
+        envelopes,
+        events_inserted,
+        events_conflicted,
         summary.get("trace_llm_calls_inserted", -1),
         summary.get("scrubbed_fields", -1),
         summary.get("signatures_verified", -1),
     )
-    return summary
+
+    # Adapt persist's BatchSummary dict to the legacy AccordEventsResponse
+    # shape the route's response_model expects. Without this adapter,
+    # FastAPI's pydantic validation throws on the unrecognized
+    # BatchSummary fields and returns HTTP 500 — making every
+    # successful persist write LOOK like a server error to the agent,
+    # which then retries, hits the dedup index, and spirals.
+    # (Bridge surfaced this as "27 × DELEGATE_RESULT, 27 × HTTP 500,
+    # only the first envelope wrote rows because every retry
+    # conflicted on the UNIQUE index.")
+    #
+    # An envelope reaching this branch was successfully verified +
+    # scrubbed + processed. From the agent's perspective, that's
+    # accepted, regardless of whether rows landed (first write) or
+    # were deduped (replay). Both states are non-error.
+    accepted = max(envelopes, 0) if envelopes > 0 else 0
+    return {
+        "status": "ok",
+        "received": max(envelopes, 0),
+        "accepted": accepted,
+        "rejected": 0,
+        "rejected_traces": None,
+        "errors": None,
+    }
 
 
 @router.post("/events", response_model=AccordEventsResponse)

@@ -260,7 +260,13 @@ class TestDelegateToPersistErrorMapping:
         assert exc.value.headers.get("Retry-After") == "5"
 
     @pytest.mark.asyncio
-    async def test_success_returns_summary(self):
+    async def test_success_adapts_to_accord_events_response_shape(self):
+        """Persist's BatchSummary dict is translated to the legacy
+        AccordEventsResponse shape the route's response_model expects.
+        Without this adapter, FastAPI's pydantic response validation
+        threw 500 on every successful delegation — bridge observed
+        27× DELEGATE_RESULT paired with 27× HTTP 500, with the agent
+        retrying and hitting the dedup index on every replay."""
         import persist_engine
         from accord_api import _delegate_to_persist
 
@@ -277,5 +283,42 @@ class TestDelegateToPersistErrorMapping:
 
         with patch.object(persist_engine, "get_engine", return_value=engine):
             result = await _delegate_to_persist(b'{"events":[]}')
-        assert result == summary
+
+        # AccordEventsResponse-compatible shape (status/received/accepted/rejected)
+        assert result == {
+            "status": "ok",
+            "received": 1,
+            "accepted": 1,
+            "rejected": 0,
+            "rejected_traces": None,
+            "errors": None,
+        }
         engine.receive_and_persist.assert_called_once_with(b'{"events":[]}')
+
+    @pytest.mark.asyncio
+    async def test_dedup_replay_is_still_accepted(self):
+        """Replay envelopes (events_inserted=0, events_conflicted=N) are
+        non-error from the agent's perspective — verify + scrub +
+        idempotent-ON-CONFLICT all worked. Must NOT return rejected>0."""
+        import persist_engine
+        from accord_api import _delegate_to_persist
+
+        engine = MagicMock()
+        replay_summary = {
+            "envelopes_processed": 1,
+            "trace_events_inserted": 0,
+            "trace_events_conflicted": 19,
+            "trace_llm_calls_inserted": 0,
+            "scrubbed_fields": 0,
+            "signatures_verified": 1,
+        }
+        engine.receive_and_persist.return_value = replay_summary
+
+        with patch.object(persist_engine, "get_engine", return_value=engine):
+            result = await _delegate_to_persist(b'{"events":[]}')
+
+        # Replay is accepted (idempotent), not rejected.
+        assert result["status"] == "ok"
+        assert result["received"] == 1
+        assert result["accepted"] == 1
+        assert result["rejected"] == 0
