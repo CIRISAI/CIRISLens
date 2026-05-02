@@ -44,9 +44,9 @@ except ImportError:
 # logged for offline classification (R3.5). v1's output remains what gets
 # persisted until promotion (Stage 4).
 try:
-    from scrubber_compare import compare_and_persist as _scrub_compare_and_persist
+    from pii_scrubber import scrub_dict_recursive as _scrub_legacy
 except ImportError:
-    from api.scrubber_compare import compare_and_persist as _scrub_compare_and_persist
+    from api.pii_scrubber import scrub_dict_recursive as _scrub_legacy
 
 try:
     from security_sanitizer import (
@@ -2160,28 +2160,34 @@ async def receive_accord_events(
                     ).encode('utf-8')
                     original_content_hash = hashlib.sha256(original_message).hexdigest()
 
-                # Scrub PII from each component's data. The
-                # `compare_and_persist` call runs v1 (Python spaCy) and
-                # v2 (Rust core) in parallel when v2 is available, logs
-                # any divergence to the configured sink for R3.5
-                # classification, and returns v1's output — v1 remains
-                # the persistence source-of-truth until Stage 4 promotion.
-                # If v2 isn't loaded the call collapses to v1 directly.
+                # Scrub PII from each component's data via the v1 Python
+                # scrubber. This branch only fires for non-generic traces
+                # routed through the LEGACY ingest path — i.e. when
+                # CIRISLENS_USE_PERSIST_ENGINE is off, OR the request is
+                # a connectivity/mock-LLM batch. Production trace ingest
+                # uses persist's lens_scrubber callback (Phase 2a), which
+                # already runs v2 + sanitizer; this branch is fallback.
+                #
+                # Phase 2b: scrubber_compare.py removed. Its purpose was
+                # to run v1 + v2 in parallel and log divergence for R3.5
+                # validation; v2 is now in production via persist's
+                # callback at ~50 events/sec sustained, so the
+                # comparison crutch is obsolete. v1 stays as the legacy
+                # fallback.
                 scrubbed_components = []
                 v1_failed = False
                 for comp in trace.components:
                     comp_dict = comp.model_dump()
                     if "data" in comp_dict:
-                        scrubbed_data = _scrub_compare_and_persist(
-                            comp_dict["data"],
-                            request.trace_level,
-                            trace_id=trace.trace_id,
-                        )
-                        if scrubbed_data is None:
-                            # v1 errored → reject per FSD §1.
+                        try:
+                            comp_dict["data"] = _scrub_legacy(comp_dict["data"])
+                        except Exception:
+                            logger.exception(
+                                "Legacy v1 scrubber failed on trace %s — rejecting",
+                                trace.trace_id,
+                            )
                             v1_failed = True
                             break
-                        comp_dict["data"] = scrubbed_data
                     scrubbed_components.append(comp_dict)
 
                 if v1_failed:
