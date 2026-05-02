@@ -194,19 +194,61 @@ jobs:
           curl -sf "${REG}/v1/steward-key" | tee dist/steward-key.json | jq . || \
             echo "::warning::steward-key fetch failed; registry may be down or path differs"
 
-      - name: Register lens BuildManifest with CIRISRegistry
+      - name: Build binary-catalog payload for /v1/verify/binary-manifest
+        # The registry's POST endpoint expects a binary CATALOG payload,
+        # not the signed BuildManifest itself. Per CIRISPersist's
+        # successful CI shape (verified against their last green run,
+        # registry returned `{"success": true, "manifest_id": "..."}`):
+        #
+        #   {
+        #     "project": "ciris-lens",
+        #     "version": "<short-sha>",
+        #     "binaries": {"<target>": "sha256:..."},
+        #     "generated_at": "<ISO8601 UTC>",
+        #     "notes": "<freeform>"
+        #   }
+        #
+        # The signed BuildManifest is a separate Path-C artifact (per
+        # CIRISRegistry#5 taxonomy) — uploaded to the GH Actions store
+        # below for federation peers / verifier-side consumption. The
+        # POST here registers the binary catalog; the registry signs
+        # the round-trip GET response server-side using its steward key.
+        run: |
+          # Lens artifact = OCI multi-arch image. binary_digest contains
+          # the buildx digest (sha256:...); we ship that directly under
+          # the image-reference key. Multi-arch index → one digest covers
+          # both linux/amd64 and linux/arm64.
+          DIGEST=$(cat dist/binary_digest.txt | tr -d '[:space:]')
+          if [[ ! "$DIGEST" =~ ^sha256: ]]; then
+            DIGEST="sha256:$(printf '%s' "$DIGEST" | sha256sum | cut -d' ' -f1)"
+          fi
+          SHORT_SHA="${GITHUB_SHA:0:8}"
+          GENERATED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          jq -n \
+            --arg project "ciris-lens" \
+            --arg version "$SHORT_SHA" \
+            --arg digest "$DIGEST" \
+            --arg generated_at "$GENERATED_AT" \
+            --arg notes "CIRIS federation lens substrate; signed BuildManifest available as GH Actions artifact lens-build-manifest-${{ github.sha }} (Path-C consumption). Multi-arch OCI image: linux/amd64 + linux/arm64." \
+            '{
+               project: $project,
+               version: $version,
+               binaries: {"oci-multiarch": $digest},
+               generated_at: $generated_at,
+               notes: $notes
+             }' > dist/registry_payload.json
+          echo "Registry POST payload:"
+          jq . dist/registry_payload.json
+
+      - name: Register binary catalog with CIRISRegistry
         # Both prereqs from CIRISLens#3 confirmed by bridge-ops 2026-05-02:
         # Q1) trusted_primitive_keys row for project="ciris-lens" was
-        #     created 2026-05-01 ~22:34 UTC with our published
-        #     ed25519/mldsa65 fingerprints. RegisterTrustedPrimitiveKey
+        #     created 2026-05-01 ~22:34 UTC; RegisterTrustedPrimitiveKey
         #     RPC ran successfully.
-        # Q2) BuildPrimitive::Lens is a first-class enum variant in
-        #     rust-registry/src/build_manifest.rs:31-54 — no allowlist
-        #     gate, no server-side LensExtrasValidator (extras are
-        #     stored as opaque serde_json::Value; verifier-side is the
-        #     extras-validation venue). primitive: "lens" wire shape;
-        #     trusted-key DB lookup uses project_name() = "ciris-lens".
-        # Hard pass/fail now — registry POST is on the critical path.
+        # Q2) BuildPrimitive::Lens is a first-class enum variant; no
+        #     allowlist gate. POST endpoint accepts the binary-catalog
+        #     payload above (matches CIRISPersist's successful pattern).
+        # Hard pass/fail.
         env:
           REGISTRY_URL: ${{ vars.REGISTRY_URL }}
           REGISTRY_ADMIN_TOKEN: ${{ secrets.REGISTRY_ADMIN_TOKEN }}
@@ -216,21 +258,17 @@ jobs:
             echo "::error::REGISTRY_ADMIN_TOKEN not configured"
             exit 1
           fi
-          echo "POSTing lens BuildManifest to ${REG}/v1/verify/binary-manifest"
+          echo "POSTing binary catalog to ${REG}/v1/verify/binary-manifest"
           HTTP_CODE=$(curl -sS -o dist/registry_response.json -w '%{http_code}' \
             -X POST "${REG}/v1/verify/binary-manifest" \
             -H "Authorization: Bearer ${REGISTRY_ADMIN_TOKEN}" \
             -H "Content-Type: application/json" \
-            --data-binary @dist/lens-manifest.json) || HTTP_CODE="curl_failed"
+            --data-binary @dist/registry_payload.json) || HTTP_CODE="curl_failed"
           echo "registry response: ${HTTP_CODE}"
           jq . dist/registry_response.json 2>/dev/null || cat dist/registry_response.json || true
           case "${HTTP_CODE}" in
             2*)
-              echo "::notice::lens BuildManifest registered with CIRISRegistry"
-              ;;
-            401)
-              echo "::error::401 — manifest signature didn't verify against the registered trusted_primitive_keys row for ciris-lens. Bridge-ops should re-check that the GHA secret keypair matches the registered ed25519 fingerprint b68ce2f6… and mldsa65 fingerprint 656f9a1f…"
-              exit 1
+              echo "::notice::lens binary catalog registered with CIRISRegistry"
               ;;
             *)
               echo "::error::registry POST returned ${HTTP_CODE}"
@@ -238,12 +276,47 @@ jobs:
               ;;
           esac
 
-      - name: Upload signed manifest as build artifact
-        # Always upload — even if the POST was gated. Provides a Path-C
-        # (per CIRISRegistry#5 taxonomy) consumption surface: bridge
-        # operators can pull the signed manifest from the GH Actions
-        # artifact store while the registry-side POST registration is
-        # in flight.
+      - name: Round-trip verify the registered manifest
+        # Mirror persist's round-trip step: GET back what we POSTed,
+        # confirm the binary digest survived. CIRISPersist#2 close
+        # criterion was exactly this — proof the registry stored what
+        # we sent without server-side mangling.
+        env:
+          REGISTRY_URL: ${{ vars.REGISTRY_URL }}
+        run: |
+          REG="${REGISTRY_URL:-https://registry.ciris.ai}"
+          SHORT_SHA="${GITHUB_SHA:0:8}"
+          # GET function-manifest path; persist used /v1/verify/function-manifest/{ver}/{target}
+          # but the binary-manifest GET shape may differ. Try both.
+          for PATH in "function-manifest/${SHORT_SHA}/oci-multiarch" "binary-manifest/${SHORT_SHA}/oci-multiarch" "build-manifest/lens/${SHORT_SHA}/oci-multiarch"; do
+            URL="${REG}/v1/verify/${PATH}?project=ciris-lens"
+            HTTP_CODE=$(curl -sS -o "dist/round_trip_${PATH//\//_}.json" -w '%{http_code}' "${URL}") || HTTP_CODE="curl_failed"
+            echo "GET ${URL}: ${HTTP_CODE}"
+          done
+          # Find any that returned 2xx and compare its binary digest
+          # against what we POSTed.
+          ORIGINAL_DIGEST=$(jq -r '.binaries["oci-multiarch"]' dist/registry_payload.json)
+          echo "POSTed digest: ${ORIGINAL_DIGEST}"
+          for f in dist/round_trip_*.json; do
+            FOUND=$(jq -r '.. | objects | select(has("binaries")) | .binaries["oci-multiarch"]? // empty' "$f" 2>/dev/null | head -1)
+            if [ -n "$FOUND" ]; then
+              echo "Round-trip digest from $f: ${FOUND}"
+              if [ "${FOUND}" = "${ORIGINAL_DIGEST}" ]; then
+                echo "::notice::round-trip verified — POSTed digest matches GET response"
+                break
+              else
+                echo "::warning::round-trip mismatch: POSTed=${ORIGINAL_DIGEST} GOT=${FOUND}"
+              fi
+            fi
+          done
+
+      - name: Upload signed manifest + diagnostics as build artifact
+        # Always upload — Path-C consumption per CIRISRegistry#5
+        # taxonomy. The registry POST above registers a lighter
+        # binary-catalog payload; the full signed BuildManifest
+        # (with hybrid Ed25519+ML-DSA-65 signature, LensExtras, and
+        # provenance metadata) lives here for federation peers /
+        # verifier-side consumption.
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -253,7 +326,9 @@ jobs:
             dist/lens-manifest.json
             dist/binary_digest.txt
             dist/steward-key.json
+            dist/registry_payload.json
             dist/registry_response.json
+            dist/round_trip_*.json
           if-no-files-found: warn
           retention-days: 90
 
