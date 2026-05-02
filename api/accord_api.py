@@ -1903,7 +1903,7 @@ async def _delegate_to_persist(body: bytes) -> dict[str, Any]:
     # BatchSummary fields and returns HTTP 500 — making every
     # successful persist write LOOK like a server error to the agent,
     # which then retries, hits the dedup index, and spirals.
-    # (Bridge surfaced this as "27 × DELEGATE_RESULT, 27 × HTTP 500,
+    # (Bridge surfaced this as "27x DELEGATE_RESULT, 27x HTTP 500,
     # only the first envelope wrote rows because every retry
     # conflicted on the UNIQUE index.")
     #
