@@ -70,7 +70,14 @@ onnxruntime==1.25.0
 #           verifies against both and succeeds on either. CIRISAgent#710
 #           tracks the agent-side migration to 9-field spec; persist's
 #           fallback can drop the 2-field path on a future minor once
-#           the fleet has flipped. Production unblocker — closes the
-#           verify_signature_mismatch loop the bridge's diagnostic at
-#           ./diagnostic/raw_bodies/ pinned.
-ciris-persist==0.1.16
+#           the fleet has flipped.
+# v0.1.17 — diagnostic breadcrumb on the verify_unknown_key reject path
+#           (per CIRISPersist#6). When lookup_public_key returns
+#           Ok(None), persist now logs envelope_signer_id +
+#           looked_up_id_bytes_hex + accord_public_keys_size +
+#           sample of known ids. Capture with RUST_LOG=ciris_persist=warn
+#           and the next flag-on soak window pins which of the four
+#           remaining persist-internal hypotheses is the bug
+#           (init-time cache scope, transaction snapshot, deserializer
+#           transform, or search_path drift).
+ciris-persist==0.1.17
