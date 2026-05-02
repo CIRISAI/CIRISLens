@@ -53,4 +53,14 @@ onnxruntime==1.25.0
 # ships a new release we want; provenance proven via PyPI sigstore
 # attestation (PEP 740) + CIRISRegistry round-trip on the
 # BuildManifest hybrid signature.
-ciris-persist==0.1.13
+#
+# v0.1.13 — initial PyPI publish (PoB substrate primitives).
+# v0.1.14 — interim release.
+# v0.1.15 — fixes the URL-safe base64 signature-decode mismatch that
+#           caused 100% verify_invalid_signature on real Python-agent
+#           traffic. Agents emit Ed25519 sigs as URL-safe base64
+#           (`-`, `_`, no padding); persist ≤0.1.14 used the standard
+#           alphabet decoder which truncated to 62-63 bytes. v0.1.15
+#           accepts both alphabets. Diagnostic capture in
+#           ./diagnostic/ proved the byte-length math.
+ciris-persist==0.1.15
