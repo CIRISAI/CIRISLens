@@ -68,6 +68,22 @@ def _truthy(v: str | None) -> bool:
     return (v or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _credential_free_dsn_label(dsn: str) -> str:
+    """Return host:port/dbname from a DSN — credentials elided.
+
+    Surfaced at Engine init so operators can confirm without bashing
+    into the container that persist queries the same database the
+    legacy ingest path uses. The full DSN may carry passwords; only
+    the connection target is logged.
+    """
+    try:
+        from urllib.parse import urlparse  # noqa: PLC0415
+        parsed = urlparse(dsn)
+        return f"{parsed.hostname}:{parsed.port or '?'}{parsed.path}"
+    except Exception:  # noqa: BLE001
+        return "<unparseable>"
+
+
 class _State:
     """Module-singleton state. Class-as-namespace avoids `global`
     statements while keeping the public surface (initialize / get_engine
@@ -102,11 +118,13 @@ async def initialize() -> Engine | None:
         logger.warning("CIRISLENS_PERSIST_DISABLED is set; falling back to legacy ingest path")
         return None
 
+    dsn_source = "CIRISLENS_DB_URL" if os.getenv("CIRISLENS_DB_URL") else "DATABASE_URL"
     dsn = os.getenv("CIRISLENS_DB_URL") or os.getenv("DATABASE_URL")
     if not dsn:
         _State.init_error = "neither CIRISLENS_DB_URL nor DATABASE_URL is set"
         logger.warning("ciris-persist not initialized: %s", _State.init_error)
         return None
+    dsn_label = _credential_free_dsn_label(dsn)
 
     try:
         import ciris_persist as cp  # noqa: PLC0415  — lazy import; may be absent in dev
@@ -139,11 +157,14 @@ async def initialize() -> Engine | None:
         _State.scrubber_ready = True
 
     logger.info(
-        "Constructing ciris_persist.Engine: version=%s schemas=%s key_id=%s scrubber=%s",
+        "Constructing ciris_persist.Engine: version=%s schemas=%s key_id=%s "
+        "scrubber=%s dsn_source=%s dsn_target=%s",
         cp.__version__,
         cp.SUPPORTED_SCHEMA_VERSIONS,
         key_id,
         "wired" if scrubber_cb is not None else "null",
+        dsn_source,
+        dsn_label,
     )
 
     # Serialize across uvicorn workers via Postgres advisory lock —
