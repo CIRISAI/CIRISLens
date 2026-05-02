@@ -1844,11 +1844,21 @@ async def _delegate_to_persist(body: bytes) -> dict[str, Any]:
     engine = persist_engine.get_engine()
     if engine is None:  # pragma: no cover — caller checked
         raise HTTPException(status_code=503, detail="persist engine unavailable")
+
+    # Body sha256 lets us correlate this lens-side log line with persist's
+    # internal reject breadcrumb (CIRISPersist#6) — when persist later
+    # logs `wire_body_sha256=...`, that hash matches what we logged here.
+    # Both layers can verify they're looking at the same payload bytes.
+    body_sha = hashlib.sha256(body).hexdigest()[:16]
+
     try:
         summary = engine.receive_and_persist(body)
     except ValueError as e:
         msg = str(e)
-        logger.warning("PERSIST_DELEGATE_REJECT class=ValueError msg=%s", msg[:200])
+        logger.warning(
+            "PERSIST_DELEGATE_REJECT class=ValueError msg=%s body_sha256_prefix=%s body_bytes=%d",
+            msg[:200], body_sha, len(body),
+        )
         # 401 only when verify failed because the signing key isn't in
         # the directory; everything else verify-related stays 422
         # (malformed sig, sig mismatch, etc.).
@@ -1857,7 +1867,10 @@ async def _delegate_to_persist(body: bytes) -> dict[str, Any]:
         raise HTTPException(status_code=422, detail=msg) from e
     except RuntimeError as e:
         msg = str(e)
-        logger.error("PERSIST_DELEGATE_REJECT class=RuntimeError msg=%s", msg[:200])
+        logger.error(
+            "PERSIST_DELEGATE_REJECT class=RuntimeError msg=%s body_sha256_prefix=%s body_bytes=%d",
+            msg[:200], body_sha, len(body),
+        )
         raise HTTPException(
             status_code=503,
             detail=msg,
