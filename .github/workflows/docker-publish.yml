@@ -286,18 +286,27 @@ jobs:
         run: |
           REG="${REGISTRY_URL:-https://registry.ciris.ai}"
           SHORT_SHA="${GITHUB_SHA:0:8}"
-          # GET function-manifest path; persist used /v1/verify/function-manifest/{ver}/{target}
-          # but the binary-manifest GET shape may differ. Try both.
-          for PATH in "function-manifest/${SHORT_SHA}/oci-multiarch" "binary-manifest/${SHORT_SHA}/oci-multiarch" "build-manifest/lens/${SHORT_SHA}/oci-multiarch"; do
-            URL="${REG}/v1/verify/${PATH}?project=ciris-lens"
-            HTTP_CODE=$(curl -sS -o "dist/round_trip_${PATH//\//_}.json" -w '%{http_code}' "${URL}") || HTTP_CODE="curl_failed"
-            echo "GET ${URL}: ${HTTP_CODE}"
-          done
-          # Find any that returned 2xx and compare its binary digest
-          # against what we POSTed.
+          # GET back what we POSTed; registry's GET path shape isn't
+          # standardized yet (CIRISRegistry#5 §1-2 documents the
+          # evolving paths) — try the three candidates persist's
+          # team has surfaced. Loop variable is `endpoint`, NOT
+          # `PATH` — shadowing $PATH wipes out executable lookup.
           ORIGINAL_DIGEST=$(jq -r '.binaries["oci-multiarch"]' dist/registry_payload.json)
           echo "POSTed digest: ${ORIGINAL_DIGEST}"
+          for endpoint in \
+              "function-manifest/${SHORT_SHA}/oci-multiarch" \
+              "binary-manifest/${SHORT_SHA}/oci-multiarch" \
+              "build-manifest/lens/${SHORT_SHA}/oci-multiarch"; do
+            URL="${REG}/v1/verify/${endpoint}?project=ciris-lens"
+            OUT="dist/round_trip_${endpoint//\//_}.json"
+            HTTP_CODE=$(curl -sS -o "$OUT" -w '%{http_code}' "${URL}") || HTTP_CODE="curl_failed"
+            echo "GET ${URL}: ${HTTP_CODE}"
+          done
+          # Find a returned manifest with our digest. Round-trip mismatch
+          # is informational (the registry's GET surface is evolving);
+          # POST success is the close criterion.
           for f in dist/round_trip_*.json; do
+            [ -f "$f" ] || continue
             FOUND=$(jq -r '.. | objects | select(has("binaries")) | .binaries["oci-multiarch"]? // empty' "$f" 2>/dev/null | head -1)
             if [ -n "$FOUND" ]; then
               echo "Round-trip digest from $f: ${FOUND}"
