@@ -195,22 +195,26 @@ jobs:
             echo "::warning::steward-key fetch failed; registry may be down or path differs"
 
       - name: Register lens BuildManifest with CIRISRegistry
-        # GATED: registry-side `--primitive lens` registration +
-        # RegisterTrustedPrimitiveKey for our pubkey are open questions
-        # on CIRISLens#3. Without those, this POST returns 401 (per the
-        # exact symptom CIRISVerify v1.8.3 hit, documented in
-        # CIRISRegistry#5 §3). continue-on-error keeps CI green during
-        # the negotiation window; manifest is still signed + uploaded
-        # as a build artifact for the bridge to pick up out-of-band.
-        continue-on-error: true
+        # Both prereqs from CIRISLens#3 confirmed by bridge-ops 2026-05-02:
+        # Q1) trusted_primitive_keys row for project="ciris-lens" was
+        #     created 2026-05-01 ~22:34 UTC with our published
+        #     ed25519/mldsa65 fingerprints. RegisterTrustedPrimitiveKey
+        #     RPC ran successfully.
+        # Q2) BuildPrimitive::Lens is a first-class enum variant in
+        #     rust-registry/src/build_manifest.rs:31-54 — no allowlist
+        #     gate, no server-side LensExtrasValidator (extras are
+        #     stored as opaque serde_json::Value; verifier-side is the
+        #     extras-validation venue). primitive: "lens" wire shape;
+        #     trusted-key DB lookup uses project_name() = "ciris-lens".
+        # Hard pass/fail now — registry POST is on the critical path.
         env:
           REGISTRY_URL: ${{ vars.REGISTRY_URL }}
           REGISTRY_ADMIN_TOKEN: ${{ secrets.REGISTRY_ADMIN_TOKEN }}
         run: |
           REG="${REGISTRY_URL:-https://registry.ciris.ai}"
           if [ -z "${REGISTRY_ADMIN_TOKEN}" ]; then
-            echo "::warning::REGISTRY_ADMIN_TOKEN not set; skipping POST"
-            exit 0
+            echo "::error::REGISTRY_ADMIN_TOKEN not configured"
+            exit 1
           fi
           echo "POSTing lens BuildManifest to ${REG}/v1/verify/binary-manifest"
           HTTP_CODE=$(curl -sS -o dist/registry_response.json -w '%{http_code}' \
@@ -221,10 +225,17 @@ jobs:
           echo "registry response: ${HTTP_CODE}"
           jq . dist/registry_response.json 2>/dev/null || cat dist/registry_response.json || true
           case "${HTTP_CODE}" in
-            2*)  echo "::notice::manifest registered" ;;
-            401) echo "::warning::401 — registry needs RegisterTrustedPrimitiveKey for ciris-lens-build-v1 (CIRISLens#3 / CIRISRegistry#5 §3)" ;;
-            404) echo "::warning::404 — registry may not yet support --primitive lens (CIRISLens#3 Q2)" ;;
-            *)   echo "::warning::registry POST returned ${HTTP_CODE}" ;;
+            2*)
+              echo "::notice::lens BuildManifest registered with CIRISRegistry"
+              ;;
+            401)
+              echo "::error::401 — manifest signature didn't verify against the registered trusted_primitive_keys row for ciris-lens. Bridge-ops should re-check that the GHA secret keypair matches the registered ed25519 fingerprint b68ce2f6… and mldsa65 fingerprint 656f9a1f…"
+              exit 1
+              ;;
+            *)
+              echo "::error::registry POST returned ${HTTP_CODE}"
+              exit 1
+              ;;
           esac
 
       - name: Upload signed manifest as build artifact
