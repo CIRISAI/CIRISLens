@@ -142,6 +142,14 @@ COPY sql/ /app/sql/
 # Copy schema definitions
 COPY schemas/ /app/schemas/
 
+# Ops scripts that run INSIDE the lens-api container (docker exec).
+# Most scripts in scripts/ are operator-driven from the dev machine
+# via SSH tunnel (corpus_shape, measure_n_eff, etc.) and don't belong
+# in the image. Only the ones below need in-container execution
+# because they require Engine + steward seed wiring that already
+# exists in the worker process.
+COPY scripts/migrate_pubkeys_to_federation.py /app/scripts/migrate_pubkeys_to_federation.py
+
 # Copy the pre-exported NER model bundle (ONNX + INT8 quantized
 # DistilBERT-multilingual + tokenizer + config).
 COPY --from=model-builder /build/models /app/models
