@@ -71,9 +71,24 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
-# Add api/ to path so persist_engine + federation_mirror imports work.
-_API_DIR = Path(__file__).resolve().parent.parent / "api"
-sys.path.insert(0, str(_API_DIR))
+# Locate the api package on disk, accounting for both layouts:
+#   - Dev tree:  /home/.../CIRISLens/scripts/this.py → ../api/persist_engine.py
+#   - Container: /app/scripts/this.py → ../persist_engine.py (api/ flattened
+#     into /app by Dockerfile's `COPY api/ .`).
+# Pick the first candidate that actually contains persist_engine.py;
+# raise loudly if neither exists so we fail fast instead of with a
+# confusing ModuleNotFoundError later.
+_HERE = Path(__file__).resolve().parent
+for _cand in (_HERE.parent / "api", _HERE.parent):
+    if (_cand / "persist_engine.py").is_file():
+        sys.path.insert(0, str(_cand))
+        break
+else:  # pragma: no cover — both candidates missing means broken layout
+    raise RuntimeError(
+        "Could not locate persist_engine.py from "
+        f"{_HERE} (tried ../api and ..). Run from a CIRISLens checkout "
+        "or inside the lens-api container.",
+    )
 
 import asyncpg  # noqa: E402
 
