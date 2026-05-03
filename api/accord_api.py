@@ -2892,57 +2892,7 @@ async def dsar_delete_traces(request: DSARDeleteRequest) -> dict[str, Any]:
         )
         deleted_alerts = int(result.split()[-1]) if result else 0
 
-    # ─── Persist-owned data: fold onto Engine.delete_traces_for_agent ──
-    # CIRISLens#8 ASK 1 closure (CIRISPersist v0.3.5). Engine deletes
-    # persist-owned post-cutover data: trace_events + trace_llm_calls
-    # (and optionally federation_keys + attestations + revocations when
-    # include_federation_key=True; we leave the agent's signing key
-    # alive here so the agent can register fresh consent + start a new
-    # corpus, matching pre-fold lens behaviour).
-    #
-    # Scope shift to flag: persist's API is per-agent_id_hash, so
-    # trace_events deletion is broader than the per-(agent_id_hash,
-    # signature_key_id) scope above. That's correct for GDPR Article 17
-    # — the data subject is the person, not the key. A key rotation
-    # should not strand a user's old traces in undeletable state.
-    # Pre-cutover accord_traces deletion above retains the per-key
-    # scope because that's the contract those rows were stored under;
-    # post-cutover trace_events follows the agent-scoped contract.
-    deleted_trace_events = 0
-    deleted_trace_llm_calls = 0
-    engine = persist_engine.get_engine()
-    if engine is not None:
-        try:
-            engine_summary = engine.delete_traces_for_agent(
-                request.agent_id_hash,
-                include_federation_key=False,
-            )
-            deleted_trace_events = engine_summary.get("trace_events_deleted", 0)
-            deleted_trace_llm_calls = engine_summary.get("trace_llm_calls_deleted", 0)
-            logger.info(
-                "DSAR persist-owned delete: agent_id_hash=%s "
-                "trace_events=%d trace_llm_calls=%d",
-                request.agent_id_hash,
-                deleted_trace_events, deleted_trace_llm_calls,
-            )
-        except Exception as e:
-            # Best-effort: lens-owned deletion already succeeded; don't
-            # roll back the DSAR if the persist-side delete fails. The
-            # operator can re-run the DSAR or escalate; the partial
-            # deletion is documented in the response below.
-            logger.warning(
-                "DSAR persist-owned delete failed for agent_id_hash=%s: %s "
-                "(lens-owned legacy/derived deletes succeeded; persist data "
-                "remains — operator should re-run DSAR or escalate)",
-                request.agent_id_hash, e,
-            )
-
-    # Re-acquire connection for the dsar_requests update; the original
-    # block was closed by the persist call splitting the transaction
-    # boundary. dsar_requests is lens-owned (lens-derived), so this stays
-    # on db_pool.
-    async with db_pool.acquire() as conn:
-        total_deleted = deleted_traces + deleted_mock + deleted_trace_events
+        total_deleted = deleted_traces + deleted_mock
 
         # Update DSAR record with results
         await conn.execute(
