@@ -274,6 +274,13 @@ jobs:
         # confirm the binary digest survived. CIRISPersist#2 close
         # criterion was exactly this — proof the registry stored what
         # we sent without server-side mangling.
+        #
+        # 2026-05-03: persist v0.4.0 tag CI hit a transient 404 on
+        # the round-trip GET — read-after-write race where the GET
+        # fired before the POST settled. Retry with backoff closes
+        # the window. If persistent 404 (not transient), final
+        # iteration's HTTP code surfaces in the loop body's echo line
+        # for forensic diagnosis.
         env:
           REGISTRY_URL: ${{ vars.REGISTRY_URL }}
         run: |
@@ -292,7 +299,25 @@ jobs:
               "build-manifest/lens/${SHORT_SHA}/oci-multiarch"; do
             URL="${REG}/v1/verify/${endpoint}?project=ciris-lens"
             OUT="dist/round_trip_${endpoint//\//_}.json"
-            HTTP_CODE=$(curl -sS -o "$OUT" -w '%{http_code}' "${URL}") || HTTP_CODE="curl_failed"
+            # Retry up to 3× with exponential backoff (1s, 2s, 4s) to
+            # absorb registry read-after-write propagation. 4xx other
+            # than 404 doesn't retry — only 404 + 5xx + connection
+            # failures get the backoff treatment.
+            HTTP_CODE=""
+            for attempt in 1 2 3; do
+              HTTP_CODE=$(curl -sS -o "$OUT" -w '%{http_code}' "${URL}") || HTTP_CODE="curl_failed"
+              case "${HTTP_CODE}" in
+                404|5*|curl_failed)
+                  if [ "${attempt}" -lt 3 ]; then
+                    SLEEP=$(( 1 << (attempt - 1) ))   # 1, 2, 4
+                    echo "GET ${URL}: ${HTTP_CODE} (attempt ${attempt}/3, retry in ${SLEEP}s)"
+                    sleep "${SLEEP}"
+                    continue
+                  fi
+                  ;;
+              esac
+              break
+            done
             echo "GET ${URL}: ${HTTP_CODE}"
           done
           # Find a returned manifest with our digest. Round-trip mismatch

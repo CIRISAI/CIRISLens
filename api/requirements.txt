@@ -319,4 +319,40 @@ onnxruntime==1.25.0
 #         stays False so the agent's signing key survives the DSAR
 #         (matches pre-fold lens behaviour: agent can register fresh
 #         consent + start a new corpus).
-ciris-persist==0.3.6
+#
+# v0.4.0  — federation substrate cut. Closes CIRISPersist#16 +
+#           CIRISLens#8 ASK 2; adds AV-40 + AV-41 to persist threat model.
+#
+#   What ships:
+#     ─ edge_outbound_queue durable substrate for
+#       CIRISEdge::send_durable() (closes CIRISEdge OQ-09 — durable
+#       channel for messages that must eventually land:
+#       BuildManifestPublication, DSARRequest/Response,
+#       AttestationGossip, PublicKeyRegistration).
+#     ─ accord_public_keys dual-read fallback RETIRED. Verify path
+#       now reads federation_keys exclusively. Pre-cutover keys are
+#       already in federation_keys (bridge bootstrap + lens migrator
+#       backfilled at v0.2.x; 660 rows confirmed live).
+#     ─ Full verify surface exposed via 5 new Engine methods —
+#       unblocks agent runtime cutover via lens-core.
+#     ─ Threat model AV-40 + AV-41 (durable-queue-specific vectors).
+#
+#   Lens-side change scope for THIS commit: pin bump only.
+#
+#   Deferred to a focused follow-up PR (CIRISLens#8 ASK 2 closure):
+#     ─ Drop direct INSERT into accord_public_keys in
+#       register_public_key (federation_mirror via
+#       Engine.put_public_key has been the load-bearing write since
+#       v0.2.x; the direct INSERT is now a write to a no-longer-read
+#       table).
+#     ─ Switch list_public_keys / verify-cache reads to
+#       federation_keys (paired with the INSERT drop so analytical
+#       reads don't go stale).
+#
+#   Production verification before this pin bump:
+#     2.7.9 traffic happy — 854 events / 31 traces in last hour;
+#     canonical parent_event_type taxonomy (no LLM_CALL substitution);
+#     deployment_profile populated; zero 422s in logs.
+#     Generic-tier agent_id_hash='unknown' tracking on
+#     CIRISAgent#716 (open upstream; not blocking).
+ciris-persist==0.4.0
