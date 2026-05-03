@@ -80,10 +80,20 @@ logger = logging.getLogger(__name__)
 
 
 def get_db_pool() -> asyncpg.Pool | None:
-    """Get the database pool from main module. Avoids circular import."""
-    import main
+    """Get the database pool from main module. Avoids circular import.
+
+    Lens-core handlers run as the persist owner (lens constructed the
+    Engine; lens has the write DSN). Analytical reads stay on this
+    pool — there's no security boundary between lens-core and persist
+    that justifies a separate SELECT-only role for in-process queries.
+    The v0.3.2 `cirislens_reader` role exists for peer-context
+    consumers (export scripts, RATCHET, future federation peers); see
+    `read_pool.py` for that wiring.
+    """
+    import main  # circular-import dodge
 
     return main.db_pool
+
 
 # Create router for Accord endpoints
 router = APIRouter(prefix="/api/v1/accord", tags=["accord"])

@@ -437,6 +437,14 @@ async def startup():
         db_pool = await asyncpg.create_pool(DATABASE_URL, min_size=2, max_size=10)
         logger.info("Database pool created")
 
+        # v0.3.2 read pool — backed by cirislens_reader role per
+        # CIRISPersist#9 / V005. Returns None when CIRISLENS_READ_DSN
+        # is unset (graceful fallback to write pool); never raises.
+        # Lens-core analytical reads route through this pool when
+        # configured.
+        import read_pool  # noqa: PLC0415  — lazy
+        await read_pool.initialize()
+
         # Initialize tables and run migrations
         async with db_pool.acquire() as conn:
             # Create base tables first (non-numbered, always needed)
@@ -540,6 +548,10 @@ async def shutdown():
 
     if db_pool:
         await db_pool.close()
+
+    # Close the read pool too (no-op when CIRISLENS_READ_DSN was unset).
+    import read_pool  # noqa: PLC0415  — lazy
+    await read_pool.close()
 
 
 # Routes

@@ -232,4 +232,27 @@ onnxruntime==1.25.0
 #           Should show upstream-step taxonomy (ASPDMA_RESULT,
 #           IDMA_RESULT, CONSCIENCE_RESULT, ...) instead of 100%
 #           LLM_CALL. CIRISLens#5 closes once that query confirms.
-ciris-persist==0.3.3
+#
+# v0.3.4  — closes CIRISPersist#13 — adds the deployment_profile block
+#           (6 fields: agent_role, agent_template, deployment_domain,
+#           deployment_type, deployment_region, deployment_trust_mode)
+#           to every CompleteTrace envelope at trace_schema_version
+#           2.7.9. Strict-parse: 2.7.9 envelopes without the block
+#           reject with MissingField. Cross-shape rule preserved:
+#           2.7.0 envelopes carrying the block parse cleanly but the
+#           field does NOT enter 2.7.0 canonical bytes (mirrors the
+#           per-component agent_id_hash pattern from v0.3.3).
+#
+#           10-key 2.7.9 outer canonical (was 9). deployment_profile
+#           sorts between components and started_at alphabetically.
+#
+#           Paired with CIRISAgent 431b0e0ae (#718) which adds the
+#           wire-side emission. Same coordinated-deploy pattern as
+#           0.3.3: both must land together — persist 0.3.4 hard-rejects
+#           2.7.9 traffic without the block, so any agent emitting
+#           2.7.9 must also be on 431b0e0ae or 422-rejected.
+#
+#           Lens-side change: pin bump only. Post-deploy validation
+#           query verifies deployment_profile breakdown lights up
+#           across the 2.7.9 fleet (per bridge runbook).
+ciris-persist==0.3.4

@@ -47,8 +47,11 @@ _cache_refresh_lock = asyncio.Lock()
 
 
 def get_db_pool() -> asyncpg.Pool | None:
-    """Get the database pool from main module."""
-    import main
+    """Get the database pool from main module. Lens-core uses this
+    for both reads and writes — owner-relationship privilege; see
+    accord_api.py's helper for the rationale on why in-process
+    handlers don't route through the v0.3.2 SELECT-only role."""
+    import main  # circular-import dodge
     return main.db_pool
 
 
