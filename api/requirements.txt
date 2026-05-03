@@ -165,4 +165,38 @@ onnxruntime==1.25.0
 #           ML-DSA-65 seed alongside the existing Ed25519 seed.
 #           Backwards-compatible: v0.3.0 callers unchanged; new params
 #           are additive.
-ciris-persist==0.3.1
+#
+# v0.3.2  — closes the two outstanding architectural follow-ups in
+#           one tag:
+#
+#           CIRISPersist#11 — Engine.run_pqc_sweep() + auto-fire on
+#           Engine construction. Walks federation_* rows where
+#           pqc_completed_at IS NULL, re-canonicalizes via persist's
+#           own PythonJsonDumpsCanonicalizer, signs (canonical ||
+#           classical_sig) with the configured steward_pqc identity,
+#           calls attach_*_pqc_signature. Auto-fire on init drains
+#           any pre-existing hybrid-pending backlog passively the
+#           next time persist boots — exactly what V004's Phase 2
+#           "pre-flip rows get walked through the upgrade pipeline"
+#           contract presupposes. Recovers from cold-path failures
+#           too (transient sign errors, mid-write process restarts).
+#
+#           CIRISPersist#9 — V005 read-only role + public column
+#           contract. `cirislens_reader` PostgreSQL role provisioned
+#           at migration time with SELECT-only privileges across
+#           cirislens.* tables. PUBLIC_SCHEMA_CONTRACT.md documents
+#           which columns downstream consumers can rely on, with
+#           stability tiers (stable / stable-ro / internal). Lens-
+#           side wiring of CIRISLENS_READ_DSN for analytical paths
+#           ships separately when we're ready to migrate trace_context
+#           view + science scripts to the read-only connection;
+#           v0.3.2 just makes the surface available.
+#
+#           Lens-side change scope for the cold-path sweep: pin bump
+#           only. Auto-fire on init drains the 654 hybrid-pending
+#           rows authored under v0.3.0 / v0.3.1's-without-PQC-mount
+#           the next time bridge redeploys. tracing::info! summary
+#           line in lens logs confirms completion. No code change,
+#           no env var, no bridge prereq — the existing PQC seed
+#           mount that landed for v0.3.1 carries forward.
+ciris-persist==0.3.2
