@@ -255,4 +255,34 @@ onnxruntime==1.25.0
 #           Lens-side change: pin bump only. Post-deploy validation
 #           query verifies deployment_profile breakdown lights up
 #           across the 2.7.9 fleet (per bridge runbook).
-ciris-persist==0.3.4
+#
+# v0.3.5  — closes three CIRISLens#8 asks in one release:
+#
+#   ASK 1: Engine.delete_traces_for_agent(agent_id_hash, include_
+#          federation_key=False) — DSAR primitive. Deletes persist-
+#          owned post-cutover data (trace_events + trace_llm_calls;
+#          optionally federation_keys + attestations + revocations
+#          when include_federation_key=True). Lens DSAR handler folds
+#          onto this for persist-owned tables; lens-owned legacy
+#          (accord_traces, accord_traces_mock) and lens-derived
+#          (coherence_ratchet_alerts) keep their direct DELETE.
+#
+#          Scope shift: persist's API is per-agent_id_hash, broader
+#          than lens's pre-fold per-(agent_id_hash, signature_key_id)
+#          scope. That's correct for GDPR Article 17 (data subject
+#          is the person, not the key); pre-cutover accord_traces
+#          deletion retains the per-key scope because that's the
+#          contract those rows were stored under.
+#
+#   ASK 2: v0.4.0 timing — accord_public_keys dual-read retires;
+#          lens-side direct INSERT into accord_public_keys can retire
+#          the same release. Coordinate at v0.4.0 cut.
+#
+#   ASK 3: Engine.fetch_trace_events_page(after_event_id, limit,
+#          agent_id_hash) — page-cursor read primitive. Useful for
+#          future analytical migrations; not used in this lens
+#          release. Available for the next analytical-path fold.
+#
+#          Lens-side change scope: this pin bump + DSAR handler
+#          fold (~30 lines in accord_api.py).
+ciris-persist==0.3.5
