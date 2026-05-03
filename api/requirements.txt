@@ -199,4 +199,37 @@ onnxruntime==1.25.0
 #           line in lens logs confirms completion. No code change,
 #           no env var, no bridge prereq — the existing PQC seed
 #           mount that landed for v0.3.1 carries forward.
-ciris-persist==0.3.2
+#
+# v0.3.3  — closes CIRISPersist#12 (LlmCallSummary missing fields +
+#           decompose substitution + presence-only validation gap
+#           that bridge's v0.3.0 deploy validation passed despite the
+#           regression). Three coordinated changes:
+#             1. parent_event_type + parent_attempt_index added to
+#                the LlmCallSummary serde struct (REQUIRED at 2.7.9).
+#             2. decompose.rs reads from the struct fields instead of
+#                substituting component.event_type (which was always
+#                literally "LLM_CALL" for an LLM_CALL component —
+#                defeated AV-9 parent-linkage signal).
+#             3. Parse-time validation: 2.7.9 LLM_CALL events without
+#                both fields reject with typed UnsupportedSchemaVersion;
+#                the v0.3.0 "required at 2.7.9" gate is now value-
+#                correct, not just presence-correct.
+#
+#           Paired with CIRISAgent e714ff3c4 (#715) which fixes the
+#           agent-side wire-emission of those fields. **Both must
+#           deploy together** — persist 0.3.3's parse-time rejection
+#           would 422 in-flight 2.7.9 LLM_CALL traffic during the
+#           rollout if the agent fix isn't already live. Bridge
+#           coordinates the bump.
+#
+#           Lens-side change scope: this pin bump. No code change,
+#           no env var. Post-deploy verification:
+#             SELECT parent_event_type, COUNT(*)
+#             FROM cirislens.trace_llm_calls
+#             WHERE schema_version = '2.7.9'
+#               AND ts > <deploy_ts>
+#             GROUP BY 1;
+#           Should show upstream-step taxonomy (ASPDMA_RESULT,
+#           IDMA_RESULT, CONSCIENCE_RESULT, ...) instead of 100%
+#           LLM_CALL. CIRISLens#5 closes once that query confirms.
+ciris-persist==0.3.3
