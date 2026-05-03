@@ -50,6 +50,16 @@ session close releases the lock automatically.
   the deployment exposes (e.g. /run/secrets/lens-steward, or a
   Docker secret). Must be readable by uid 1000 (cirislens user) and
   not world-readable.
+- CIRISLENS_STEWARD_PQC_KEY_ID — federation steward PQC identifier
+  (default `lens-steward-mldsa`). Per persist v0.3.1, drives the
+  cold-path ML-DSA-65 sign automatically inside Engine — every
+  put_public_key / put_attestation / put_revocation fires a
+  fire-and-forget tokio task that signs (canonical || classical_sig)
+  with this identity and calls attach_*_pqc_signature to populate
+  pqc_completed_at. No consumer-side worker needed (CIRISPersist#10).
+- CIRISLENS_STEWARD_PQC_KEY_PATH — filesystem path to the 32-byte
+  raw ML-DSA-65 seed. Bridge generates the keypair offline alongside
+  the Ed25519 one; same vault pattern. Same uid/permission rules.
 - CIRISLENS_PERSIST_DISABLED — if set to truthy, skip Engine
   construction. Lens then falls back to the legacy ingest path.
 
@@ -58,6 +68,13 @@ ValueError if exactly one of steward_key_id/path is set. When neither
 is set, federation-mirror writes from `federation_mirror.py` no-op
 (legacy-only path); when both are set, every agent registration is
 mirrored into federation_keys signed by the steward.
+
+Same both-or-neither rule applies to steward_pqc_key_id/path
+(persist v0.3.1+). When the PQC pair is set, federation_keys rows
+the lens authors hybrid-complete in seconds via persist's
+automatic cold-path. When it's unset, rows stay hybrid-pending
+indefinitely — explicitly schema-supported per V004's writer
+contract until Phase 2 PQC enforcement flips.
 """
 
 from __future__ import annotations
@@ -126,38 +143,82 @@ def _wire_scrubber() -> object | None:
         return callback
 
 
-def _resolve_steward_args() -> tuple[str | None, str | None, str | None]:
-    """Read CIRISLENS_STEWARD_KEY_ID + CIRISLENS_STEWARD_KEY_PATH and
-    return `(key_id, key_path, error)` to pass to the Engine
-    constructor. The third tuple element is set when configuration is
-    invalid (path set but file missing) — caller surfaces it via
-    `_State.init_error` and aborts initialization.
+def _resolve_keyfile_pair(
+    *,
+    id_env: str,
+    path_env: str,
+    default_id: str,
+    role_label: str,
+    not_configured_consequence: str,
+) -> tuple[str | None, str | None, str | None]:
+    """Generic both-or-neither resolver for `(<role>_key_id, <role>_key_path)`
+    env-var pairs. Returns `(key_id, key_path, error)`.
 
-    When the path env var is unset (the common case until bridge ships
-    the steward keypair), returns `(None, None, None)` — Engine is
-    constructed without a federation steward, federation_mirror writes
-    will no-op, and the lens runs accord_public_keys-only.
+    - both unset: returns `(None, None, None)` and logs at INFO with
+      the `not_configured_consequence` so operators see what won't
+      happen as a result.
+    - path set but file missing: returns `(None, None, "<env>=... not found")`
+      — caller surfaces via `_State.init_error` and aborts init. This
+      is almost always a deploy-config issue (secret-mount missing).
+    - both present + file readable: returns `(key_id, path, None)`.
+
+    Used for the v0.2.2 Ed25519 steward identity AND the v0.3.1 PQC
+    steward identity. Persist v0.2.2+ raises ValueError if exactly
+    one of an id/path pair is set on Engine construction; pre-validating
+    here makes the error message point at our env vars rather than
+    at persist's constructor signature.
     """
     from pathlib import Path  # noqa: PLC0415  — lazy
 
-    steward_key_id = os.getenv("CIRISLENS_STEWARD_KEY_ID", "lens-steward")
-    steward_key_path = os.getenv("CIRISLENS_STEWARD_KEY_PATH")
-    if steward_key_path is None:
+    key_id = os.getenv(id_env, default_id)
+    key_path = os.getenv(path_env)
+    if key_path is None:
         logger.info(
-            "Federation steward not configured (CIRISLENS_STEWARD_KEY_PATH unset); "
-            "running accord_public_keys-only — federation_mirror writes will no-op"
+            "%s not configured (%s unset); %s",
+            role_label, path_env, not_configured_consequence,
         )
         return None, None, None
-    if not Path(steward_key_path).exists():
-        # Path set but file missing — almost always a deploy-config
-        # issue (secret-mount missing, wrong path). Surface loudly.
-        return None, None, f"CIRISLENS_STEWARD_KEY_PATH={steward_key_path} not found"
+    if not Path(key_path).exists():
+        return None, None, f"{path_env}={key_path} not found"
     logger.info(
-        "Federation steward configured: key_id=%s key_path=%s",
-        steward_key_id,
-        steward_key_path,
+        "%s configured: key_id=%s key_path=%s",
+        role_label, key_id, key_path,
     )
-    return steward_key_id, steward_key_path, None
+    return key_id, key_path, None
+
+
+def _resolve_steward_args() -> tuple[str | None, str | None, str | None]:
+    """v0.2.2 Ed25519 steward identity — wraps the generic resolver."""
+    return _resolve_keyfile_pair(
+        id_env="CIRISLENS_STEWARD_KEY_ID",
+        path_env="CIRISLENS_STEWARD_KEY_PATH",
+        default_id="lens-steward",
+        role_label="Federation steward (Ed25519)",
+        not_configured_consequence=(
+            "running accord_public_keys-only — federation_mirror writes will no-op"
+        ),
+    )
+
+
+def _resolve_steward_pqc_args() -> tuple[str | None, str | None, str | None]:
+    """v0.3.1 ML-DSA-65 steward identity — wraps the generic resolver.
+
+    Drives persist's automatic cold-path PQC fill-in (CIRISPersist#10).
+    When unset, federation_keys rows the lens writes stay hybrid-pending
+    indefinitely (schema-supported per V004 §"writer contract") — the
+    Phase 2 PQC enforcement gate hasn't flipped, so this is hygiene
+    + audit-chain-completeness rather than a security event.
+    """
+    return _resolve_keyfile_pair(
+        id_env="CIRISLENS_STEWARD_PQC_KEY_ID",
+        path_env="CIRISLENS_STEWARD_PQC_KEY_PATH",
+        default_id="lens-steward-mldsa",
+        role_label="Federation steward (ML-DSA-65)",
+        not_configured_consequence=(
+            "rows lens authors will stay hybrid-pending — persist's cold-path "
+            "won't fire (Phase 1 explicitly permits this)"
+        ),
+    )
 
 
 def _credential_free_dsn_label(dsn: str) -> str:
@@ -195,6 +256,12 @@ class _State:
     # works because persist's Backend dual-reads both tables on
     # verify (v0.2.1+).
     steward_ready: bool = False
+    # True when the v0.3.1 ML-DSA-65 steward identity is configured.
+    # When True, persist auto-fires the cold-path on every put_*; rows
+    # the lens authors hybrid-complete in seconds without any consumer
+    # code. When False, rows stay hybrid-pending indefinitely (Phase 1
+    # explicitly schema-supported per V004's writer contract).
+    steward_pqc_ready: bool = False
 
 
 async def initialize() -> Engine | None:
@@ -224,14 +291,18 @@ async def initialize() -> Engine | None:
 
     key_id = os.getenv("CIRISLENS_SCRUB_KEY_ID", "lens-scrub-v1")
 
-    # v0.2.2 steward identity: federation steward (Ed25519). Both-or-
-    # neither — passing only one raises ValueError on the persist side.
-    # We pre-validate via the helper so the error message points at
-    # our env vars rather than at persist's constructor signature.
+    # v0.2.2 steward identity (Ed25519) + v0.3.1 PQC steward identity
+    # (ML-DSA-65). Both-or-neither — passing only one of an id/path
+    # pair raises ValueError on persist's side. The helpers pre-validate
+    # so error messages point at our env vars rather than at persist's
+    # constructor signature. The PQC pair drives persist's automatic
+    # cold-path fill-in (CIRISPersist#10).
     steward_key_id_arg, steward_key_path_arg, steward_err = _resolve_steward_args()
-    if steward_err is not None:
-        _State.init_error = steward_err
-        logger.error("Refusing init: %s", steward_err)
+    pqc_key_id_arg, pqc_key_path_arg, pqc_err = _resolve_steward_pqc_args()
+    init_err = steward_err or pqc_err
+    if init_err is not None:
+        _State.init_error = init_err
+        logger.error("Refusing init: %s", init_err)
         return None
 
     # Persist bypasses the scrubber callback at trace_level=generic
@@ -266,8 +337,11 @@ async def initialize() -> Engine | None:
                 scrubber=scrubber_cb,
                 steward_key_id=steward_key_id_arg,
                 steward_key_path=steward_key_path_arg,
+                steward_pqc_key_id=pqc_key_id_arg,
+                steward_pqc_key_path=pqc_key_path_arg,
             )
             _State.steward_ready = steward_key_path_arg is not None
+            _State.steward_pqc_ready = pqc_key_path_arg is not None
         except Exception as e:
             # Catch every engine-init failure mode — RuntimeError from
             # PyO3, schema-version mismatch, keyring inaccessible, etc.
@@ -314,6 +388,7 @@ def status() -> dict[str, Any]:
         "init_error": _State.init_error,
         "scrubber_ready": _State.scrubber_ready,
         "steward_ready": _State.steward_ready,
+        "steward_pqc_ready": _State.steward_pqc_ready,
     }
 
 
@@ -325,6 +400,14 @@ def scrubber_ready() -> bool:
 
 
 def steward_ready() -> bool:
-    """True iff the federation steward identity is configured. When
-    False, federation_mirror writes no-op (legacy-only path)."""
+    """True iff the federation steward Ed25519 identity is configured.
+    When False, federation_mirror writes no-op (legacy-only path)."""
     return _State.steward_ready
+
+
+def steward_pqc_ready() -> bool:
+    """True iff the v0.3.1 federation steward ML-DSA-65 identity is
+    configured. When True, persist auto-fires cold-path PQC sign on
+    every put_*; rows hybrid-complete in seconds. When False, rows
+    stay hybrid-pending (Phase 1 — schema-supported indefinitely)."""
+    return _State.steward_pqc_ready

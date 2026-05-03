@@ -140,4 +140,29 @@ onnxruntime==1.25.0
 #           Lens-side change scope for 2.7.9 traffic readiness: this
 #           pin bump + the CI cleanup. Persist owns the gate; lens
 #           just consumes whatever persist accepts.
-ciris-persist==0.3.0
+#
+# v0.3.1  — persist-owned cold-path PQC fill-in (closes CIRISPersist#10).
+#           Built on CIRISVerify v1.9.0's PqcSigner trait +
+#           MlDsa65SoftwareSigner. Engine takes optional
+#           `steward_pqc_key_id` + `steward_pqc_key_path` (32B raw
+#           ML-DSA-65 seed, both-or-neither). When configured, every
+#           put_public_key / put_attestation / put_revocation
+#           automatically fires a fire-and-forget tokio cold-path
+#           after the Ed25519 hot-path commit: canonicalize, sign
+#           (canonical || classical_sig) per the bound-signature
+#           pattern, call attach_*_pqc_signature to populate
+#           pqc_completed_at. Hot path returns in milliseconds; PQC
+#           fills within seconds.
+#
+#           No consumer-side worker needed (architectural inversion of
+#           the v0.3.0 framing where this was on lens). Same drift-
+#           prevention argument as CIRISPersist#7: anything byte-stable
+#           across federation consumers belongs in the substrate.
+#
+#           Lens-side change scope: this pin bump + two new env vars
+#           wired through to cp.Engine (CIRISLENS_STEWARD_PQC_KEY_ID
+#           + CIRISLENS_STEWARD_PQC_KEY_PATH). Bridge mounts the
+#           ML-DSA-65 seed alongside the existing Ed25519 seed.
+#           Backwards-compatible: v0.3.0 callers unchanged; new params
+#           are additive.
+ciris-persist==0.3.1
