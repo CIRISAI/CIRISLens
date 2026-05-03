@@ -2892,7 +2892,51 @@ async def dsar_delete_traces(request: DSARDeleteRequest) -> dict[str, Any]:
         )
         deleted_alerts = int(result.split()[-1]) if result else 0
 
-        total_deleted = deleted_traces + deleted_mock
+        # ─── Persist-owned data: post-Phase-2a writes go to trace_events ──
+        # CIRISLens#8 ASK 1 closure (CIRISPersist v0.3.6, after #15
+        # added the required signature_key_id parameter that preserves
+        # the per-key authorization scope this handler enforces).
+        # Engine deletes trace_events + trace_llm_calls (with cascade)
+        # filtered by the SAME (agent_id_hash, signature_key_id) tuple
+        # we apply to the lens-owned legacy tables above. include_
+        # federation_key=False — leaves the agent's signing key alive
+        # so they can register fresh consent + start a new corpus,
+        # matching pre-fold lens behaviour.
+        deleted_trace_events = 0
+        deleted_trace_llm_calls = 0
+        engine = persist_engine.get_engine()
+        if engine is not None:
+            try:
+                engine_summary = engine.delete_traces_for_agent(
+                    request.agent_id_hash,
+                    request.signature_key_id,
+                    include_federation_key=False,
+                )
+                deleted_trace_events = engine_summary.get("trace_events_deleted", 0)
+                deleted_trace_llm_calls = engine_summary.get(
+                    "trace_llm_calls_deleted", 0,
+                )
+                logger.info(
+                    "DSAR persist-owned delete: agent_id_hash=%s key=%s "
+                    "trace_events=%d trace_llm_calls=%d",
+                    request.agent_id_hash, request.signature_key_id,
+                    deleted_trace_events, deleted_trace_llm_calls,
+                )
+            except Exception as e:
+                # Best-effort: lens-owned deletion already succeeded;
+                # don't roll back the DSAR if the persist-side delete
+                # fails. The operator can re-run the DSAR or escalate;
+                # the partial deletion is recorded in the response below.
+                logger.warning(
+                    "DSAR persist-owned delete failed for agent_id_hash=%s "
+                    "key=%s: %s (lens-owned deletes succeeded; persist-owned "
+                    "data remains — operator should re-run DSAR or escalate)",
+                    request.agent_id_hash, request.signature_key_id, e,
+                )
+
+        total_deleted = (
+            deleted_traces + deleted_mock + deleted_trace_events
+        )
 
         # Update DSAR record with results
         await conn.execute(
@@ -2908,12 +2952,16 @@ async def dsar_delete_traces(request: DSARDeleteRequest) -> dict[str, Any]:
         )
 
         logger.info(
-            "DSAR deletion completed: agent_id_hash=%s key_id=%s traces=%d mock=%d alerts=%d",
+            "DSAR deletion completed: agent_id_hash=%s key_id=%s "
+            "accord_traces=%d mock=%d alerts=%d "
+            "trace_events=%d trace_llm_calls=%d",
             request.agent_id_hash,
             request.signature_key_id,
             deleted_traces,
             deleted_mock,
             deleted_alerts,
+            deleted_trace_events,
+            deleted_trace_llm_calls,
         )
 
         return {
@@ -2922,9 +2970,14 @@ async def dsar_delete_traces(request: DSARDeleteRequest) -> dict[str, Any]:
             "agent_id_hash": request.agent_id_hash,
             "traces_deleted": total_deleted,
             "details": {
+                # Lens-owned legacy storage (pre-Phase-2a-cutover history)
                 "accord_traces": deleted_traces,
                 "mock_traces": deleted_mock,
+                # Lens-derived (analytical output)
                 "alerts_cleared": deleted_alerts,
+                # Persist-owned (post-Phase-2a writes; deleted via Engine)
+                "trace_events": deleted_trace_events,
+                "trace_llm_calls": deleted_trace_llm_calls,
             },
         }
 

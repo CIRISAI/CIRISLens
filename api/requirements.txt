@@ -285,4 +285,38 @@ onnxruntime==1.25.0
 #
 #          Lens-side change scope: this pin bump + DSAR handler
 #          fold (~30 lines in accord_api.py).
-ciris-persist==0.3.5
+#
+#          Update: lens v99359e8 attempted the DSAR fold using the
+#          v0.3.5 per-agent API. Reverted at fbbd844 because the
+#          per-agent scope broadens beyond the lens DSAR contract
+#          (per-(agent_id_hash, signature_key_id); the signature_key_id
+#          filter is the AUTHORIZATION scope, not just identity).
+#          Filed CIRISPersist#15 asking for the signature_key_id
+#          parameter; closed in v0.3.6.
+#
+# v0.3.6  — closes two issues:
+#
+#   #14 — Engine.verify_hybrid: day-1 hybrid Ed25519+ML-DSA-65 verify
+#         primitive. Unblocks CIRISEdge OQ-11 (PQC verify timeline).
+#         Lens doesn't consume this directly today (verify happens
+#         inside Engine.receive_and_persist for trace ingest); but
+#         when CIRISEdge lands and absorbs the wire-side verify,
+#         hybrid posture is available out of the box.
+#
+#   #15 — Engine.delete_traces_for_agent now requires signature_key_id.
+#         BREAKING vs v0.3.5 (no escape hatch): the per-agent-only
+#         API in v0.3.5 was a security mistake — broadens the DSAR
+#         scope beyond per-key authorization, allowing one valid key
+#         to delete traces signed by other keys claiming the same
+#         logical agent. v0.3.6 makes signature_key_id REQUIRED.
+#
+#         Lens-side change scope: pin bump + DSAR handler fold lands
+#         cleanly. The persist-owned half (trace_events +
+#         trace_llm_calls) routes through Engine with the per-key
+#         filter intact; lens-owned legacy (accord_traces,
+#         accord_traces_mock) and lens-derived (coherence_ratchet_alerts)
+#         keep their direct DELETE on db_pool. include_federation_key
+#         stays False so the agent's signing key survives the DSAR
+#         (matches pre-fold lens behaviour: agent can register fresh
+#         consent + start a new corpus).
+ciris-persist==0.3.6
