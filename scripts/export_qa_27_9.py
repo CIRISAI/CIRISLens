@@ -333,6 +333,18 @@ async def main(args: argparse.Namespace) -> int:
     started_at = _utc_now_iso()
     conn = await asyncpg.connect(dsn)
     try:
+        # Register a jsonb codec so trace_events.payload (and any other
+        # JSONB column) round-trips as a Python dict/list instead of a
+        # raw JSON-encoded string. Without this, json.dumps re-encodes
+        # the string and consumers see a string-of-JSON instead of the
+        # nested structure they need (channel_id lookups, payload
+        # introspection, etc.).
+        await conn.set_type_codec(
+            "jsonb",
+            encoder=json.dumps,
+            decoder=json.loads,
+            schema="pg_catalog",
+        )
         counts: dict[str, int] = {}
         try:
             counts["trace_events"] = await _export_trace_events(

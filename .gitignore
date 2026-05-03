@@ -107,3 +107,4 @@ cirislens-core/models/*.onnx
 cirislens-core/models/*.json
 cirislens-core/models/*.txt
 cirislens-core/models/sentencepiece.bpe.model
+release_v2/data/
