@@ -355,4 +355,55 @@ onnxruntime==1.25.0
 #     deployment_profile populated; zero 422s in logs.
 #     Generic-tier agent_id_hash='unknown' tracking on
 #     CIRISAgent#716 (open upstream; not blocking).
-ciris-persist==0.4.0
+#
+# v0.4.1  — Rust-side verify primitives + curated prelude (CIRISEdge ask).
+#           Non-breaking; new public Rust API surface only. Adds
+#           verify::verify_hybrid_via_directory free function backing
+#           the PyO3 path (CIRISPersist#7 single-source-of-truth).
+#           No lens-side change required — PyO3 surface unchanged.
+#
+# v0.4.2  — Rust-public StewardSigner (CIRISPersist#17). CIRISLensCore
+#           (rlib path, never PyO3) needs to sign detection events via
+#           persist's steward identity; v0.4.2 lifts construction +
+#           sign primitives to a Rust-public struct. PyO3 Engine refactored
+#           to back onto it. PyO3 surface unchanged from lens's POV.
+#
+# v0.4.3  — lens-derived schemas + 2.7.legacy restoration
+#           (CIRISPersist#18 + #21). Two issues, one release:
+#
+#   #18 — cirislens_derived.{detection_events, calibration_bundles}.
+#         V008 migration adds the schemas with hybrid-sig CHECK
+#         constraints (Ed25519=64 bytes, ML-DSA-65=3309 bytes per FIPS
+#         204 final), partial-unique index for atomic is_current flip
+#         on calibration bundles. New Engine surface (5 methods on
+#         DerivedSchema trait): put_detection_event /
+#         get_detection_events / put_calibration_bundle /
+#         get_current_calibration_bundle / get_calibration_bundle_by_version.
+#         Engine PyO3 verifies hybrid sigs via verify_hybrid_via_directory
+#         under HybridPolicy::Strict before backend write — both sigs
+#         must verify, no fallback.
+#         Lens consumption: deferred — cirislens_derived is the LensCore
+#         landing zone for projection-v1 publications. Pin bump
+#         alone does not start writing; LensCore work picks this up.
+#
+#   #21 — 2.7.legacy restoration. v0.4.0 dropped the legacy 2-field
+#         canonical on a fleet-migration framing that doesn't fit the
+#         decentralized model. v0.4.3 re-adds "2.7.legacy" to
+#         SUPPORTED_VERSIONS under the same observable-traffic sunset
+#         rule already specified for "2.7.0" (drop once
+#         federation_canonical_match_total{wire="2.7.legacy"} stays at
+#         zero through the soak window). Deterministic dispatch — a
+#         trace whose canonical bytes match the 2-field shape verifies
+#         via canonical_payload_value_legacy; not a try-list, not a
+#         flag, not operator-opt-in. Federation-uniform behavior.
+#         Lens-side benefit: pre-2.7.8.9 federation peers (any agent
+#         that pre-dates trace_schema_version stamping at commit
+#         431b0e0ae) verify via Engine.receive_and_persist again.
+#
+# v0.4.4  — CI hygiene patch (no behavioral change vs v0.4.3).
+#           Fixes a stale test asserting SUPPORTED_VERSIONS=["2.7.0",
+#           "2.7.9"] and one cargo fmt drift introduced during #21
+#           work. Adds pre-commit + pre-push hooks to prevent
+#           regression class. Functionality identical to v0.4.3 — the
+#           bump is for the green CI tag the publish flow requires.
+ciris-persist==0.4.4
