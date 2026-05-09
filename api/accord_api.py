@@ -1840,6 +1840,67 @@ def _persist_engine_active(trace_level: str) -> bool:
     return True
 
 
+def _rewrite_legacy_schema_stamp(body: bytes) -> tuple[bytes, int]:
+    """Rewrite pre-2.7.8.9 envelopes so persist routes them to the
+    2-field legacy canonicalizer (CIRISLens#9).
+
+    Pre-2.7.8.9 CIRISAgent (e.g. v2.7.6-stable, services.py:54 setting
+    `TRACE_SCHEMA_VERSION = "2.7.0"`) ships envelopes stamped
+    `trace_schema_version: "2.7.0"` but signs only the 2-field legacy
+    canonical `{"components", "trace_level"}`. Persist 0.4.4's
+    deterministic dispatch (CIRISPersist src/verify/ed25519.rs:469)
+    routes "2.7.0" → 9-field canonicalizer → strict-verify fails →
+    `verify_signature_mismatch`.
+
+    The 2-field legacy canonical does NOT include
+    `trace_schema_version`, so flipping that stamp from "2.7.0" to
+    "2.7.legacy" on the wire does not alter any signed bytes for
+    pre-2.7.8.9 emitters. The 9-field cutover (CIRISAgent commit
+    431b0e0ae / CIRISAgent#710) changed the stamp in lockstep to
+    "2.7.9", so modern emitters are untouched.
+
+    Sunset under the same observable-traffic rule persist applies to
+    legacy schemas (CIRISPersist src/schema/version.rs:36-39): drop
+    this rewrite once `federation_canonical_match_total{wire="2.7.legacy"}`
+    stays at zero through a 7-day soak.
+
+    Returns (body, count). `count` is the number of stamps rewritten
+    across the envelope and per-trace. When count is 0 the original
+    bytes are returned untouched (no roundtrip cost, no mutation
+    concerns); body that fails to parse as JSON is also returned
+    unchanged so persist's typed parser surfaces the structured
+    error.
+    """
+    try:
+        obj = json.loads(body)
+    except (ValueError, TypeError):
+        return body, 0
+
+    if not isinstance(obj, dict):
+        return body, 0
+
+    rewritten = 0
+
+    if obj.get("trace_schema_version") == "2.7.0":
+        obj["trace_schema_version"] = "2.7.legacy"
+        rewritten += 1
+
+    events = obj.get("events")
+    if isinstance(events, list):
+        for event in events:
+            if not isinstance(event, dict):
+                continue
+            trace = event.get("trace")
+            if isinstance(trace, dict) and trace.get("trace_schema_version") == "2.7.0":
+                trace["trace_schema_version"] = "2.7.legacy"
+                rewritten += 1
+
+    if rewritten == 0:
+        return body, 0
+
+    return json.dumps(obj, separators=(",", ":")).encode("utf-8"), rewritten
+
+
 async def _delegate_to_persist(body: bytes) -> dict[str, Any]:
     """Hand a raw BatchEnvelope POST body to ciris-persist's Engine.
     Maps persist's typed errors (ValueError: schema/verify/scrub,
@@ -1854,6 +1915,21 @@ async def _delegate_to_persist(body: bytes) -> dict[str, Any]:
     engine = persist_engine.get_engine()
     if engine is None:  # pragma: no cover — caller checked
         raise HTTPException(status_code=503, detail="persist engine unavailable")
+
+    # CIRISLens#9 — rewrite pre-2.7.8.9 legacy stamps so persist's
+    # by-stamp dispatch routes them to canonical_payload_value_legacy
+    # instead of the 9-field canonicalizer they don't sign against.
+    # See `_rewrite_legacy_schema_stamp` for the safety argument.
+    inbound_body = body
+    body, legacy_rewrites = _rewrite_legacy_schema_stamp(body)
+    if legacy_rewrites:
+        logger.info(
+            "PERSIST_DELEGATE_LEGACY_STAMP_REWRITE inbound_sha256_prefix=%s "
+            "outbound_sha256_prefix=%s fields_rewritten=%d",
+            hashlib.sha256(inbound_body).hexdigest()[:16],
+            hashlib.sha256(body).hexdigest()[:16],
+            legacy_rewrites,
+        )
 
     # Body sha256 lets us correlate this lens-side log line with persist's
     # internal reject breadcrumb (CIRISPersist#6) — when persist later

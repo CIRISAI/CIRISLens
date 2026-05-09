@@ -322,3 +322,206 @@ class TestDelegateToPersistErrorMapping:
         assert result["received"] == 1
         assert result["accepted"] == 1
         assert result["rejected"] == 0
+
+
+# ─── _rewrite_legacy_schema_stamp (CIRISLens#9) ────────────────────
+
+
+class TestLegacySchemaStampRewrite:
+    """Pre-2.7.8.9 agents stamp `trace_schema_version: "2.7.0"` but
+    sign the 2-field legacy canonical. Persist 0.4.4 dispatches by
+    stamp, so "2.7.0" → 9-field canonicalizer → strict-verify fails.
+    Lens rewrites the stamp to "2.7.legacy" before delegation so
+    persist routes to canonical_payload_value_legacy."""
+
+    def test_top_level_2_7_0_rewritten_to_legacy(self):
+        import json as _json
+
+        from accord_api import _rewrite_legacy_schema_stamp
+
+        body = _json.dumps({
+            "trace_schema_version": "2.7.0",
+            "trace_level": "detailed",
+            "events": [],
+        }).encode("utf-8")
+
+        out, count = _rewrite_legacy_schema_stamp(body)
+
+        assert count == 1
+        obj = _json.loads(out)
+        assert obj["trace_schema_version"] == "2.7.legacy"
+
+    def test_per_trace_2_7_0_rewritten_to_legacy(self):
+        import json as _json
+
+        from accord_api import _rewrite_legacy_schema_stamp
+
+        body = _json.dumps({
+            "trace_schema_version": "2.7.0",
+            "events": [
+                {
+                    "event_type": "complete_trace",
+                    "trace_level": "detailed",
+                    "trace": {
+                        "trace_schema_version": "2.7.0",
+                        "components": [],
+                        "trace_level": "detailed",
+                    },
+                },
+            ],
+        }).encode("utf-8")
+
+        out, count = _rewrite_legacy_schema_stamp(body)
+
+        # One envelope-level + one per-trace
+        assert count == 2
+        obj = _json.loads(out)
+        assert obj["trace_schema_version"] == "2.7.legacy"
+        assert obj["events"][0]["trace"]["trace_schema_version"] == "2.7.legacy"
+
+    def test_2_7_9_left_alone(self):
+        """Modern emitters (post-CIRISAgent#710 / commit 431b0e0ae)
+        stamp "2.7.9" and sign the 9-field canonical; the rewrite
+        MUST NOT touch them."""
+        import json as _json
+
+        from accord_api import _rewrite_legacy_schema_stamp
+
+        body = _json.dumps({
+            "trace_schema_version": "2.7.9",
+            "events": [
+                {
+                    "trace": {"trace_schema_version": "2.7.9"},
+                },
+            ],
+        }).encode("utf-8")
+
+        out, count = _rewrite_legacy_schema_stamp(body)
+
+        assert count == 0
+        # No-op should return the original bytes unchanged.
+        assert out is body
+
+    def test_already_legacy_left_alone(self):
+        """Persist's own serde-default stamps absent fields as
+        "2.7.legacy"; an envelope already at "2.7.legacy" should be
+        a no-op."""
+        import json as _json
+
+        from accord_api import _rewrite_legacy_schema_stamp
+
+        body = _json.dumps({"trace_schema_version": "2.7.legacy", "events": []}).encode("utf-8")
+
+        out, count = _rewrite_legacy_schema_stamp(body)
+
+        assert count == 0
+        assert out is body
+
+    def test_invalid_json_returned_unchanged(self):
+        """Malformed bytes pass through untouched so persist's typed
+        parser surfaces the structured schema error rather than the
+        rewrite hiding it behind a JSON exception here."""
+        from accord_api import _rewrite_legacy_schema_stamp
+
+        body = b"{not valid json"
+        out, count = _rewrite_legacy_schema_stamp(body)
+
+        assert count == 0
+        assert out is body
+
+    def test_non_dict_root_returned_unchanged(self):
+        """JSON arrays / scalars at the root aren't BatchEnvelopes;
+        leave them for persist to reject."""
+        from accord_api import _rewrite_legacy_schema_stamp
+
+        body = b"[]"
+        out, count = _rewrite_legacy_schema_stamp(body)
+
+        assert count == 0
+        assert out is body
+
+    def test_mixed_versions_only_rewrites_2_7_0_traces(self):
+        """A batch could carry traces at different stamps if the agent
+        is mid-flight during a config change. Only the "2.7.0" traces
+        should flip."""
+        import json as _json
+
+        from accord_api import _rewrite_legacy_schema_stamp
+
+        body = _json.dumps({
+            "events": [
+                {"trace": {"trace_schema_version": "2.7.0"}},
+                {"trace": {"trace_schema_version": "2.7.9"}},
+            ],
+        }).encode("utf-8")
+
+        out, count = _rewrite_legacy_schema_stamp(body)
+
+        assert count == 1
+        obj = _json.loads(out)
+        assert obj["events"][0]["trace"]["trace_schema_version"] == "2.7.legacy"
+        assert obj["events"][1]["trace"]["trace_schema_version"] == "2.7.9"
+
+    @pytest.mark.asyncio
+    async def test_delegate_passes_rewritten_body_to_engine(self):
+        """End-to-end: a 2.7.0-stamped envelope reaches `_delegate_to_persist`,
+        and `engine.receive_and_persist` is called with the legacy-stamped
+        body (not the inbound bytes)."""
+        import json as _json
+
+        import persist_engine
+        from accord_api import _delegate_to_persist
+
+        engine = MagicMock()
+        engine.receive_and_persist.return_value = {
+            "envelopes_processed": 1,
+            "trace_events_inserted": 1,
+            "trace_events_conflicted": 0,
+            "trace_llm_calls_inserted": 0,
+            "scrubbed_fields": 0,
+            "signatures_verified": 1,
+        }
+
+        inbound = _json.dumps({
+            "trace_schema_version": "2.7.0",
+            "events": [],
+        }).encode("utf-8")
+
+        with patch.object(persist_engine, "get_engine", return_value=engine):
+            await _delegate_to_persist(inbound)
+
+        engine.receive_and_persist.assert_called_once()
+        delegated = engine.receive_and_persist.call_args.args[0]
+        assert delegated != inbound
+        delegated_obj = _json.loads(delegated)
+        assert delegated_obj["trace_schema_version"] == "2.7.legacy"
+
+    @pytest.mark.asyncio
+    async def test_delegate_passes_through_when_no_rewrite_needed(self):
+        """Modern emitters' bytes reach the engine byte-identical so
+        persist's `wire_body_sha256` log lines stay equal to lens's
+        body_sha (CIRISPersist#6 correlation)."""
+        import json as _json
+
+        import persist_engine
+        from accord_api import _delegate_to_persist
+
+        engine = MagicMock()
+        engine.receive_and_persist.return_value = {
+            "envelopes_processed": 1,
+            "trace_events_inserted": 1,
+            "trace_events_conflicted": 0,
+            "trace_llm_calls_inserted": 0,
+            "scrubbed_fields": 0,
+            "signatures_verified": 1,
+        }
+
+        inbound = _json.dumps({
+            "trace_schema_version": "2.7.9",
+            "events": [],
+        }).encode("utf-8")
+
+        with patch.object(persist_engine, "get_engine", return_value=engine):
+            await _delegate_to_persist(inbound)
+
+        engine.receive_and_persist.assert_called_once_with(inbound)
