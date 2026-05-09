@@ -406,4 +406,73 @@ onnxruntime==1.25.0
 #           work. Adds pre-commit + pre-push hooks to prevent
 #           regression class. Functionality identical to v0.4.3 — the
 #           bump is for the green CI tag the publish flow requires.
-ciris-persist==0.4.4
+#
+# v0.4.5  — CIRISVerify dep bump v1.9.0 → v1.13.2 (CIRISPersist#20).
+#           Pure dep-only; no public-API or behavior change in any
+#           persist code path lens consumes. Jumped past the issue's
+#           v1.10.1 target because v1.10.0..v1.13.2 is all CLI /
+#           RegistryClient / verify_tree work — none touches
+#           ciris-keyring, HybridVerifier, or ciris-crypto's primitive
+#           surface persist depends on. Lands persist on the current
+#           verify line in one move.
+#
+# v0.4.6  — legacy attempt_index gate + decompose error reclass +
+#           field-name surfacing (CIRISPersist#22 — closes
+#           CIRISLens#9 absorption gap discovered post-2434273
+#           lens-side stamp rewrite).
+#
+#   The fix lives in three places, all in CIRISPersist:
+#
+#   - decompose.rs:82 — schema-version-gated attempt_index sourcing.
+#         Pre-2.7.8 emitters never populate `data.attempt_index`
+#         (CIRISAgent v2.7.6-stable's accord-metrics adapter has zero
+#         references to it). 2.7.9 strict; 2.7.0/2.7.legacy fall back
+#         to 0 ONLY for the absence case — malformed values (negative,
+#         wrong type, out of range) still error. Same shape as the
+#         existing parent_event_type/parent_attempt_index gate
+#         (CIRISPersist#12, v0.3.3).
+#         Dedup-collapse cost: retries on a 2.7.legacy trace dedup to
+#         attempt_index=0 with the original. Acceptable for legacy
+#         backfill — alternative was dropping pre-2.7.8.9 traces
+#         entirely. Sunsets under the same observable-traffic rule
+#         persist applies to its 2.7.legacy arm itself
+#         (federation_canonical_match_total{wire="2.7.legacy"} zero
+#         through 7-day soak; src/schema/version.rs:36-39).
+#
+#   - ingest.rs:229 — typed Schema/Store split in decompose's
+#         map_err. Was: `crate::store::decompose(trace).map_err(IngestError::Store)?`
+#         which indiscriminately wrapped typed `Error::Schema(_)` from
+#         decompose as Store, surfacing at FFI as PyRuntimeError →
+#         lens 503 → "Retry-After: 5" → agent retries forever on a
+#         deterministic 4xx. Bridge observed Scout1 retrying ~3/min
+#         for two days on the now-relaxed attempt_index gate.
+#         Now: typed match, `store::Error::Schema(s) → IngestError::Schema(s)`,
+#         everything else → Store. Schema → 422 (deterministic reject;
+#         agent stops retrying). Backend write errors at the two
+#         insert_*_batch callsites stay on Store (they legitimately
+#         return RuntimeError → 503 + Retry-After).
+#
+#   - IngestError::detail() + schema::Error::detail() — non-breaking
+#         field-name surfacing. PyO3 emits Python exception args as
+#         (kind, detail) tuple when detail is present, (kind,) only
+#         otherwise. Lens reads e.args[1] for the field name without
+#         source-diving persist (AV-15 sanitization preserved — kind
+#         remains the stable wire token; detail is structured field
+#         identifier, not free-form attacker text). NB lens
+#         _delegate_to_persist still reads `str(e)` for its 422/503
+#         mapping, which is unchanged: `str()` of single-arg exception
+#         == kind; `str()` of two-arg exception == "('kind', 'detail')"
+#         repr — both fall through to the 422 default branch correctly.
+#         Future lens-side cleanup (separate PR): read e.args directly
+#         to format a clean "schema_missing_field: attempt_index"
+#         HTTPException detail.
+#
+#   Why both the lens stamp rewrite (commit 2434273, CIRISLens#9) AND
+#   this persist bump are required: persist's verify dispatch is by
+#   stamped trace_schema_version (deterministic, NOT shape-sniffing).
+#   Pre-2.7.8.9 emitters stamp "2.7.0" + sign 2-field canonical, so
+#   without lens flipping the stamp to "2.7.legacy" persist routes them
+#   to the 9-field canonicalizer and signature verify fails. The
+#   v0.4.6 attempt_index relaxation only fires on the 2.7.legacy arm,
+#   which the lens shim is what gets traces routed into.
+ciris-persist==0.4.6
