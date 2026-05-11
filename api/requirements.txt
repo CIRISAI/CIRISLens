@@ -657,4 +657,63 @@ onnxruntime==1.25.0
 #   Pre-v0.5.0 surface (federation directory, verify primitives)
 #   still on the old panic discipline — CIRISPersist#28 sweep + #29
 #   Python-side regression test land in v0.5.4.
-ciris-persist==0.5.3
+#
+# v0.5.4  — finishes the panic-isolation track v0.5.3 started.
+#           CIRISPersist#28 (full sweep) + #29 (Python regression
+#           gate). 1da2503 → 1da2503-style probe matrix re-runs
+#           unchanged; net effect is invariant durability, not
+#           observable behavior change for v0.5.0 callers.
+#
+#   #28 part 1 — PgRowExt extension + full postgres sweep.
+#         PgRowExt generalized: safe_get<T, I> on RowIndex (column
+#         name OR ordinal); safe_get_with<T, I, E, F> for non-
+#         ReadEngine layers that need to route NULL into their own
+#         Error::Backend variant. ~75 additional bare Row::get
+#         sites swept across src/store/postgres.rs — federation
+#         directory decoders (pg_row_to_key_record / _attestation /
+#         _revocation lifted infallible → Result), pg_row_to_event_row,
+#         pg_row_to_outbound_row, list_hybrid_pending_*,
+#         lookup_public_key, sample_public_keys,
+#         delete_traces_for_agent, enqueue_outbound,
+#         mark_transport_failed, count_traces, count_overrides,
+#         count_identity_changes, aggregate_audit_chain. SQLite
+#         exempt by construction (rusqlite::Row::get returns Result
+#         on NULL, not the tokio_postgres panic class).
+#         CI gate: scripts/hooks/pre-commit rejects bare `row.get(`
+#         and `.get::<` patterns in src/store/postgres.rs at commit
+#         time — regression class can't sneak back in.
+#
+#   #28 part 2 — FFI catch_panic sweep.
+#         v0.5.3 wrapped 13 v0.5.0 ReadEngine PyO3 methods. v0.5.4
+#         wraps the remaining 53 pre-v0.5.0 entry points (federation
+#         directory writers, outbound queue ops, derived-schema
+#         CRUD, verify primitives, canonicalization helpers,
+#         steward signing, debug methods). Every PyO3 method on
+#         PyEngine (~70 entry points) now routes panic through
+#         catch_panic, converting PanicException (BaseException)
+#         into LensQueryError (Exception). Applied via deterministic
+#         brace-depth scan; no proc-macro infra introduced.
+#
+#   #29 — Python regression test gate.
+#         New `test-panic` feature flag in Cargo.toml. With it on,
+#         a module-level #[pyfunction] _test_inject_panic bypasses
+#         Engine construction (no postgres/keyring needed) and
+#         panics inside catch_panic. Release wheels don't compile
+#         it in. tests/python/test_catch_panic.py (5/5 passing in
+#         persist CI): LensQueryError exported + subclasses
+#         Exception; panic surfaces as LensQueryError, message
+#         preserved; etc. This is the regression-test stand-in
+#         that v0.5.3 lacked — the catch_panic invariant is now
+#         empirically gated on every persist CI run.
+#
+#   Lens consumption: optional but recommended — handlers may
+#   now `from ciris_persist import LensQueryError` and catch it
+#   explicitly to log panic-converted errors with the column-name
+#   context PgRowExt surfaces. Until that catch lands, our existing
+#   `except ValueError → 422` / `except RuntimeError → 503` arms
+#   in _delegate_to_persist do NOT match LensQueryError
+#   (it inherits directly from Exception, not from RuntimeError),
+#   so it propagates to FastAPI's default Exception handler →
+#   uvicorn's clean 500. Functionally fine; tighter routing comes
+#   in a follow-up commit.
+ciris-persist==0.5.4
