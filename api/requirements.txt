@@ -565,4 +565,96 @@ onnxruntime==1.25.0
 #   FSD/V0_5_0_FEDERATION_READ_PRIMITIVES.md documents the shape;
 #   THREAT_MODEL.md AV-43 documents the new invariant. 19 integration
 #   tests passing against real Postgres in the persist repo.
-ciris-persist==0.5.0
+#
+# v0.5.1  — P0 hotfix: aggregate_scoring_factors empty-window panic
+#           (CIRISPersist#24).
+#
+#   Closes prod wedge 2026-05-11 15:09-15:59 UTC. Triggered by lens
+#   probing the §E baseline path against an agent with zero traces
+#   in the baseline window: persist's main SELECT ran without GROUP
+#   BY, the empty input CTE made `SUM(CASE WHEN ...)` return NULL,
+#   `Row::get::<_, i64>` panicked, and (because v0.5.0's release
+#   profile had `panic = "abort"`) PyO3's catch-unwind trampoline
+#   couldn't fire — every uvicorn worker hit SIGABRT in parallel
+#   from concurrent baseline calls and the process wedged including
+#   /health.
+#
+#   Fix is belt-and-braces at BOTH layers:
+#   - SQL: COALESCE(SUM(...), 0) on conscience_overrides /
+#          audit_chain_total / audit_signed_total /
+#          unsafe_action_count.
+#   - Rust: try_get::<_, Option<i64>>(col)?.unwrap_or(0) so a future
+#          SQL edit that drops a COALESCE surfaces as HTTP 500, not
+#          a Rust panic + SIGABRT.
+#
+#   Two regression tests added; the first one failed with the exact
+#   prod crash signature when COALESCE reverted, then passed
+#   cleanly with the fix.
+#
+#   Lens-side mitigation in commit 80a20e6 was conservative — the
+#   §E pass-through endpoints accept baseline_hours but never
+#   constructed pathological windows on their own. The trigger was
+#   organic probing; ANY caller hitting the §E baseline path on a
+#   sparse-baseline agent could have repro'd. v0.5.1 closes it from
+#   both ends.
+#
+# v0.5.2  — bump CIRISVerify deps v1.13.2 → v2.0.0 (fixes ml_dsa CI
+#           break, behavior-neutral for persist consumers).
+#
+#   Local v0.5.1 builds passed against the cached Cargo.lock but CI
+#   fresh-resolved and picked up a breaking ml-dsa transitive minor
+#   that removed `KeyGen` + `MlDsa65::from_seed`. CIRISVerify v2.0.0
+#   pins ml-dsa = 0.1.0-rc.9 exact, closing the drift hazard.
+#
+#   Available-but-not-activated by v0.5.2:
+#   - aes-gcm / kdf / hmac / random on ciris-crypto (v0.6.0 prereq
+#     for #19 federated SecretsService)
+#   - symmetric-derivation on ciris-keyring (v0.6.0 prereq)
+#
+#   Crypto-through-ciris-crypto invariant (FSD §7.5a) unchanged —
+#   persist still takes ZERO direct deps on primitive crates.
+#   v0.6.0 flips features on existing deps; no new crates land.
+#
+# v0.5.3  — three-layer panic isolation (CIRISPersist#25 + #26 + #27)
+#           + verify deps v2.0.0 → v2.0.2.
+#
+#   Hardening track on top of v0.5.1's point-fix. Three orthogonal
+#   layers of defense against the entire SUM-NULL → Row::get →
+#   SIGABRT failure class:
+#
+#   - #25 (SQL → Rust):   panic = "abort" → "unwind" in release.
+#         PyO3's catch_unwind trampoline now fires; Rust panics
+#         become PanicException not SIGABRT.
+#         SECURITY_AUDIT_v0.1.2.md §4.2's abort rationale was right
+#         for v0.1.x standalone-bin but doesn't survive
+#         v0.5.x cdylib-in-uvicorn — reframed in THREAT_MODEL.md
+#         §3.13 + AV-44.
+#   - #26 (Rust):         PgRowExt::safe_get trait — try_get with
+#         typed Backend error mapping swept across ~80 sites in the
+#         v0.5.0 ReadEngine impl + decode helpers. NULL surfaces as
+#         HTTP 500 with column name, not Rust panic. Pre-v0.5.0
+#         sites tracked in CIRISPersist#28 for v0.5.4 sweep
+#         completion.
+#   - #27 (FFI → Python): pyo3::create_exception! LensQueryError +
+#         catch_panic(AssertUnwindSafe(...)) wrapping all 13 v0.5.0
+#         ReadEngine PyO3 methods. Caught panics convert to
+#         LensQueryError(Exception); uvicorn's "except Exception"
+#         catches as clean 500 instead of escaping as
+#         PanicException (which inherits from BaseException and
+#         would still tear the worker).
+#
+#   Verify deps v2.0.1 → v2.0.2 closes the ml-dsa → pkcs8 caret-
+#   range hazard (CIRISVerify#18); v2.0.2 pins pkcs8 exact.
+#
+#   Threat model: AV-44 added; §3.13 new; §9 posture summary bumped
+#   v0.5.0 → v0.5.3; 17 vectors closed across v0.2.0..v0.5.3.
+#
+#   What v0.5.3 means for lens: every future Rust bug in the
+#   §A/§B/§E/§F PyO3 surface surfaces as a typed
+#   LensQueryError → HTTP 500, not a worker-pool wipe. The matrix
+#   we validated in 80a20e6 (12-of-12 baseline-free probes ✅,
+#   3-of-3 baseline probes broken) re-runs cleanly against v0.5.3.
+#   Pre-v0.5.0 surface (federation directory, verify primitives)
+#   still on the old panic discipline — CIRISPersist#28 sweep + #29
+#   Python-side regression test land in v0.5.4.
+ciris-persist==0.5.3
