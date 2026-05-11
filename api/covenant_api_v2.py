@@ -15,7 +15,9 @@ from typing import Any
 
 from fastapi import APIRouter, Request
 
-from accord_api import list_repository_traces  # moved to v1 in stage-2 of CIRISLens#10 / CIRISPersist#23
+from accord_api import (
+    list_repository_traces,  # moved to v1 in stage-2 of CIRISLens#10 / CIRISPersist#23
+)
 from accord_api_v2 import (
     RUST_AVAILABLE,
     CorrelationMetadata,
