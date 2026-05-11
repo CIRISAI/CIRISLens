@@ -361,23 +361,36 @@ async def list_covenant_public_keys() -> dict[str, Any]:
 
 @router.get("/repository/traces")
 async def list_covenant_repository_traces(
+    cursor: str | None = None,
     limit: int = 100,
-    offset: int = 0,
+    agent_id_hash: str | None = None,
     agent_name: str | None = None,
-    trace_level: str | None = None,
-    access: TraceAccessContext | None = None,
-) -> TraceRepositoryResponse:
-    """DEPRECATED: Use /api/v1/accord/repository/traces instead."""
-    return await list_repository_traces(limit=limit, offset=offset, agent_name=agent_name, trace_level=trace_level, access=access)
+    deployment_domain: str | None = None,
+) -> dict[str, Any]:
+    """DEPRECATED: Use /api/v1/accord/repository/traces instead.
+
+    Surface re-aligned in stage-2 of the persist v0.5.0 migration
+    (CIRISPersist#23 / CIRISLens#10). The legacy ``offset`` /
+    ``trace_level`` / ``access`` parameters no longer apply — see the
+    accord-side endpoint docstring for the deferral details.
+    """
+    return await list_repository_traces(
+        cursor=cursor,
+        limit=limit,
+        agent_id_hash=agent_id_hash,
+        agent_name=agent_name,
+        deployment_domain=deployment_domain,
+    )
 
 
 @router.get("/repository/traces/{trace_id}")
-async def get_covenant_repository_trace(
-    trace_id: str,
-    access: TraceAccessContext | None = None,
-) -> dict[str, Any]:
-    """DEPRECATED: Use /api/v1/accord/repository/traces/{id} instead."""
-    return await get_repository_trace(trace_id, access=access)
+async def get_covenant_repository_trace(trace_id: str) -> dict[str, Any]:
+    """DEPRECATED: Use /api/v1/accord/repository/traces/{id} instead.
+
+    The legacy ``access`` parameter no longer applies — see the
+    accord-side endpoint docstring (deferred RBAC layer).
+    """
+    return await get_repository_trace(trace_id)
 
 
 @router.get("/repository/statistics")

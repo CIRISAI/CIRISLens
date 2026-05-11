@@ -15,6 +15,7 @@ from typing import Any
 
 from fastapi import APIRouter, Request
 
+from accord_api import list_repository_traces  # moved to v1 in stage-2 of CIRISLens#10 / CIRISPersist#23
 from accord_api_v2 import (
     RUST_AVAILABLE,
     CorrelationMetadata,
@@ -22,7 +23,6 @@ from accord_api_v2 import (
     ensure_caches_fresh,
     get_db_pool,
     list_public_keys,
-    list_repository_traces,
     load_public_keys_into_rust_cache,
     load_schemas_into_rust_cache,
     # Functions
@@ -65,15 +65,27 @@ async def receive_covenant_events(request: Request) -> dict[str, Any]:
 
 @router.get("/repository/traces")
 async def list_covenant_traces(
+    cursor: str | None = None,
     limit: int = 100,
-    offset: int = 0,
+    agent_id_hash: str | None = None,
     agent_name: str | None = None,
-    trace_level: str | None = None,
+    deployment_domain: str | None = None,
 ) -> dict[str, Any]:
     """
     DEPRECATED: Use /api/v1/accord/repository/traces instead.
+
+    Surface re-aligned in stage-2 of the persist v0.5.0 migration
+    (CIRISPersist#23 / CIRISLens#10). The legacy ``offset`` /
+    ``trace_level`` parameters no longer apply — see the accord-side
+    endpoint docstring for the deferral details.
     """
-    return await list_repository_traces(limit=limit, offset=offset, agent_name=agent_name, trace_level=trace_level)
+    return await list_repository_traces(
+        cursor=cursor,
+        limit=limit,
+        agent_id_hash=agent_id_hash,
+        agent_name=agent_name,
+        deployment_domain=deployment_domain,
+    )
 
 
 @router.post("/public-keys")

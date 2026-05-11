@@ -3188,6 +3188,81 @@ def filter_trace_fields(
 
 @router.get("/repository/traces")
 async def list_repository_traces(
+    cursor: str | None = None,
+    limit: int = 100,
+    agent_id_hash: str | None = None,
+    agent_name: str | None = None,
+    deployment_domain: str | None = None,
+    deployment_type: str | None = None,
+    schema_version: str | None = None,
+    cognitive_state: str | None = None,
+    signature_verified: bool | None = True,
+) -> dict[str, Any]:
+    """List trace summaries via persist's §A read primitive.
+
+    Pass-through of CIRISPersist v0.5.0
+    ``Engine.list_trace_summaries`` (CIRISPersist#23). Returns the
+    typed ``TraceListPage`` shape verbatim:
+
+    ``{"items": [TraceSummary, ...], "next_cursor": Optional[TraceCursor]}``
+
+    Cursor pagination: pass ``cursor`` (opaque JSON string from the
+    previous response's ``next_cursor`` field) to fetch the next page.
+    No ``offset`` — newest-first triage by ``started_at DESC,
+    trace_id DESC``.
+
+    Deferred (out of scope for v0.5.0; per CIRISPersist#23 §"deferred"
+    and §"out of scope"):
+      - Task-grouped shape (``{"tasks": [...]}``) — lives in §C
+        (v0.5.1); consumers group by ``task_id`` in JS for now.
+      - RBAC scoping (access_level / partner_id / agent_scope /
+        public_sample) — re-emerges via a separate lens-owned curation
+        table joined against ``trace_id`` when/if needed. Pre-v0.5.0
+        callers that passed these are accepted (FastAPI ignores
+        unknown query params) but the parameters no longer filter.
+      - Numeric / threshold filters (min_plausibility, max_plausibility,
+        conscience_passed, action_overridden, fragility_flag,
+        trace_type, start_time, end_time) — these were applied at the
+        legacy SQL layer; consumers run them client-side on the
+        returned ``TraceSummary`` items, or wait for persist to expose
+        the corresponding filter knobs on ``TraceFilter``.
+    """
+    engine = persist_engine.get_engine()
+    if engine is None:
+        raise HTTPException(status_code=503, detail="persist engine unavailable")
+
+    trace_filter: dict[str, Any] = {}
+    if agent_id_hash is not None:
+        trace_filter["agent_id_hash"] = agent_id_hash
+    if agent_name is not None:
+        trace_filter["agent_name"] = agent_name
+    if deployment_domain is not None:
+        trace_filter["deployment_domain"] = deployment_domain
+    if deployment_type is not None:
+        trace_filter["deployment_type"] = deployment_type
+    if schema_version is not None:
+        trace_filter["schema_version"] = schema_version
+    if cognitive_state is not None:
+        trace_filter["cognitive_state"] = cognitive_state
+    if signature_verified is not None:
+        trace_filter["signature_verified"] = signature_verified
+
+    try:
+        page_json = engine.list_trace_summaries(
+            json.dumps(trace_filter),
+            cursor,
+            min(limit, 1000),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except RuntimeError as e:
+        logger.error("list_trace_summaries failed: %s", e)
+        raise HTTPException(status_code=503, detail=str(e)) from e
+
+    return json.loads(page_json)
+
+
+async def _list_repository_traces_legacy(
     # Access control (normally from JWT, here as query params for flexibility)
     access_level: AccessLevel = AccessLevel.PUBLIC,
     user_id: str = "anonymous",
@@ -3211,16 +3286,14 @@ async def list_repository_traces(
     limit: int = 100,
     offset: int = 0,
 ) -> dict[str, Any]:
-    """
-    List covenant traces with RBAC access control.
+    """LEGACY pre-persist-v0.5.0 implementation, kept as reference only.
 
-    Access levels:
-    - full: All traces, all fields
-    - partner: Own agents + public samples + partner-tagged traces
-    - public: Public sample traces only (for ciris.ai/explore-a-trace)
+    Dead code as of stage-2 of the persist v0.5.0 migration
+    (CIRISPersist#23 / CIRISLens#10). Reads from ``cirislens.accord_traces``
+    which has had zero new rows since the persist 0.4.x ingest cutover.
 
-    When group_by_task=true, returns traces grouped by task_id with the
-    seed observation from the initial thought (depth=0) included.
+    Will be deleted once stage-2 burns in and we're confident the
+    persist §A path covers every consumer this function used to serve.
     """
     db_pool = get_db_pool()
     if db_pool is None:
@@ -3485,58 +3558,41 @@ async def list_repository_traces(
 
 
 @router.get("/repository/traces/{trace_id}")
-async def get_repository_trace(
-    trace_id: str,
-    access_level: AccessLevel = AccessLevel.PUBLIC,
-    user_id: str = "anonymous",
-    agent_scope: str | None = None,
-    partner_id: str | None = None,
-) -> dict[str, Any]:
-    """Get a single trace by ID with access control."""
-    db_pool = get_db_pool()
-    if db_pool is None:
-        raise HTTPException(status_code=503, detail="Database not available")
+async def get_repository_trace(trace_id: str) -> dict[str, Any]:
+    """Get full trace detail via persist's §B read primitive.
 
-    ctx = TraceAccessContext(
-        access_level=access_level,
-        user_id=user_id,
-        agent_scope=agent_scope.split(",") if agent_scope else [],
-        partner_id=partner_id,
-    )
+    Pass-through of CIRISPersist v0.5.0 ``Engine.get_trace_detail``
+    (CIRISPersist#23). Returns the typed ``TraceDetail`` shape verbatim:
 
-    query = """
-        SELECT * FROM cirislens.accord_traces
-        WHERE trace_id = $1
+    ``{"summary": TraceSummary, "components": [TraceComponentRow, ...],
+        "llm_calls": [TraceLlmCallRow, ...], "envelope": TraceEnvelopeRefs}``
+
+    404 when persist has no rows for ``trace_id``. AV-9 caveat: this
+    primitive does not authenticate the caller; trace_id is the
+    lookup key and the returned envelope carries ``agent_id_hash`` so
+    upstream layers (auth middleware, partner-scoping, etc.) can
+    authorize at the request boundary.
+
+    Deferred RBAC (access_level / partner_id / agent_scope) — same
+    framing as the listing endpoint above; pre-v0.5.0 callers passing
+    these are accepted but the params no longer filter.
     """
-    params: list[Any] = [trace_id]
-    param_idx = 2
+    engine = persist_engine.get_engine()
+    if engine is None:
+        raise HTTPException(status_code=503, detail="persist engine unavailable")
 
-    # Apply access control
-    scope_sql, scope_params, _ = build_access_scope_filter(ctx, param_idx)
-    query += scope_sql
-    params.extend(scope_params)
+    try:
+        detail_json = engine.get_trace_detail(trace_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except RuntimeError as e:
+        logger.error("get_trace_detail failed: %s", e)
+        raise HTTPException(status_code=503, detail=str(e)) from e
 
-    async with db_pool.acquire() as conn:
-        row = await conn.fetchrow(query, *params)
+    if detail_json is None:
+        raise HTTPException(status_code=404, detail="Trace not found")
 
-        if not row:
-            raise HTTPException(
-                status_code=404,
-                detail="Trace not found or access denied",
-            )
-
-        # Build full trace response (same structure as list)
-        trace = dict(row)
-        # Convert types for JSON serialization
-        for key, val in trace.items():
-            if isinstance(val, datetime):
-                trace[key] = val.isoformat()
-            elif isinstance(val, Decimal):
-                trace[key] = float(val)
-            elif isinstance(val, UUID):
-                trace[key] = str(val)
-
-        return filter_trace_fields(trace, access_level)
+    return json.loads(detail_json)
 
 
 @router.get("/repository/statistics")

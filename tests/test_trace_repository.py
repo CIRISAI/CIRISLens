@@ -235,20 +235,20 @@ class TestRepositoryEndpoints:
             }
         ]
 
-        with patch("api.accord_api.get_db_pool", return_value=pool):
-            from api.accord_api import list_repository_traces
-
-            result = await list_repository_traces(
-                access_level=AccessLevel.PUBLIC,
-                user_id="anonymous",
-            )
-
-            # Default response is grouped by task
-            assert "tasks" in result
-            assert "pagination" in result
-            assert len(result["tasks"]) == 1
-            # Check initial_observation was extracted
-            assert result["tasks"][0]["initial_observation"] == "User asked a question"
+        # Stage-2 of the persist v0.5.0 migration (CIRISPersist#23 /
+        # CIRISLens#10) replaced this endpoint's SQL body with a
+        # pass-through of persist's §A read primitive. The RBAC scoping
+        # (access_level / user_id / partner_id) + lens-side
+        # task-grouping (initial_observation extraction) layer is
+        # deferred — the website does its own JS-side grouping, and a
+        # curation table replaces public_sample if/when curation comes
+        # back. This test asserted the legacy SQL behavior; the
+        # replacement test exercises persist's typed primitive via a
+        # mock Engine (TBD when stage-2 settles in).
+        pytest.skip(
+            "Deferred: replaced by persist §A primitive pass-through "
+            "(CIRISPersist#23 / CIRISLens#10). Mock-Engine replacement test pending."
+        )
 
     @pytest.mark.asyncio
     async def test_set_public_sample_requires_full_access(self, mock_db_pool):
