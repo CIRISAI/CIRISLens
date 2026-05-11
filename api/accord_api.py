@@ -20,7 +20,7 @@ import json
 import logging
 import os
 import traceback
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from enum import Enum
 from typing import TYPE_CHECKING, Any
@@ -3593,6 +3593,252 @@ async def get_repository_trace(trace_id: str) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail="Trace not found")
 
     return json.loads(detail_json)
+
+
+# =============================================================================
+# CIRISPersist v0.5.0 §E + §F primitive pass-throughs
+# =============================================================================
+#
+# Federation-uniform observability primitives. Thin pass-throughs of the
+# typed read surface CIRISPersist#23 / v0.5.0 exposed: §F Coherence Ratchet
+# detection inputs (cross_agent_divergence / temporal_drift /
+# hash_chain_gaps / conscience_override_rates) and §E scoring factor
+# aggregates. Same hostable-by-any-persist-deployment contract §A/§B
+# established. Sovereign-mode agents reading their own corpus hit the
+# same endpoints against their own persist; lens-tier deployments serve
+# the federation projection.
+#
+# AV-15 (FFI sanitization) holds end-to-end: persist returns stable kind
+# tokens on the FFI; we re-raise as HTTPException 400/503 per the
+# existing _delegate_to_persist mapping.
+#
+# AV-43 (read-side adversary inference attack): aggregates return
+# computed statistics with sample_count fields surfaced — callers gate
+# on k-anonymity at their layer; persist's substrate returns counts
+# truthfully.
+
+
+def _window_pair_jsons(
+    scoring_hours: float, baseline_hours: float | None,
+) -> tuple[str, str | None]:
+    """Build a contiguous window pair anchored at a single `now`.
+
+    Returns ``(scoring_json, baseline_json)`` where the baseline ends
+    exactly where the scoring window begins — required for persist's
+    ``temporal_drift`` and ``aggregate_scoring_factors`` to produce a
+    coherent (no-gap, no-overlap) two-window comparison.
+    """
+    until = datetime.now(UTC)
+    scoring_since = until - timedelta(hours=scoring_hours)
+    scoring_json = json.dumps({"since": scoring_since.isoformat(), "until": until.isoformat()})
+    baseline_json: str | None = None
+    if baseline_hours is not None:
+        baseline_since = scoring_since - timedelta(hours=baseline_hours)
+        baseline_json = json.dumps(
+            {"since": baseline_since.isoformat(), "until": scoring_since.isoformat()},
+        )
+    return scoring_json, baseline_json
+
+
+def _hours_to_window_json(hours: float) -> str:
+    """Build a TimeWindow JSON envelope `[now - hours, now)`."""
+    window_json, _ = _window_pair_jsons(hours, None)
+    return window_json
+
+
+def _engine_or_503():
+    """Resolve the persist Engine or raise 503 — single place for the
+    'persist not initialized' surface so each endpoint stays tight."""
+    engine = persist_engine.get_engine()
+    if engine is None:
+        raise HTTPException(status_code=503, detail="persist engine unavailable")
+    return engine
+
+
+@router.get("/ratchet/divergence")
+async def ratchet_cross_agent_divergence(
+    deployment_domain: str,
+    metric: str = "csdma_plausibility",
+    hours: float = 168.0,
+) -> dict[str, Any]:
+    """Cross-agent divergence z-scores within a deployment domain.
+
+    Pass-through of CIRISPersist v0.5.0 §F
+    ``Engine.cross_agent_divergence``. Returns one ``DivergenceRow``
+    per agent in the domain with sample_count >= persist's threshold
+    and a non-trivial z-score on the requested metric.
+
+    Args:
+      deployment_domain: cohort to compare within
+      metric: one of ``csdma_plausibility`` / ``dsdma_domain_alignment``
+              / ``idma_k_eff`` / ``idma_correlation_risk`` /
+              ``conscience_override_rate``
+      hours: window size; default 168h (7d) matches the legacy
+              detection scheduler's cross-agent cadence
+    """
+    engine = _engine_or_503()
+    try:
+        rows_json = engine.cross_agent_divergence(
+            deployment_domain,
+            _hours_to_window_json(hours),
+            metric,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except RuntimeError as e:
+        logger.error("cross_agent_divergence failed: %s", e)
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    return {"rows": json.loads(rows_json)}
+
+
+@router.get("/ratchet/temporal-drift")
+async def ratchet_temporal_drift(
+    agent_id_hash: str,
+    baseline_hours: float = 168.0,
+    comparison_hours: float = 24.0,
+) -> dict[str, Any]:
+    """Welch z-score drift between baseline and comparison windows for
+    one agent.
+
+    Pass-through of CIRISPersist v0.5.0 §F ``Engine.temporal_drift``.
+    The comparison window is the trailing ``comparison_hours``; the
+    baseline window ends where comparison begins and extends
+    ``baseline_hours`` further back. Returns one ``TemporalDriftRow``
+    per metric with a non-trivial mean shift.
+    """
+    engine = _engine_or_503()
+    comparison_json, baseline_json = _window_pair_jsons(comparison_hours, baseline_hours)
+    try:
+        rows_json = engine.temporal_drift(agent_id_hash, baseline_json, comparison_json)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except RuntimeError as e:
+        logger.error("temporal_drift failed: %s", e)
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    return {"rows": json.loads(rows_json)}
+
+
+@router.get("/ratchet/hash-chain-gaps")
+async def ratchet_hash_chain_gaps(
+    agent_id_hash: str,
+    hours: float = 168.0,
+) -> dict[str, Any]:
+    """Audit-chain gaps for one agent over a window.
+
+    Pass-through of CIRISPersist v0.5.0 §F ``Engine.hash_chain_gaps``.
+    A ``HashChainGap`` row marks a discontinuity in
+    ``audit_sequence_number`` (computed via LAG window function).
+    Empty list = no gaps observed in the window (the integrity-
+    invariant case).
+    """
+    engine = _engine_or_503()
+    try:
+        rows_json = engine.hash_chain_gaps(agent_id_hash, _hours_to_window_json(hours))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except RuntimeError as e:
+        logger.error("hash_chain_gaps failed: %s", e)
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    return {"rows": json.loads(rows_json)}
+
+
+@router.get("/ratchet/override-rates")
+async def ratchet_conscience_override_rates(
+    deployment_domain: str,
+    hours: float = 168.0,
+) -> dict[str, Any]:
+    """Per-agent conscience-override rates within a deployment domain.
+
+    Pass-through of CIRISPersist v0.5.0 §F
+    ``Engine.conscience_override_rates``. Returns one
+    ``OverrideRateRow`` per agent in the domain with the agent's
+    own rate, the domain population-weighted average, and the
+    multiple-of-domain-avg signal the detection scheduler thresholds
+    on.
+    """
+    engine = _engine_or_503()
+    try:
+        rows_json = engine.conscience_override_rates(
+            deployment_domain,
+            _hours_to_window_json(hours),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except RuntimeError as e:
+        logger.error("conscience_override_rates failed: %s", e)
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    return {"rows": json.loads(rows_json)}
+
+
+@router.get("/scoring/factors/{agent_id_hash}")
+async def scoring_aggregate_factors(
+    agent_id_hash: str,
+    hours: float = 168.0,
+    baseline_hours: float | None = None,
+) -> dict[str, Any]:
+    """CIRIS Capacity Score factor inputs for one agent.
+
+    Pass-through of CIRISPersist v0.5.0 §E
+    ``Engine.aggregate_scoring_factors``. Returns
+    ``ScoringFactorAggregate`` with the C / I_int / R / I_inc / S
+    factor inputs in one DB round-trip — the composition formula
+    lives in lens (``api/ciris_scoring.py``); persist exposes the
+    canonical inputs.
+
+    Args:
+      agent_id_hash: the SHA-256 agent identity hash
+      hours: scoring window size (default 168h = 7d, matches lens's
+              default MIN_DAYS_FOR_BASELINE)
+      baseline_hours: when set, persist computes ``drift_z_score``
+              against a baseline window of this size, ending where
+              the scoring window begins. When None, ``drift_z_score``
+              is null.
+    """
+    engine = _engine_or_503()
+    window_json, baseline_json = _window_pair_jsons(hours, baseline_hours)
+    try:
+        agg_json = engine.aggregate_scoring_factors(agent_id_hash, window_json, baseline_json)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except RuntimeError as e:
+        logger.error("aggregate_scoring_factors failed: %s", e)
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    return json.loads(agg_json)
+
+
+class ScoringBatchRequest(BaseModel):
+    """Body for POST /scoring/factors/batch."""
+
+    agent_id_hashes: list[str]
+    hours: float = 168.0
+    baseline_hours: float | None = None
+
+
+@router.post("/scoring/factors/batch")
+async def scoring_aggregate_factors_batch(
+    request: ScoringBatchRequest,
+) -> dict[str, Any]:
+    """Fleet-wide scoring sweep — one round-trip per N agents, not N.
+
+    Pass-through of CIRISPersist v0.5.0 §E
+    ``Engine.aggregate_scoring_factors_batch``. Returns the input-
+    order list of ``ScoringFactorAggregate``. See the single-agent
+    endpoint above for ``hours`` / ``baseline_hours`` semantics.
+    """
+    engine = _engine_or_503()
+    window_json, baseline_json = _window_pair_jsons(request.hours, request.baseline_hours)
+    try:
+        rows_json = engine.aggregate_scoring_factors_batch(
+            json.dumps(request.agent_id_hashes),
+            window_json,
+            baseline_json,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except RuntimeError as e:
+        logger.error("aggregate_scoring_factors_batch failed: %s", e)
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    return {"aggregates": json.loads(rows_json)}
 
 
 @router.get("/repository/statistics")

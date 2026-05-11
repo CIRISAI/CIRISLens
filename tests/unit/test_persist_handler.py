@@ -525,3 +525,222 @@ class TestLegacySchemaStampRewrite:
             await _delegate_to_persist(inbound)
 
         engine.receive_and_persist.assert_called_once_with(inbound)
+
+
+# ─── CIRISPersist v0.5.0 §E + §F pass-throughs ────────────────────
+
+
+class TestRatchetPrimitiveEndpoints:
+    """The §F endpoints are thin pass-throughs of persist's typed
+    Coherence Ratchet input primitives — same idiom as the §A/§B
+    /repository pass-throughs. Each call is asserted on (a) the
+    correct underlying engine method, (b) JSON-string args matching
+    the persist FFI contract, (c) response shape pass-through."""
+
+    @pytest.mark.asyncio
+    async def test_cross_agent_divergence_passes_through(self):
+        import json as _json
+
+        import persist_engine
+        from accord_api import ratchet_cross_agent_divergence
+
+        engine = MagicMock()
+        engine.cross_agent_divergence.return_value = _json.dumps(
+            [{"agent_id_hash": "abc", "z_score": 2.7, "sample_count": 42}],
+        )
+        with patch.object(persist_engine, "get_engine", return_value=engine):
+            result = await ratchet_cross_agent_divergence(
+                deployment_domain="production",
+                metric="csdma_plausibility",
+                hours=24,
+            )
+
+        assert result == {"rows": [{"agent_id_hash": "abc", "z_score": 2.7, "sample_count": 42}]}
+        engine.cross_agent_divergence.assert_called_once()
+        call_args = engine.cross_agent_divergence.call_args.args
+        assert call_args[0] == "production"
+        assert call_args[2] == "csdma_plausibility"
+        # Window JSON: confirm shape
+        window = _json.loads(call_args[1])
+        assert "since" in window and "until" in window
+
+    @pytest.mark.asyncio
+    async def test_temporal_drift_builds_two_back_to_back_windows(self):
+        """`baseline_hours` then `comparison_hours` should produce
+        windows where comparison.since == baseline.until."""
+        import json as _json
+
+        import persist_engine
+        from accord_api import ratchet_temporal_drift
+
+        engine = MagicMock()
+        engine.temporal_drift.return_value = "[]"
+        with patch.object(persist_engine, "get_engine", return_value=engine):
+            await ratchet_temporal_drift(
+                agent_id_hash="abcd1234",
+                baseline_hours=168,
+                comparison_hours=24,
+            )
+
+        call_args = engine.temporal_drift.call_args.args
+        assert call_args[0] == "abcd1234"
+        baseline = _json.loads(call_args[1])
+        comparison = _json.loads(call_args[2])
+        # The two windows must abut — comparison's since equals baseline's until.
+        assert comparison["since"] == baseline["until"]
+
+    @pytest.mark.asyncio
+    async def test_hash_chain_gaps_passes_through(self):
+        import persist_engine
+        from accord_api import ratchet_hash_chain_gaps
+
+        engine = MagicMock()
+        engine.hash_chain_gaps.return_value = "[]"
+        with patch.object(persist_engine, "get_engine", return_value=engine):
+            result = await ratchet_hash_chain_gaps(agent_id_hash="abcd1234", hours=24)
+
+        assert result == {"rows": []}
+        engine.hash_chain_gaps.assert_called_once()
+        assert engine.hash_chain_gaps.call_args.args[0] == "abcd1234"
+
+    @pytest.mark.asyncio
+    async def test_override_rates_passes_through(self):
+        import persist_engine
+        from accord_api import ratchet_conscience_override_rates
+
+        engine = MagicMock()
+        engine.conscience_override_rates.return_value = '[{"agent_id_hash":"x","override_rate":0.3}]'
+        with patch.object(persist_engine, "get_engine", return_value=engine):
+            result = await ratchet_conscience_override_rates(
+                deployment_domain="production",
+                hours=168,
+            )
+
+        assert result == {"rows": [{"agent_id_hash": "x", "override_rate": 0.3}]}
+
+    @pytest.mark.asyncio
+    async def test_engine_unavailable_503(self):
+        """If persist isn't initialized, every primitive endpoint
+        surfaces a 503 with a single shared error message — the
+        `_engine_or_503` helper enforces that."""
+        from fastapi import HTTPException
+
+        import persist_engine
+        from accord_api import ratchet_cross_agent_divergence
+
+        with patch.object(persist_engine, "get_engine", return_value=None), \
+             pytest.raises(HTTPException) as exc:
+            await ratchet_cross_agent_divergence(
+                deployment_domain="production",
+                metric="csdma_plausibility",
+            )
+        assert exc.value.status_code == 503
+
+    @pytest.mark.asyncio
+    async def test_value_error_maps_to_400(self):
+        """Persist's read primitives raise ValueError for schema-shaped
+        rejections (e.g. unknown metric, malformed window). Lens
+        surfaces those as HTTP 400 — the caller's fault, not ours."""
+        from fastapi import HTTPException
+
+        import persist_engine
+        from accord_api import ratchet_cross_agent_divergence
+
+        engine = MagicMock()
+        engine.cross_agent_divergence.side_effect = ValueError("DeviationMetric decode: invalid")
+        with patch.object(persist_engine, "get_engine", return_value=engine), \
+             pytest.raises(HTTPException) as exc:
+            await ratchet_cross_agent_divergence(
+                deployment_domain="production",
+                metric="bogus_metric",
+            )
+        assert exc.value.status_code == 400
+
+
+class TestScoringPrimitiveEndpoints:
+    """§E aggregate_scoring_factors + batch — single-agent and fleet
+    sweep paths. Same pass-through discipline as §F."""
+
+    @pytest.mark.asyncio
+    async def test_factors_no_baseline_passes_through(self):
+        import json as _json
+
+        import persist_engine
+        from accord_api import scoring_aggregate_factors
+
+        engine = MagicMock()
+        engine.aggregate_scoring_factors.return_value = _json.dumps(
+            {"agent_id_hash": "abc", "trace_count": 100, "drift_z_score": None},
+        )
+        with patch.object(persist_engine, "get_engine", return_value=engine):
+            result = await scoring_aggregate_factors(agent_id_hash="abc", hours=24)
+
+        assert result == {"agent_id_hash": "abc", "trace_count": 100, "drift_z_score": None}
+        call_args = engine.aggregate_scoring_factors.call_args.args
+        assert call_args[0] == "abc"
+        # No baseline window → third arg is None
+        assert call_args[2] is None
+
+    @pytest.mark.asyncio
+    async def test_factors_with_baseline_builds_window_pair(self):
+        """When `baseline_hours` is set, the baseline window ends where
+        the scoring window begins. Same shape as temporal_drift."""
+        import json as _json
+
+        import persist_engine
+        from accord_api import scoring_aggregate_factors
+
+        engine = MagicMock()
+        engine.aggregate_scoring_factors.return_value = "{}"
+        with patch.object(persist_engine, "get_engine", return_value=engine):
+            await scoring_aggregate_factors(
+                agent_id_hash="abc",
+                hours=24,
+                baseline_hours=168,
+            )
+
+        call_args = engine.aggregate_scoring_factors.call_args.args
+        scoring = _json.loads(call_args[1])
+        baseline = _json.loads(call_args[2])
+        assert scoring["since"] == baseline["until"]
+
+    @pytest.mark.asyncio
+    async def test_factors_batch_passes_through(self):
+        import json as _json
+
+        import persist_engine
+        from accord_api import ScoringBatchRequest, scoring_aggregate_factors_batch
+
+        engine = MagicMock()
+        engine.aggregate_scoring_factors_batch.return_value = _json.dumps(
+            [{"agent_id_hash": "a", "trace_count": 1}, {"agent_id_hash": "b", "trace_count": 2}],
+        )
+        with patch.object(persist_engine, "get_engine", return_value=engine):
+            result = await scoring_aggregate_factors_batch(
+                ScoringBatchRequest(agent_id_hashes=["a", "b"], hours=24),
+            )
+
+        assert result == {
+            "aggregates": [
+                {"agent_id_hash": "a", "trace_count": 1},
+                {"agent_id_hash": "b", "trace_count": 2},
+            ],
+        }
+        call_args = engine.aggregate_scoring_factors_batch.call_args.args
+        assert _json.loads(call_args[0]) == ["a", "b"]
+
+    @pytest.mark.asyncio
+    async def test_factors_runtime_error_maps_to_503(self):
+        """Backend / IO errors from persist surface as 503 — operator-
+        side, never the caller's fault."""
+        from fastapi import HTTPException
+
+        import persist_engine
+        from accord_api import scoring_aggregate_factors
+
+        engine = MagicMock()
+        engine.aggregate_scoring_factors.side_effect = RuntimeError("backend down")
+        with patch.object(persist_engine, "get_engine", return_value=engine), \
+             pytest.raises(HTTPException) as exc:
+            await scoring_aggregate_factors(agent_id_hash="abc", hours=24)
+        assert exc.value.status_code == 503
