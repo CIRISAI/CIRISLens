@@ -475,4 +475,94 @@ onnxruntime==1.25.0
 #   to the 9-field canonicalizer and signature verify fails. The
 #   v0.4.6 attempt_index relaxation only fires on the 2.7.legacy arm,
 #   which the lens shim is what gets traces routed into.
-ciris-persist==0.4.6
+#
+# v0.4.7  — threat-model documentation only (no code change). AV-35
+#           mitigation language tightened (verify-bound-to-arm-canonical,
+#           not signed-routing-input); AV-42 added covering the legacy
+#           attempt_index dedup-collapse v0.4.6 shipped. §9 posture
+#           summary updated v0.3.6 → v0.4.6. Pure docs; functionality
+#           identical to v0.4.6.
+#
+# v0.5.0  — federation read primitives §A/B/F/E (CIRISPersist#23 —
+#           closes the lens-bleeding read/write split CIRISLens#10
+#           surfaced + the /coherence-ratchet/stats 500 + api/scoring.py
+#           raw-SQL violation).
+#
+#   The architectural invariant: no consumer reads persist's tables
+#   directly. Every read goes through persist's typed PyO3 surface
+#   (same shape v0.4.1 established for verify primitives — Rust-public
+#   free function + PyO3 wrapper, single source of truth). This pin
+#   makes the load-bearing four sections of #23 available; lens-side
+#   migration of ~50 raw-SQL SELECTs follows in subsequent commits as
+#   each read path is rewritten against the new primitives.
+#
+#   This is also the validation gate for v0.5.1 — persist needs lens
+#   to exercise v0.5.0 in production before shipping the deferred
+#   sections (C/D/G/H/I + final cirislens_reader carve-out retirement).
+#
+#   12 new PyO3 methods. Wire format: JSON strings in/out for complex
+#   types (TraceFilter, TraceCursor, TraceSummary, TraceListPage,
+#   TraceDetail, TimeWindow, DivergenceRow, OverrideRateRow,
+#   ScoringFactorAggregate, AuditChainAggregate), primitives as direct
+#   args (trace_id, agent_id_hash, deployment_domain, metric, limit).
+#   Same idiom as put_attestation / put_detection_event — lens calls
+#   json.dumps before passing in, json.loads on receiving back.
+#
+#   §A — trace listing (drives /repository/traces, CIRISLens#10):
+#         list_trace_summaries(filter_json, cursor_json=None, limit=100)
+#             → TraceListPage{"items":[TraceSummary],"next_cursor":...}
+#         get_trace_summary(trace_id) → Optional[TraceSummary]
+#         JSONB-extracting GROUP BY with FILTER aggregation in one DB
+#         pass; cursor pagination via (started_at, trace_id) tuple.
+#
+#   §B — trace detail (drives /repository/traces/{trace_id}):
+#         get_trace_detail(trace_id) → Optional[TraceDetail]
+#         3 round-trips composing summary + components (chronological)
+#         + LLM calls + envelope refs.
+#
+#   §F — Coherence Ratchet inputs (drives /coherence-ratchet/stats —
+#         currently 500'ing in prod against the dead accord_traces):
+#         cross_agent_divergence(deployment_domain, window_json, metric)
+#             → JSON array of DivergenceRow. metric ∈ {csdma_plausibility,
+#             dsdma_domain_alignment, idma_k_eff, idma_correlation_risk,
+#             conscience_override_rate}.
+#         temporal_drift(agent_id_hash, baseline_json, comparison_json)
+#             → JSON array of TemporalDriftRow (Welch z-score).
+#         hash_chain_gaps(agent_id_hash, window_json)
+#             → JSON array of HashChainGap (LAG over audit_sequence_number).
+#         conscience_override_rates(deployment_domain, window_json)
+#             → JSON array of OverrideRateRow (population-weighted
+#             domain average).
+#
+#   §E — scoring factor aggregates (replaces api/scoring.py raw SQL):
+#         aggregate_scoring_factors(agent_id_hash, window_json,
+#                                   baseline_window_json=None)
+#             → ScoringFactorAggregate (Capacity Score C/I_int/R/I_inc/S
+#             inputs in one round-trip).
+#         aggregate_scoring_factors_batch(agent_id_hashes_json,
+#                                         window_json,
+#                                         baseline_window_json=None)
+#             → list[ScoringFactorAggregate] — one round-trip for a
+#             fleet sweep, not N.
+#         Granular: count_traces / count_overrides /
+#                   count_identity_changes / aggregate_audit_chain
+#                   for ad-hoc narrower questions.
+#
+#   AV-43 added to docs/THREAT_MODEL.md — read-side adversary inference
+#   attack. Aggregates return computed statistics, not per-trace content;
+#   sample_count/trace_count surface explicitly for caller-side
+#   k-anonymity gates. Posture summary §9 bumped v0.4.6 → v0.5.0.
+#
+#   Deferred to v0.5.1 (after lens validates v0.5.0):
+#     §C — task-grouped listing (lens groups in JS from §A flat list
+#          as v0.5.0 workaround; UI grouping is a website concern).
+#     §D — LLM call surface (trace_llm_calls primitives).
+#     §G — corpus shape (operator dashboards).
+#     §H — scrub stats (privacy observability).
+#     §I — federation observability bulk (monitoring dashboards).
+#     Plus full cirislens_reader carve-out retirement (gated on §D).
+#
+#   FSD/V0_5_0_FEDERATION_READ_PRIMITIVES.md documents the shape;
+#   THREAT_MODEL.md AV-43 documents the new invariant. 19 integration
+#   tests passing against real Postgres in the persist repo.
+ciris-persist==0.5.0
