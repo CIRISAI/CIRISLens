@@ -135,7 +135,7 @@ KEEP_ENTITY_TYPES = {
 #
 # CIRISLens#11 / CIRISLensCore#4: the year-shape regex on line ~213 below
 # false-positively eats ~5% of sha256-truncated agent_id_hash values that
-# happen to contain a 1700–2023 substring. Those traces ended up with
+# happen to contain a 1700-2023 substring. Those traces ended up with
 # agent_id_hash = "[IDENTIFIER]" in §A list_trace_summaries responses,
 # collapsing distinct federation identities into one virtual peer and
 # breaking AV-9's dedup-tuple semantics. The fix is to NEVER let the
