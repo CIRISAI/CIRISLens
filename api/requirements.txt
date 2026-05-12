@@ -770,4 +770,14 @@ onnxruntime==1.25.0
 #   (§C task-grouped on the explore page, §D for cost dashboards,
 #   etc.) land per-feature as the algorithm-level refactors below
 #   complete.
-ciris-persist==0.5.5
+#
+#   NB pin held at 0.5.4 pending PyPI publish of 0.5.5. CIRISPersist
+#   v0.5.5 is tagged on GitHub (commit 410669c) but the publish-pypi
+#   workflow hadn't completed at the time of the lens pin-bump
+#   attempt (a862c25 → 25705786401), so pip resolution rejected
+#   `ciris-persist==0.5.5`. Bumping to 0.5.5 the moment the wheel
+#   lands on PyPI; comment block above describes what comes online
+#   then. The §F primitives lens consumes today (cross_agent_divergence
+#   et al.) already exist in 0.5.4, so the coherence-ratchet refactor
+#   in this commit pair works against 0.5.4 just fine.
+ciris-persist==0.5.4
