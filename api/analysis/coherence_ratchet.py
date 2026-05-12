@@ -362,7 +362,7 @@ class CoherenceRatchetAnalyzer:
     ) -> list[AnomalyAlert]:
         """§F ``cross_agent_divergence`` consumption.
 
-        Iterates every observed ``deployment_domain`` × every metric
+        Iterates every observed ``deployment_domain`` x every metric
         in :data:`_DIVERGENCE_METRIC_KINDS`; each persist call returns
         a ``DivergenceRow`` per agent in the cohort. Rows with
         ``|z_score| > Z_SCORE_WARNING`` and ``sample_count >=
