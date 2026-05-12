@@ -128,6 +128,33 @@ KEEP_ENTITY_TYPES = {
     "CARDINAL",    # Cardinal numbers
 }
 
+# Structural identifier fields — keys whose VALUES are protocol-level
+# identifiers (signed-canonical fields, dedup-tuple components, audit-chain
+# anchors). These are PUBLIC by construction and MUST NOT be scrubbed
+# regardless of what the regex / NER models think their values look like.
+#
+# CIRISLens#11 / CIRISLensCore#4: the year-shape regex on line ~213 below
+# false-positively eats ~5% of sha256-truncated agent_id_hash values that
+# happen to contain a 1700–2023 substring. Those traces ended up with
+# agent_id_hash = "[IDENTIFIER]" in §A list_trace_summaries responses,
+# collapsing distinct federation identities into one virtual peer and
+# breaking AV-9's dedup-tuple semantics. The fix is to NEVER let the
+# scrubber touch the structural-identifier columns regardless of their
+# string shape.
+#
+# This invariant must port to CIRISLensCore's `src/scrub/` walker before
+# v0.1.0 — federation identity is AV-9 load-bearing.
+STRUCTURAL_IDENTIFIER_KEYS = frozenset({
+    "agent_id_hash",        # SHA-256 of agent identity tuple; AV-9 dedup prefix
+    "trace_id",             # Globally unique per-agent trace identifier
+    "thought_id",           # Per-trace thought identifier; dedup-tuple component
+    "task_id",              # Originating task identifier (may be a UUID literal)
+    "span_id",              # OTLP-style span correlation
+    "correlation_id",       # External system correlation key
+    "signature_key_id",     # Federation directory key reference
+    "signing_key_id",       # Persist row signing key reference
+})
+
 # Text fields that need PII scrubbing in full_traces
 SCRUB_FIELDS = [
     # THOUGHT_START
@@ -282,13 +309,22 @@ def _scrub_value(value: Any) -> Any:
 
     Used when the parent key matched SCRUB_FIELDS — at that point every
     string in the subtree is in scope for scrubbing, regardless of nested
-    structure (lists of strings, dicts mapping to strings, mixed)."""
+    structure (lists of strings, dicts mapping to strings, mixed).
+
+    Exception: nested keys in :data:`STRUCTURAL_IDENTIFIER_KEYS` are
+    passed through untouched even within a scrub-tagged subtree (CIRISLens#11
+    — federation identity columns must survive regardless of the
+    string-shape heuristics in scrub_text).
+    """
     if isinstance(value, str):
         return scrub_text(value)
     if isinstance(value, list):
         return [_scrub_value(v) for v in value]
     if isinstance(value, dict):
-        return {k: _scrub_value(v) for k, v in value.items()}
+        return {
+            k: (v if k in STRUCTURAL_IDENTIFIER_KEYS else _scrub_value(v))
+            for k, v in value.items()
+        }
     return value
 
 
@@ -300,6 +336,17 @@ def scrub_dict_recursive(data: Any, depth: int = 0, max_depth: int = 20) -> Any:
     is scrubbed — including elements of lists-of-strings (e.g., a programmatic
     source identifier in a list of strings) which the previous version
     missed because list elements have no key to match on.
+
+    Structural-identifier keys (:data:`STRUCTURAL_IDENTIFIER_KEYS` —
+    ``agent_id_hash``, ``trace_id``, ``thought_id``, etc.) are passed
+    through untouched at every level of the recursion, even when nested
+    inside a scrub-tagged subtree. CIRISLens#11: the regex-based ID
+    scrubber was false-positive scrubbing ~5% of sha256-truncated
+    agent_id_hash values whose hex digits happened to contain a 1700-2023
+    year-shape substring, collapsing distinct federation identities into
+    one virtual peer. The fix is to NEVER let the scrubber touch those
+    columns regardless of their string shape — federation identity is
+    AV-9 load-bearing and must survive.
     """
     if depth > max_depth:
         return data
@@ -307,8 +354,13 @@ def scrub_dict_recursive(data: Any, depth: int = 0, max_depth: int = 20) -> Any:
     if isinstance(data, dict):
         result = {}
         for key, value in data.items():
-            if key in SCRUB_FIELDS:
-                # Match — scrub the whole subtree
+            if key in STRUCTURAL_IDENTIFIER_KEYS:
+                # Identity / dedup-tuple field — pass through untouched.
+                result[key] = value
+            elif key in SCRUB_FIELDS:
+                # Match — scrub the whole subtree (with the same
+                # structural-identifier allowlist applied recursively
+                # inside _scrub_value).
                 result[key] = _scrub_value(value)
             elif isinstance(value, (dict, list)):
                 result[key] = scrub_dict_recursive(value, depth + 1, max_depth)

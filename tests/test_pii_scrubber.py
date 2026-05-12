@@ -633,3 +633,81 @@ class TestGetScrubber:
         scrubber1 = get_scrubber()
         scrubber2 = get_scrubber()
         assert scrubber1 is scrubber2
+
+
+class TestStructuralIdentifierAllowlist:
+    """CIRISLens#11: agent_id_hash + other structural identifier keys MUST
+    pass through the scrubber untouched. The regex on ~/api/pii_scrubber.py
+    line 224 false-positively eats ~5% of sha256-truncated hashes whose hex
+    digits contain a 1700-2023 year-shape substring. Federation identity is
+    AV-9 load-bearing; collapsing distinct peers into one virtual identity
+    via scrub is the failure mode.
+
+    The Rust port (CIRISLensCore#4) inherits this invariant — same key set
+    must be allowlisted before v0.1.0 ships."""
+
+    def test_agent_id_hash_with_year_shape_survives(self):
+        """A sha256-truncated hash containing '2023' WOULD match the
+        identifier regex if scrubbed. Allowlist must skip it."""
+        from pii_scrubber import scrub_dict_recursive
+
+        # Real-shape: 16 hex chars containing year-shape substring '2023'.
+        hashish_value = "df62b0e9501fed13"
+        year_shape_hash = "abc202310deadbef"  # contains '2023'
+        result = scrub_dict_recursive({
+            "agent_id_hash": year_shape_hash,
+            "agent_name": "Ally",
+            # nested under a scrub-tagged subtree:
+            "system_snapshot": {
+                "agent_id_hash": year_shape_hash,
+                "thought_content": "user mentioned the year 2023",
+            },
+        })
+        # Top-level allowlist works
+        assert result["agent_id_hash"] == year_shape_hash
+        # Nested allowlist within a SCRUB_FIELDS subtree also works
+        assert result["system_snapshot"]["agent_id_hash"] == year_shape_hash
+        # But adjacent text in the subtree still gets scrubbed
+        scrubbed_content = result["system_snapshot"]["thought_content"]
+        assert "[IDENTIFIER]" in scrubbed_content or "year 2023" not in scrubbed_content
+        # Sanity: a NON-year-shape hash also survives
+        result2 = scrub_dict_recursive({"agent_id_hash": hashish_value})
+        assert result2["agent_id_hash"] == hashish_value
+
+    def test_all_structural_keys_allowlisted(self):
+        """Every key in STRUCTURAL_IDENTIFIER_KEYS must pass through
+        regardless of value shape."""
+        from pii_scrubber import STRUCTURAL_IDENTIFIER_KEYS, scrub_dict_recursive
+
+        # Use a value that WOULD trigger the year-shape regex
+        trigger_value = "deadbeef1999cafe"  # contains '1999'
+        data = {key: trigger_value for key in STRUCTURAL_IDENTIFIER_KEYS}
+        result = scrub_dict_recursive(data)
+        for key in STRUCTURAL_IDENTIFIER_KEYS:
+            assert result[key] == trigger_value, (
+                f"Structural identifier key {key!r} was scrubbed; "
+                "AV-9 invariant violated"
+            )
+
+    def test_structural_keys_survive_inside_scrub_tagged_subtree(self):
+        """When _scrub_value recurses into a dict, structural keys must
+        still survive — the allowlist applies at every recursion depth."""
+        from pii_scrubber import scrub_dict_recursive
+
+        result = scrub_dict_recursive({
+            "system_snapshot": {  # scrub-tagged subtree
+                "current_thought_summary": {
+                    "trace_id": "trace-abc-1999-def",  # would match regex
+                    "thought_id": "th-2023-zzz",
+                    "agent_id_hash": "1799deadbeefcafe",
+                    "content": "user said the year 2023",  # SHOULD be scrubbed
+                },
+            },
+        })
+        nested = result["system_snapshot"]["current_thought_summary"]
+        assert nested["trace_id"] == "trace-abc-1999-def"
+        assert nested["thought_id"] == "th-2023-zzz"
+        assert nested["agent_id_hash"] == "1799deadbeefcafe"
+        # And the adjacent content still gets scrubbed (regression of regex
+        # firing is desired here — just NOT on the structural keys).
+        assert "2023" not in nested["content"] or "[IDENTIFIER]" in nested["content"]
