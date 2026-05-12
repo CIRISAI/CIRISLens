@@ -9,13 +9,34 @@ Detection is triage, not verdict - anomalies warrant human investigation.
 
 from __future__ import annotations
 
+import json
+import logging
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from enum import Enum
 from typing import Any
 
 import numpy as np
+
+logger = logging.getLogger(__name__)
+
+# Metric kinds persist's §F cross_agent_divergence accepts. Persist
+# stratifies by deployment_domain (cohort identity) and computes a
+# z-score per agent. Legacy lens-side SQL stratified by dsdma_domain
+# (the agent's *reasoning* domain) — that was the wrong cohort key
+# for federation-uniform anomaly detection; deployment_domain is what
+# distinguishes "agents in similar environments" and that's the
+# population a divergence score should compare against. We carry both
+# kinds through here, but the deployment_domain stratification is the
+# canonical one going forward.
+_DIVERGENCE_METRIC_KINDS: tuple[str, ...] = (
+    "csdma_plausibility",
+    "dsdma_domain_alignment",
+    "idma_k_eff",
+    "idma_correlation_risk",
+    "conscience_override_rate",
+)
 
 
 class AlertSeverity(Enum):
@@ -107,14 +128,76 @@ class CoherenceRatchetAnalyzer:
     OVERRIDE_RATE_MULTIPLIER_WARNING = 2.0
     OVERRIDE_RATE_MULTIPLIER_CRITICAL = 3.0
 
-    def __init__(self, db_pool: Any = None):
-        """
-        Initialize analyzer.
+    def __init__(self, db_pool: Any = None, engine: Any = None) -> None:
+        """Initialize analyzer.
 
         Args:
-            db_pool: asyncpg connection pool for database queries
+          db_pool: legacy asyncpg pool — still consumed for
+            ``detect_intra_agent_inconsistency`` and any caller that
+            hasn't been migrated to persist primitives yet.
+          engine: CIRISPersist ``Engine`` — when set, the four
+            §F-mapped detectors (``cross_agent_divergence``,
+            ``temporal_drift``, ``hash_chain_gaps``,
+            ``conscience_override_rates``) route through persist's
+            typed read primitives instead of raw SQL. This is the
+            federation-uniform path the Rust lens-core will mirror.
         """
         self.db_pool = db_pool
+        self.engine = engine
+
+    # -------------------------------------------------------------------------
+    # Persist §F primitive helpers — federation-uniform discovery + windowing
+    # -------------------------------------------------------------------------
+
+    def _window_json(self, lookback_days: int) -> str:
+        """Build a persist ``TimeWindow`` JSON for the last
+        ``lookback_days`` days, anchored on a single ``now``."""
+        until = datetime.now(UTC)
+        since = until - timedelta(days=lookback_days)
+        return json.dumps({"since": since.isoformat(), "until": until.isoformat()})
+
+    def _window_pair_json(
+        self, baseline_days: int, comparison_days: int,
+    ) -> tuple[str, str]:
+        """Build a contiguous baseline + comparison window pair.
+        Comparison is the trailing ``comparison_days``; baseline ends
+        where comparison begins and extends ``baseline_days`` further
+        back. Anchored on a single ``now`` so the two ranges abut
+        exactly (no microsecond drift)."""
+        until = datetime.now(UTC)
+        comparison_since = until - timedelta(days=comparison_days)
+        baseline_since = comparison_since - timedelta(days=baseline_days)
+        return (
+            json.dumps({"since": baseline_since.isoformat(), "until": comparison_since.isoformat()}),
+            json.dumps({"since": comparison_since.isoformat(), "until": until.isoformat()}),
+        )
+
+    def _scan_summaries(self, limit: int = 1000) -> list[dict[str, Any]]:
+        """Pull a recent-window page of TraceSummary items from
+        persist. Used for deployment-domain + agent enumeration —
+        persist v0.5.5 has no dedicated distinct-value primitive, so
+        we sample the recent corpus."""
+        if not self.engine:
+            return []
+        page_json = self.engine.list_trace_summaries(json.dumps({}), None, limit)
+        page = json.loads(page_json)
+        return list(page.get("items") or [])
+
+    def _enumerate_deployment_domains(self) -> list[str]:
+        """Distinct ``deployment_domain`` values in the recent corpus.
+        Sub-optimal — persist will eventually expose a typed
+        breakdown primitive. Cohort identity is load-bearing for
+        cross-agent divergence stratification; without an
+        enumeration the lens detector can't iterate cohorts."""
+        return sorted({
+            item["deployment_domain"]
+            for item in self._scan_summaries()
+            if item.get("deployment_domain")
+        })
+
+    def _enumerate_agents(self) -> list[str]:
+        """Distinct ``agent_id_hash`` values in the recent corpus."""
+        return sorted({item["agent_id_hash"] for item in self._scan_summaries()})
 
     # -------------------------------------------------------------------------
     # 2.1 Cross-Agent Divergence Detection
@@ -124,18 +207,25 @@ class CoherenceRatchetAnalyzer:
         self,
         lookback_days: int = 7,
     ) -> list[AnomalyAlert]:
-        """
-        Detect agents whose DMA scores diverge significantly from their domain population.
+        """Detect agents whose scores diverge significantly from their
+        deployment-domain cohort.
 
-        Uses z-score analysis stratified by domain. Agents facing similar scenarios
-        should produce similar plausibility and alignment scores.
+        When ``self.engine`` is set, routes through CIRISPersist v0.5.0
+        §F ``cross_agent_divergence`` — the federation-uniform path.
+        Stratifies by ``deployment_domain`` (cohort identity) and
+        sweeps every metric in :data:`_DIVERGENCE_METRIC_KINDS`.
+        Z-scores above :attr:`Z_SCORE_WARNING` produce alerts;
+        ``Z_SCORE_CRITICAL`` upgrades severity.
+
+        Falls back to the legacy raw-SQL path when only ``db_pool``
+        is configured (kept until consumers migrate).
 
         Args:
-            lookback_days: Number of days to analyze
-
-        Returns:
-            List of anomaly alerts for divergent agents
+          lookback_days: window size for the divergence computation.
         """
+        if self.engine is not None:
+            return self._detect_cross_agent_divergence_via_persist(lookback_days)
+
         if not self.db_pool:
             return []
 
@@ -256,6 +346,228 @@ class CoherenceRatchetAnalyzer:
                         )
                     )
 
+        return alerts
+
+    # -------------------------------------------------------------------------
+    # Persist §F-mapped detection paths — federation-uniform, no raw SQL.
+    # Each method consumes a typed CIRISPersist v0.5.0 read primitive and
+    # composes ``AnomalyAlert`` objects from the returned rows. These are
+    # the executable Python reference the Rust ``lens-core::detector``
+    # module ports — same algorithm, same metric kinds, same severity
+    # thresholds, just lifted out of the asyncpg query layer.
+    # -------------------------------------------------------------------------
+
+    def _detect_cross_agent_divergence_via_persist(
+        self, lookback_days: int,
+    ) -> list[AnomalyAlert]:
+        """§F ``cross_agent_divergence`` consumption.
+
+        Iterates every observed ``deployment_domain`` × every metric
+        in :data:`_DIVERGENCE_METRIC_KINDS`; each persist call returns
+        a ``DivergenceRow`` per agent in the cohort. Rows with
+        ``|z_score| > Z_SCORE_WARNING`` and ``sample_count >=
+        MIN_TRACES_PER_AGENT`` become alerts; ``> Z_SCORE_CRITICAL``
+        upgrades severity.
+        """
+        window = self._window_json(lookback_days)
+        domains = self._enumerate_deployment_domains()
+        alerts: list[AnomalyAlert] = []
+        for domain in domains:
+            for metric_kind in _DIVERGENCE_METRIC_KINDS:
+                try:
+                    rows_json = self.engine.cross_agent_divergence(
+                        domain, window, metric_kind,
+                    )
+                except (ValueError, RuntimeError) as e:
+                    logger.warning(
+                        "cross_agent_divergence(%s, %s) failed: %s",
+                        domain, metric_kind, e,
+                    )
+                    continue
+                for row in json.loads(rows_json) or []:
+                    z = row.get("z_score") or 0.0
+                    if abs(z) <= self.Z_SCORE_WARNING:
+                        continue
+                    if (row.get("sample_count") or 0) < self.MIN_TRACES_PER_AGENT:
+                        continue
+                    severity = (
+                        AlertSeverity.CRITICAL
+                        if abs(z) > self.Z_SCORE_CRITICAL
+                        else AlertSeverity.WARNING
+                    )
+                    alerts.append(
+                        AnomalyAlert(
+                            alert_id=str(uuid.uuid4()),
+                            severity=severity,
+                            detection_mechanism=DetectionMechanism.CROSS_AGENT_DIVERGENCE,
+                            agent_id_hash=row["agent_id_hash"],
+                            domain=domain,
+                            metric=metric_kind,
+                            value=float(z),
+                            baseline=0.0,
+                            deviation=f"{z:+.1f} sigma",
+                            evidence_traces=[],
+                            recommended_action=(
+                                f"Agent shows {z:+.1f} sigma divergence in "
+                                f"{metric_kind} within {domain} cohort "
+                                f"(sample_count={row.get('sample_count')}). "
+                                "Review traces to determine if behavior is legitimate."
+                            ),
+                        ),
+                    )
+        return alerts
+
+    def _detect_temporal_drift_via_persist(
+        self,
+        baseline_days: int,
+        comparison_days: int,
+    ) -> list[AnomalyAlert]:
+        """§F ``temporal_drift`` consumption.
+
+        For each agent in the recent corpus, persist computes Welch
+        z-scores between a baseline window (older) and a comparison
+        window (trailing). Each ``TemporalDriftRow`` with significance
+        > Z_SCORE_WARNING becomes an alert.
+        """
+        baseline_json, comparison_json = self._window_pair_json(
+            baseline_days, comparison_days,
+        )
+        alerts: list[AnomalyAlert] = []
+        for agent_id_hash in self._enumerate_agents():
+            try:
+                rows_json = self.engine.temporal_drift(
+                    agent_id_hash, baseline_json, comparison_json,
+                )
+            except (ValueError, RuntimeError) as e:
+                logger.warning("temporal_drift(%s) failed: %s", agent_id_hash, e)
+                continue
+            for row in json.loads(rows_json) or []:
+                significance = row.get("significance") or row.get("z_score") or 0.0
+                if abs(significance) <= self.Z_SCORE_WARNING:
+                    continue
+                severity = (
+                    AlertSeverity.CRITICAL
+                    if abs(significance) > self.Z_SCORE_CRITICAL
+                    else AlertSeverity.WARNING
+                )
+                alerts.append(
+                    AnomalyAlert(
+                        alert_id=str(uuid.uuid4()),
+                        severity=severity,
+                        detection_mechanism=DetectionMechanism.TEMPORAL_DRIFT,
+                        agent_id_hash=agent_id_hash,
+                        domain=None,
+                        metric=row.get("metric") or "temporal_drift",
+                        value=float(row.get("comparison_mean") or 0.0),
+                        baseline=float(row.get("baseline_mean") or 0.0),
+                        deviation=f"{significance:+.1f} sigma drift",
+                        evidence_traces=[],
+                        recommended_action=(
+                            f"Agent shifted {significance:+.1f} sigma in "
+                            f"{row.get('metric') or 'a tracked metric'} between "
+                            f"baseline ({baseline_days}d) and comparison "
+                            f"({comparison_days}d). Investigate for configuration "
+                            "changes or drift."
+                        ),
+                    ),
+                )
+        return alerts
+
+    def _detect_hash_chain_anomalies_via_persist(
+        self, lookback_days: int = 30,
+    ) -> list[AnomalyAlert]:
+        """§F ``hash_chain_gaps`` consumption.
+
+        For each agent in the recent corpus, ask persist for gaps in
+        the audit-sequence-number chain. Any returned ``HashChainGap``
+        is critical (audit-trail integrity is non-negotiable).
+        """
+        window = self._window_json(lookback_days)
+        alerts: list[AnomalyAlert] = []
+        for agent_id_hash in self._enumerate_agents():
+            try:
+                rows_json = self.engine.hash_chain_gaps(agent_id_hash, window)
+            except (ValueError, RuntimeError) as e:
+                logger.warning("hash_chain_gaps(%s) failed: %s", agent_id_hash, e)
+                continue
+            gaps = json.loads(rows_json) or []
+            if not gaps:
+                continue
+            alerts.append(
+                AnomalyAlert(
+                    alert_id=str(uuid.uuid4()),
+                    severity=AlertSeverity.CRITICAL,
+                    detection_mechanism=DetectionMechanism.HASH_CHAIN_VERIFICATION,
+                    agent_id_hash=agent_id_hash,
+                    domain=None,
+                    metric="hash_chain_integrity",
+                    value=float(len(gaps)),
+                    baseline=0.0,
+                    deviation=f"{len(gaps)} gap(s)",
+                    evidence_traces=[],
+                    recommended_action=(
+                        f"CRITICAL: {len(gaps)} hash chain gap(s) detected in "
+                        f"audit_sequence_number for agent {agent_id_hash}. "
+                        "This may indicate tampering or data loss. "
+                        "Immediate investigation required."
+                    ),
+                ),
+            )
+        return alerts
+
+    def _detect_conscience_override_anomalies_via_persist(
+        self, lookback_days: int,
+    ) -> list[AnomalyAlert]:
+        """§F ``conscience_override_rates`` consumption.
+
+        For each ``deployment_domain``, persist returns one
+        ``OverrideRateRow`` per agent with the agent's rate, the
+        population-weighted domain average, and the multiple-of-
+        average. Rows above ``OVERRIDE_RATE_MULTIPLIER_WARNING``
+        become alerts; ``_CRITICAL`` upgrades severity.
+        """
+        window = self._window_json(lookback_days)
+        alerts: list[AnomalyAlert] = []
+        for domain in self._enumerate_deployment_domains():
+            try:
+                rows_json = self.engine.conscience_override_rates(domain, window)
+            except (ValueError, RuntimeError) as e:
+                logger.warning(
+                    "conscience_override_rates(%s) failed: %s", domain, e,
+                )
+                continue
+            for row in json.loads(rows_json) or []:
+                multiple = row.get("multiple_of_domain_avg") or 0.0
+                if multiple <= self.OVERRIDE_RATE_MULTIPLIER_WARNING:
+                    continue
+                if (row.get("trace_count") or 0) < self.MIN_TRACES_PER_AGENT:
+                    continue
+                severity = (
+                    AlertSeverity.CRITICAL
+                    if multiple > self.OVERRIDE_RATE_MULTIPLIER_CRITICAL
+                    else AlertSeverity.WARNING
+                )
+                rate = (row.get("override_rate") or 0.0) * 100
+                avg = (row.get("domain_avg_rate") or 0.0) * 100
+                alerts.append(
+                    AnomalyAlert(
+                        alert_id=str(uuid.uuid4()),
+                        severity=severity,
+                        detection_mechanism=DetectionMechanism.CONSCIENCE_OVERRIDE,
+                        agent_id_hash=row["agent_id_hash"],
+                        domain=domain,
+                        metric="conscience_override_rate",
+                        value=rate,
+                        baseline=avg,
+                        deviation=f"{multiple:.1f}x domain average",
+                        evidence_traces=[],
+                        recommended_action=(
+                            f"Agent has {rate:.1f}% override rate "
+                            f"({multiple:.1f}x domain average of {avg:.1f}%). "
+                            "Review base reasoning patterns for ethical alignment."
+                        ),
+                    ),
+                )
         return alerts
 
     # -------------------------------------------------------------------------
@@ -415,9 +727,14 @@ class CoherenceRatchetAnalyzer:
         """
         Check all agents for hash chain integrity issues.
 
-        Returns:
-            List of critical alerts for any hash chain breaks
+        When ``self.engine`` is set, routes through CIRISPersist v0.5.0
+        §F ``hash_chain_gaps`` — typed LAG-window gap detection on
+        ``audit_sequence_number``. Falls back to legacy SQL +
+        :meth:`verify_hash_chain` otherwise.
         """
+        if self.engine is not None:
+            return self._detect_hash_chain_anomalies_via_persist()
+
         if not self.db_pool:
             return []
 
@@ -465,19 +782,28 @@ class CoherenceRatchetAnalyzer:
     async def detect_temporal_drift(
         self,
         lookback_days: int = 30,
+        comparison_days: int = 1,
     ) -> list[AnomalyAlert]:
-        """
-        Track behavioral changes over time.
+        """Track behavioral changes over time.
 
-        Sudden changes in an agent's score distributions may indicate
-        configuration changes, compromise, or drift.
+        When ``self.engine`` is set, routes through CIRISPersist v0.5.0
+        §F ``temporal_drift`` — Welch z-score between a baseline
+        window (older, ``lookback_days``) and a comparison window
+        (trailing, ``comparison_days``). Falls back to legacy daily-
+        binned SQL otherwise.
 
         Args:
-            lookback_days: Number of days to analyze
-
-        Returns:
-            List of anomaly alerts for drifting agents
+          lookback_days: baseline window size in days.
+          comparison_days: comparison (trailing) window size in days.
+            Persist-path only; legacy path bins daily so this is a
+            no-op there.
         """
+        if self.engine is not None:
+            return self._detect_temporal_drift_via_persist(
+                baseline_days=lookback_days,
+                comparison_days=comparison_days,
+            )
+
         if not self.db_pool:
             return []
 
@@ -585,18 +911,20 @@ class CoherenceRatchetAnalyzer:
         self,
         lookback_days: int = 7,
     ) -> list[AnomalyAlert]:
+        """Track when the conscience system intervenes.
+
+        When ``self.engine`` is set, routes through CIRISPersist v0.5.0
+        §F ``conscience_override_rates`` — per-agent rate vs
+        population-weighted domain average. Falls back to legacy
+        ``dsdma_domain``-stratified SQL otherwise; persist stratifies
+        by ``deployment_domain`` (the cohort-identity key), which is
+        the federation-uniform stratification.
         """
-        Track when the conscience system intervenes.
+        if self.engine is not None:
+            return self._detect_conscience_override_anomalies_via_persist(
+                lookback_days,
+            )
 
-        High override rates may indicate the agent's base reasoning
-        is misaligned with ethical constraints.
-
-        Args:
-            lookback_days: Number of days to analyze
-
-        Returns:
-            List of anomaly alerts for elevated override rates
-        """
         if not self.db_pool:
             return []
 

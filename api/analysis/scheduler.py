@@ -36,20 +36,28 @@ class CoherenceRatchetScheduler:
         hash_chain_interval_hours: int = 1,
         conscience_override_interval_hours: int = 24,
         intra_agent_interval_hours: int = 24,
+        engine: Any = None,
     ):
-        """
-        Initialize scheduler.
+        """Initialize scheduler.
 
         Args:
-            db_pool: asyncpg connection pool
-            cross_agent_interval_hours: How often to run cross-agent divergence check
-            temporal_drift_interval_hours: How often to run temporal drift detection
-            hash_chain_interval_hours: How often to verify hash chains
-            conscience_override_interval_hours: How often to check override rates
-            intra_agent_interval_hours: How often to check intra-agent consistency
+            db_pool: asyncpg connection pool (legacy path).
+            engine: CIRISPersist Engine — when set, §F-mapped
+                detectors route through persist's typed read
+                primitives (the federation-uniform path).
+            cross_agent_interval_hours: cadence for cross-agent
+                divergence detection.
+            temporal_drift_interval_hours: cadence for temporal drift.
+            hash_chain_interval_hours: cadence for hash chain
+                verification.
+            conscience_override_interval_hours: cadence for override
+                rate detection.
+            intra_agent_interval_hours: cadence for intra-agent
+                consistency check (legacy SQL only — no §F equivalent).
         """
         self.db_pool = db_pool
-        self.analyzer = CoherenceRatchetAnalyzer(db_pool)
+        self.engine = engine
+        self.analyzer = CoherenceRatchetAnalyzer(db_pool=db_pool, engine=engine)
 
         self.intervals = {
             "cross_agent_divergence": timedelta(hours=cross_agent_interval_hours),

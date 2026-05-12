@@ -4225,14 +4225,20 @@ async def run_coherence_ratchet_detection() -> RunDetectionResponse:
     """
     scheduler = get_scheduler()
     if scheduler is None:
-        # Fall back to direct analyzer if scheduler not initialized
+        # Fall back to direct analyzer if scheduler not initialized.
+        # Prefer the persist Engine path (federation-uniform §F
+        # primitives); fall back to db_pool legacy SQL.
+        try:
+            from api.analysis.coherence_ratchet import CoherenceRatchetAnalyzer
+        except ImportError:
+            from analysis.coherence_ratchet import CoherenceRatchetAnalyzer
+
+        engine = persist_engine.get_engine()
         db_pool = get_db_pool()
-        if db_pool is None:
-            raise HTTPException(status_code=503, detail="Database not available")
+        if engine is None and db_pool is None:
+            raise HTTPException(status_code=503, detail="No analysis backend available")
 
-        from api.analysis.coherence_ratchet import CoherenceRatchetAnalyzer
-
-        analyzer = CoherenceRatchetAnalyzer(db_pool)
+        analyzer = CoherenceRatchetAnalyzer(db_pool=db_pool, engine=engine)
         alerts = await analyzer.run_all_detections()
     else:
         alerts = await scheduler.run_all_now()

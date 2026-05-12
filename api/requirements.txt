@@ -716,4 +716,58 @@ onnxruntime==1.25.0
 #   so it propagates to FastAPI's default Exception handler →
 #   uvicorn's clean 500. Functionally fine; tighter routing comes
 #   in a follow-up commit.
-ciris-persist==0.5.4
+#
+# v0.5.5  — federation read primitives §C/D/G/H/I (closes CIRISPersist#23
+#           remainder; v0.5.0 shipped §A/B/F/E, this lands the deferred
+#           batch). 5 additive primitives, zero schema changes, zero
+#           breaking edits. Every new PyO3 entry point wrapped in
+#           catch_panic from the start per the v0.5.4 discipline.
+#
+#   §C — list_tasks: task-grouped variant of list_trace_summaries.
+#        TaskClass canonical derivation server-side
+#        (qa_eval / discord / real_user_* / wakeup_ritual / other)
+#        from task_id prefix → uniform across federation peers.
+#        initial_observation extracted from earliest THOUGHT_START's
+#        task_description. Cursor on (earliest_at, task_id),
+#        newest-first; trace ordering within task is thought_depth
+#        ASC. Replaces lens-side JS task-grouping mention in the
+#        v0.5.0 deferral block above; consumers can adopt incrementally.
+#
+#   §D — list_llm_calls + aggregate_llm_costs: cursor-paged listing
+#        over trace_llm_calls with agent / model / status / trace
+#        filters (agent filter forces JOIN to trace_events). Cost
+#        rollup by_model / by_agent / by_domain + totals; every SUM
+#        COALESCE'd to 0 proactively per the CIRISPersist#24
+#        hygiene now in pre-commit.
+#
+#   §G — corpus_shape: 6 breakdowns per window — task_class,
+#        qa_language, qa_question_num, agent_name, agent_version
+#        (= agent_template), primary_model, deployment_region.
+#        primary_model is per-trace most-frequent LLM call model.
+#        stationarity_z_score reserved for a future baseline-window
+#        API extension (not in v0.5.5).
+#
+#   §H — aggregate_scrub_stats: envelopes_scrubbed + by_trace_level
+#        populate today; fields_scrubbed_total + by_entity_type
+#        wired but gated on v0.6.0's post-ingest classification
+#        pipeline (CIRISPersist#19). Shape locked now so consumers
+#        don't churn when the pipeline lands.
+#
+#   §I — list_federation_keys / list_attestations / list_revocations:
+#        bulk primitives over cirislens.federation_* tables. Filters
+#        include revoked (EXISTS check), pqc_completed (IS NOT NULL),
+#        per-key/attestation/revocation identity refs. Items reuse
+#        crate::federation types — no duplicate schemas.
+#
+#   Test coverage: 17 new integration tests (5 §C + 4 §D + 3 §G +
+#   2 §H + 3 §I). 222 lib tests pass (was 205 at v0.5.4).
+#
+#   Memory + SQLite backends return NotImplemented per existing
+#   convention; postgres is the production path.
+#
+#   Lens-side adoption follows in subsequent commits — this pin
+#   alone makes the primitives available; consumer rewrites
+#   (§C task-grouped on the explore page, §D for cost dashboards,
+#   etc.) land per-feature as the algorithm-level refactors below
+#   complete.
+ciris-persist==0.5.5
