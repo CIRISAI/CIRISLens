@@ -771,13 +771,42 @@ onnxruntime==1.25.0
 #   etc.) land per-feature as the algorithm-level refactors below
 #   complete.
 #
-#   NB pin held at 0.5.4 pending PyPI publish of 0.5.5. CIRISPersist
-#   v0.5.5 is tagged on GitHub (commit 410669c) but the publish-pypi
-#   workflow hadn't completed at the time of the lens pin-bump
-#   attempt (a862c25 → 25705786401), so pip resolution rejected
-#   `ciris-persist==0.5.5`. Bumping to 0.5.5 the moment the wheel
-#   lands on PyPI; comment block above describes what comes online
-#   then. The §F primitives lens consumes today (cross_agent_divergence
-#   et al.) already exist in 0.5.4, so the coherence-ratchet refactor
-#   in this commit pair works against 0.5.4 just fine.
-ciris-persist==0.5.4
+# v0.5.6  — §I test-fixture fixes (pagination contract + hex shape).
+#           v0.5.5's PG-gated CI surfaced two §I test bugs (cursor
+#           emptiness assertion on exact-fill page; 3-char hex on
+#           original_content_hash). Zero implementation changes;
+#           the §C/D/G/H/I Rust code is the v0.5.5 code unchanged.
+#           publish-pypi was skipped per manifest-integrity discipline
+#           — no v0.5.5 or v0.5.6 wheel ever reached PyPI.
+#
+# v0.5.7  — third §I test-fixture iteration (revocation_id UUID
+#           shape). put_revocation casts $1::uuid; the test passed
+#           a hex-timestamp token that the tokio_postgres serializer
+#           rejected at parameter bind. Replaced with uuid::Uuid::new_v4()
+#           to match the rest of the test suite. Same manifest-
+#           integrity skip pattern; no v0.5.7 wheel on PyPI.
+#
+# v0.5.8  — first PyPI wheel of the §C/D/G/H/I batch. Carries the
+#           REAL underlying bug v0.5.6/v0.5.7's fixture iterations
+#           were masking: put_revocation + put_attestation rejected
+#           String-bound IDs whenever tokio-postgres' prepared-
+#           statement type inference resolved $1::uuid to expect a
+#           uuid::Uuid value rather than text. Latent since v0.3.x;
+#           no prior end-to-end PG test exercised the put paths
+#           (only SELECT-side attach_*_pqc_signature in production).
+#           §I round-trip test was the first to hit it.
+#
+#   Fix: parse String → uuid::Uuid::parse_str at the persist
+#   boundary; bind the Uuid value directly. with-uuid-1 feature on
+#   tokio-postgres already provides ToSql; the &String → $N::uuid
+#   cast path is retired for put_revocation + put_attestation. Other
+#   $N::uuid sites (attach_*_pqc_signature, outbound queue ops)
+#   unchanged — those are SELECT paths that work in prod; will
+#   revisit if tests surface them. Invalid UUIDs now surface as
+#   Error::InvalidArgument (was opaque Error::Backend serialization
+#   error) — strictly better for operators.
+#
+#   Net for lens: pin jumps 0.5.4 → 0.5.8 in one step. CIRISPersist#23
+#   closes on this push. Only CIRISPersist#19 (v0.6.0 post-ingest
+#   pipeline) remains open in the v0.5.x → v0.6.x sequence.
+ciris-persist==0.5.8
