@@ -3841,6 +3841,266 @@ async def scoring_aggregate_factors_batch(
     return {"aggregates": json.loads(rows_json)}
 
 
+# =============================================================================
+# CIRISPersist v0.5.5/v0.5.8 §C / §D / §G / §H / §I primitive pass-throughs
+# =============================================================================
+#
+# Same idiom as the §E/§F pass-throughs above: JSON-strings-in/out, time
+# windows built once via _hours_to_window_json, errors mapped through the
+# typed ValueError → 400 / RuntimeError → 503 discipline. Federation-uniform
+# primitive surface — same shape lens-tier and sovereign-mode agents
+# consume.
+#
+# These endpoints are the executable spec the lens-core Rust port will
+# mirror. Each is a thin wrapper around one persist read primitive.
+
+
+# ── §C — task-grouped listing ───────────────────────────────────────
+
+@router.get("/tasks")
+async def list_tasks(
+    cursor: str | None = None,
+    limit: int = 50,
+    hours: float | None = None,
+    agent_id_hash: str | None = None,
+    agent_name: str | None = None,
+    task_class: str | None = None,
+) -> dict[str, Any]:
+    """Task-grouped trace listing via persist's §C ``list_tasks``.
+
+    Canonical ``TaskClass`` derivation (qa_eval / discord /
+    real_user_* / wakeup_ritual / other) lives server-side in
+    persist via ``TaskClass::from_task_id`` so federation peers
+    agree on task identity uniformly. ``initial_observation`` is
+    extracted server-side from the earliest THOUGHT_START in each
+    task.
+    """
+    engine = _engine_or_503()
+    task_filter: dict[str, Any] = {}
+    if hours is not None:
+        task_filter["time_window"] = json.loads(_hours_to_window_json(hours))
+    if agent_id_hash is not None:
+        task_filter["agent_id_hash"] = agent_id_hash
+    if agent_name is not None:
+        task_filter["agent_name"] = agent_name
+    if task_class is not None:
+        task_filter["task_class"] = task_class
+    try:
+        page_json = engine.list_tasks(json.dumps(task_filter), cursor, min(limit, 200))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except RuntimeError as e:
+        logger.error("list_tasks failed: %s", e)
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    return json.loads(page_json)
+
+
+# ── §D — LLM call surface ───────────────────────────────────────────
+
+@router.get("/llm-calls")
+async def list_llm_calls(
+    cursor: str | None = None,
+    limit: int = 100,
+    hours: float | None = None,
+    agent_id_hash: str | None = None,
+    model: str | None = None,
+    status: str | None = None,
+    trace_id: str | None = None,
+    thought_id: str | None = None,
+) -> dict[str, Any]:
+    """Page through ``trace_llm_calls`` via §D ``list_llm_calls``."""
+    engine = _engine_or_503()
+    llm_filter: dict[str, Any] = {}
+    if hours is not None:
+        llm_filter["time_window"] = json.loads(_hours_to_window_json(hours))
+    if agent_id_hash is not None:
+        llm_filter["agent_id_hash"] = agent_id_hash
+    if model is not None:
+        llm_filter["model"] = model
+    if status is not None:
+        llm_filter["status"] = status
+    if trace_id is not None:
+        llm_filter["trace_id"] = trace_id
+    if thought_id is not None:
+        llm_filter["thought_id"] = thought_id
+    try:
+        page_json = engine.list_llm_calls(json.dumps(llm_filter), cursor, min(limit, 1000))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except RuntimeError as e:
+        logger.error("list_llm_calls failed: %s", e)
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    return json.loads(page_json)
+
+
+@router.get("/llm-costs")
+async def aggregate_llm_costs(
+    hours: float = 168.0,
+    agent_id_hash: str | None = None,
+    model: str | None = None,
+) -> dict[str, Any]:
+    """Cost rollup by model / agent / domain + window totals via §D
+    ``aggregate_llm_costs``."""
+    engine = _engine_or_503()
+    cost_filter: dict[str, Any] = {
+        "time_window": json.loads(_hours_to_window_json(hours)),
+    }
+    if agent_id_hash is not None:
+        cost_filter["agent_id_hash"] = agent_id_hash
+    if model is not None:
+        cost_filter["model"] = model
+    try:
+        agg_json = engine.aggregate_llm_costs(json.dumps(cost_filter))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except RuntimeError as e:
+        logger.error("aggregate_llm_costs failed: %s", e)
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    return json.loads(agg_json)
+
+
+# ── §G — corpus shape ───────────────────────────────────────────────
+
+@router.get("/corpus-shape")
+async def corpus_shape(
+    hours: float = 168.0,
+    agent_id_hash: str | None = None,
+    agent_name: str | None = None,
+) -> dict[str, Any]:
+    """6-breakdown corpus rollup (task_class / qa_language /
+    qa_question_num / agent_name / agent_version / primary_model /
+    deployment_region) over the window. §G ``corpus_shape``."""
+    engine = _engine_or_503()
+    shape_filter: dict[str, Any] = {
+        "time_window": json.loads(_hours_to_window_json(hours)),
+    }
+    if agent_id_hash is not None:
+        shape_filter["agent_id_hash"] = agent_id_hash
+    if agent_name is not None:
+        shape_filter["agent_name"] = agent_name
+    try:
+        shape_json = engine.corpus_shape(json.dumps(shape_filter))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except RuntimeError as e:
+        logger.error("corpus_shape failed: %s", e)
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    return json.loads(shape_json)
+
+
+# ── §H — privacy / scrub observability ──────────────────────────────
+
+@router.get("/scrub-stats")
+async def aggregate_scrub_stats(hours: float = 168.0) -> dict[str, Any]:
+    """Envelopes scrubbed + per-trace-level breakdown over the window.
+    §H ``aggregate_scrub_stats``. ``by_entity_type`` +
+    ``fields_scrubbed_total`` are wired but gated on the v0.6.0
+    post-ingest classification pipeline."""
+    engine = _engine_or_503()
+    until = datetime.now(UTC)
+    since = until - timedelta(hours=hours)
+    try:
+        agg_json = engine.aggregate_scrub_stats(since.isoformat(), until.isoformat())
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except RuntimeError as e:
+        logger.error("aggregate_scrub_stats failed: %s", e)
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    return json.loads(agg_json)
+
+
+# ── §I — federation observability bulk ──────────────────────────────
+
+@router.get("/federation-keys")
+async def list_federation_keys(
+    cursor: str | None = None,
+    limit: int = 100,
+    agent_id_hash: str | None = None,
+    algorithm: str | None = None,
+    revoked: bool | None = None,
+    pqc_completed: bool | None = None,
+) -> dict[str, Any]:
+    """Bulk-list ``federation_keys`` via §I."""
+    engine = _engine_or_503()
+    key_filter: dict[str, Any] = {}
+    if agent_id_hash is not None:
+        key_filter["agent_id_hash"] = agent_id_hash
+    if algorithm is not None:
+        key_filter["algorithm"] = algorithm
+    if revoked is not None:
+        key_filter["revoked"] = revoked
+    if pqc_completed is not None:
+        key_filter["pqc_completed"] = pqc_completed
+    try:
+        page_json = engine.list_federation_keys(
+            json.dumps(key_filter), cursor, min(limit, 1000),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except RuntimeError as e:
+        logger.error("list_federation_keys failed: %s", e)
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    return json.loads(page_json)
+
+
+@router.get("/attestations")
+async def list_attestations(
+    cursor: str | None = None,
+    limit: int = 100,
+    attesting_key_id: str | None = None,
+    attested_key_id: str | None = None,
+    attestation_type: str | None = None,
+) -> dict[str, Any]:
+    """Bulk-list ``federation_attestations`` via §I."""
+    engine = _engine_or_503()
+    att_filter: dict[str, Any] = {}
+    if attesting_key_id is not None:
+        att_filter["attesting_key_id"] = attesting_key_id
+    if attested_key_id is not None:
+        att_filter["attested_key_id"] = attested_key_id
+    if attestation_type is not None:
+        att_filter["attestation_type"] = attestation_type
+    try:
+        page_json = engine.list_attestations(
+            json.dumps(att_filter), cursor, min(limit, 1000),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except RuntimeError as e:
+        logger.error("list_attestations failed: %s", e)
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    return json.loads(page_json)
+
+
+@router.get("/revocations")
+async def list_revocations(
+    cursor: str | None = None,
+    limit: int = 100,
+    revoked_key_id: str | None = None,
+    revoking_key_id: str | None = None,
+    pqc_completed: bool | None = None,
+) -> dict[str, Any]:
+    """Bulk-list ``federation_revocations`` via §I."""
+    engine = _engine_or_503()
+    rev_filter: dict[str, Any] = {}
+    if revoked_key_id is not None:
+        rev_filter["revoked_key_id"] = revoked_key_id
+    if revoking_key_id is not None:
+        rev_filter["revoking_key_id"] = revoking_key_id
+    if pqc_completed is not None:
+        rev_filter["pqc_completed"] = pqc_completed
+    try:
+        page_json = engine.list_revocations(
+            json.dumps(rev_filter), cursor, min(limit, 1000),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except RuntimeError as e:
+        logger.error("list_revocations failed: %s", e)
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    return json.loads(page_json)
+
+
 @router.get("/repository/statistics")
 async def get_repository_statistics(
     access_level: AccessLevel = AccessLevel.PUBLIC,  # noqa: ARG001 - reserved for future scoping
