@@ -681,7 +681,7 @@ class TestStructuralIdentifierAllowlist:
 
         # Use a value that WOULD trigger the year-shape regex
         trigger_value = "deadbeef1999cafe"  # contains '1999'
-        data = {key: trigger_value for key in STRUCTURAL_IDENTIFIER_KEYS}
+        data = dict.fromkeys(STRUCTURAL_IDENTIFIER_KEYS, trigger_value)
         result = scrub_dict_recursive(data)
         for key in STRUCTURAL_IDENTIFIER_KEYS:
             assert result[key] == trigger_value, (
