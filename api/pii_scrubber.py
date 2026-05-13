@@ -153,6 +153,13 @@ STRUCTURAL_IDENTIFIER_KEYS = frozenset({
     "correlation_id",       # External system correlation key
     "signature_key_id",     # Federation directory key reference
     "signing_key_id",       # Persist row signing key reference
+    "channel_id",           # Cohort-routing key (model_eval_*, discord*, api_*,
+                            # websocket*, http*). Lives inside
+                            # SNAPSHOT_AND_CONTEXT.payload.system_snapshot, so the
+                            # per-key allowlist check inside _scrub_value
+                            # protects it; persist's §C TaskClass::from_task_id
+                            # mapping breaks completely if channel_id reads as
+                            # [IDENTIFIER]. CIRISLens#12.
 })
 
 # Text fields that need PII scrubbing in full_traces

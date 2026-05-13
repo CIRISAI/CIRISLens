@@ -711,3 +711,39 @@ class TestStructuralIdentifierAllowlist:
         # And the adjacent content still gets scrubbed (regression of regex
         # firing is desired here — just NOT on the structural keys).
         assert "2023" not in nested["content"] or "[IDENTIFIER]" in nested["content"]
+
+    def test_channel_id_survives_under_system_snapshot(self):
+        """CIRISLens#12: channel_id is the cohort-routing key
+        (model_eval_* / discord* / api_* / etc.) — persist's §C
+        TaskClass::from_task_id mapping keys on its prefix. The regex
+        false-positively scrubs channel_id values that embed a
+        year-shape substring (~5% of values, same hit rate as the
+        sha256 cases #11 closed), and channel_id lives INSIDE the
+        SCRUB_FIELDS-tagged `system_snapshot` subtree — so it needs
+        the per-key allowlist applied at every recursion depth.
+
+        Without this allowlist, every trace projects into
+        task_class='other' and RATCHET cohort-cell calibration
+        collapses to a single bucket. Federation-uniform invariant —
+        the lens-core Rust port (CIRISLensCore#4) inherits the same
+        key set."""
+        from pii_scrubber import scrub_dict_recursive
+
+        # Real channel_id shapes that hit the year-shape regex:
+        result = scrub_dict_recursive({
+            "system_snapshot": {  # scrub-tagged subtree
+                "channel_id": "model_eval_en_2020_q3_q41",
+                "current_thought_summary": {
+                    "channel_id": "discord_1234567890_2019_xyz",  # nested deeper
+                    "content": "user mentioned the year 2023",
+                },
+            },
+        })
+        # Top-level (one level deep) under SCRUB_FIELDS subtree
+        assert result["system_snapshot"]["channel_id"] == "model_eval_en_2020_q3_q41"
+        # Two levels deep under SCRUB_FIELDS subtree — same protection
+        nested = result["system_snapshot"]["current_thought_summary"]
+        assert nested["channel_id"] == "discord_1234567890_2019_xyz"
+        # Adjacent content still scrubs — the cohort-routing keys are
+        # protocol-public; the content text isn't.
+        assert "2023" not in nested["content"] or "[IDENTIFIER]" in nested["content"]
