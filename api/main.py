@@ -24,7 +24,6 @@ import persist_engine
 
 # Import Accord API routers (primary)
 from accord_api import router as accord_v1_router  # Non-Rust version
-from accord_api_v2 import initialize_rust_caches
 from accord_api_v2 import router as accord_v2_router  # Rust-powered version
 
 # Import deprecated Covenant API routers for backward compatibility
@@ -469,12 +468,12 @@ async def startup():
             await startup_migrations(conn, Path("/app/sql"))
             logger.info("All migrations applied and schema validated")
 
-        # Initialize Rust caches (schemas and public keys)
-        try:
-            await initialize_rust_caches()
-            logger.info("Rust caches initialized")
-        except Exception as e:
-            logger.warning(f"Rust cache initialization failed (will retry on first request): {e}")
+        # Rust schema + public-key caches removed in the ciris-lens-core
+        # v0.1.1 cutover. The in-tree crate's caches fed the v2 events
+        # handler which never fired in production (v1 _delegate_to_persist
+        # wins the /events route). Federation directory now lives natively
+        # in persist v0.9.x; lens-core's 4-function PyO3 contract doesn't
+        # expose cache management.
 
         # Initialize ciris-persist Engine — runs V001+V003 migrations,
         # bootstraps the lens identity in ciris-keyring (creates the

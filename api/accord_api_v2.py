@@ -16,7 +16,6 @@ Backward-compatible aliases are provided via covenant_api_v2.py.
 
 from __future__ import annotations
 
-import asyncio
 import base64
 import json
 import logging
@@ -25,6 +24,8 @@ from typing import TYPE_CHECKING, Any
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
+
+import persist_engine
 
 if TYPE_CHECKING:
     import asyncpg
@@ -41,9 +42,6 @@ logger = logging.getLogger(__name__)
 
 # Router for accord endpoints
 router = APIRouter(prefix="/api/v1/accord", tags=["accord-v2"])
-
-# Cache refresh lock to prevent concurrent reloads
-_cache_refresh_lock = asyncio.Lock()
 
 
 def get_db_pool() -> asyncpg.Pool | None:
@@ -128,103 +126,17 @@ class WBDEventsRequest(BaseModel):
 # =============================================================================
 
 
-async def load_schemas_into_rust_cache(conn: asyncpg.Connection) -> int:
-    """Load schemas from database into Rust cache."""
-    if not RUST_AVAILABLE:
-        return 0
-
-    # Fetch schemas
-    schema_rows = await conn.fetch("""
-        SELECT version, description, status, signature_event_types
-        FROM cirislens.trace_schemas
-        WHERE status IN ('current', 'supported')
-        ORDER BY
-            CASE status
-                WHEN 'current' THEN 1
-                WHEN 'supported' THEN 2
-                ELSE 3
-            END,
-            version DESC
-    """)
-
-    # Fetch field extraction rules
-    field_rows = await conn.fetch("""
-        SELECT schema_version, event_type, field_name, json_path, data_type, required, db_column
-        FROM cirislens.trace_schema_fields
-        WHERE schema_version IN (
-            SELECT version FROM cirislens.trace_schemas
-            WHERE status IN ('current', 'supported')
-        )
-    """)
-
-    # Convert to tuples for Rust
-    schemas = [
-        (row['version'], row['description'] or '', row['status'], row['signature_event_types'] or [])
-        for row in schema_rows
-    ]
-    fields = [
-        (row['schema_version'], row['event_type'], row['field_name'],
-         row['json_path'], row['data_type'], row['required'], row['db_column'] or '')
-        for row in field_rows
-    ]
-
-    cirislens_core.load_schemas_from_db(schemas, fields)
-    logger.info("Loaded %d schemas with %d field rules into Rust cache", len(schemas), len(fields))
-    return len(schemas)
-
-
-async def load_public_keys_into_rust_cache(conn: asyncpg.Connection) -> int:
-    """Load public keys from database into Rust cache."""
-    if not RUST_AVAILABLE:
-        return 0
-
-    key_rows = await conn.fetch("""
-        SELECT key_id, public_key_base64
-        FROM cirislens.covenant_public_keys
-        WHERE revoked_at IS NULL
-    """)
-
-    keys = [(row['key_id'], row['public_key_base64']) for row in key_rows]
-    cirislens_core.load_public_keys_from_db(keys)
-    logger.info("Loaded %d public keys into Rust cache", len(keys))
-    return len(keys)
-
-
-async def ensure_caches_fresh(conn: asyncpg.Connection) -> None:
-    """Check cache TTL and refresh if needed."""
-    if not RUST_AVAILABLE:
-        return
-
-    schema_needs_refresh, keys_need_refresh, schema_age, key_age = cirislens_core.check_cache_status()
-
-    if schema_needs_refresh or keys_need_refresh:
-        async with _cache_refresh_lock:
-            # Re-check after acquiring lock
-            schema_needs_refresh, keys_need_refresh, _, _ = cirislens_core.check_cache_status()
-
-            if schema_needs_refresh:
-                logger.info("Schema cache TTL expired (age=%s), refreshing", schema_age)
-                await load_schemas_into_rust_cache(conn)
-
-            if keys_need_refresh:
-                logger.info("Public key cache TTL expired (age=%s), refreshing", key_age)
-                await load_public_keys_into_rust_cache(conn)
-
-
-async def initialize_rust_caches() -> None:
-    """Initialize Rust caches at startup."""
-    if not RUST_AVAILABLE:
-        logger.warning("Rust module not available - using Python fallback")
-        return
-
-    db_pool = get_db_pool()
-    if db_pool is None:
-        logger.error("Database not available for cache initialization")
-        return
-
-    async with db_pool.acquire() as conn:
-        await load_schemas_into_rust_cache(conn)
-        await load_public_keys_into_rust_cache(conn)
+# Schema + public-key cache lifecycle functions (load_schemas_into_rust_cache,
+# load_public_keys_into_rust_cache, ensure_caches_fresh, initialize_rust_caches)
+# were removed in the ciris-lens-core v0.1.1 cutover. They populated the
+# in-tree cirislens-core crate's in-process caches, which fed the v2
+# receive_accord_events handler — but v1's _delegate_to_persist registered
+# first in main.py and won the /events route, so the v2 path never fired in
+# production. The new ciris-lens-core (PyPI v0.1.1) doesn't expose cache
+# management at all; persist v0.9.x owns the federation directory natively.
+#
+# /cache/refresh and /cache/status admin endpoints (which exposed the same
+# caches via HTTP) were also removed in this commit.
 
 
 # =============================================================================
@@ -739,10 +651,18 @@ async def receive_accord_events(request: Request) -> dict[str, Any]:
     if db_pool is None:
         raise HTTPException(status_code=503, detail="Database not available")
 
-    async with db_pool.acquire() as conn:
-        # Ensure caches are fresh (TTL check)
-        await ensure_caches_fresh(conn)
+    # Lens-core v0.1.1 contract: process_trace_batch takes the persist
+    # Engine as the first arg ("Engine-as-parameter; never holds keys").
+    # When persist isn't initialized fall back to the standard 503 the
+    # rest of the v2 path produces — the v2 handler is currently dead
+    # code anyway (v1 _delegate_to_persist registers first and wins the
+    # /events route), but if the route ordering ever changes this stays
+    # correct.
+    engine = persist_engine.get_engine()
+    if engine is None:
+        raise HTTPException(status_code=503, detail="persist engine unavailable")
 
+    async with db_pool.acquire() as conn:
         # Convert events to JSON strings for Rust
         # Note: events are wrapped in AccordTraceEvent which has a .trace field
         events_json = [
@@ -768,8 +688,11 @@ async def receive_accord_events(request: Request) -> dict[str, Any]:
             for event in validated_request.events
         ]
 
-        # Process batch in Rust
+        # Process batch in Rust. v0.1.1 contract: Engine is the first
+        # positional arg; lens-core never holds keys, persist owns
+        # signing + persistence.
         result = cirislens_core.process_trace_batch(
+            engine,
             events=events_json,
             batch_timestamp=validated_request.batch_timestamp.isoformat(),
             consent_timestamp=validated_request.consent_timestamp.isoformat() if validated_request.consent_timestamp else None,
@@ -843,51 +766,12 @@ async def receive_accord_events(request: Request) -> dict[str, Any]:
 # =============================================================================
 
 
-@router.post("/cache/refresh")
-async def refresh_caches() -> dict[str, Any]:
-    """Force refresh of all Rust caches."""
-    if not RUST_AVAILABLE:
-        raise HTTPException(status_code=503, detail="Rust module not available")
-
-    db_pool = get_db_pool()
-    if db_pool is None:
-        raise HTTPException(status_code=503, detail="Database not available")
-
-    async with db_pool.acquire() as conn:
-        cirislens_core.refresh_schema_cache()
-        cirislens_core.refresh_public_key_cache()
-
-        schemas_loaded = await load_schemas_into_rust_cache(conn)
-        keys_loaded = await load_public_keys_into_rust_cache(conn)
-
-    return {
-        "status": "refreshed",
-        "schemas_loaded": schemas_loaded,
-        "keys_loaded": keys_loaded,
-    }
-
-
-@router.get("/cache/status")
-async def get_cache_status() -> dict[str, Any]:
-    """Get current cache status."""
-    if not RUST_AVAILABLE:
-        return {"status": "unavailable", "rust_available": False}
-
-    schema_needs_refresh, keys_need_refresh, schema_age, key_age = cirislens_core.check_cache_status()
-
-    return {
-        "rust_available": True,
-        "schemas": {
-            "loaded": cirislens_core.get_loaded_schemas(),
-            "needs_refresh": schema_needs_refresh,
-            "age_seconds": schema_age,
-        },
-        "public_keys": {
-            "count": cirislens_core.get_public_key_count(),
-            "needs_refresh": keys_need_refresh,
-            "age_seconds": key_age,
-        },
-    }
+# /cache/refresh + /cache/status admin endpoints removed in the
+# ciris-lens-core v0.1.1 cutover — they exposed the in-tree crate's
+# in-process schema + public-key caches via HTTP. Federation directory
+# now lives natively in persist v0.9.x; the new ciris-lens-core's 4-function
+# contract doesn't carry the cache management surface those endpoints
+# wrapped.
 
 
 # =============================================================================
@@ -954,8 +838,9 @@ async def register_public_key(key: PublicKeyCreate) -> dict[str, Any]:
                 key.public_key_base64,
                 key.description,
             )
-            # Reload keys into Rust cache
-            await load_public_keys_into_rust_cache(conn)
+            # Cache reload removed in the ciris-lens-core v0.1.1 cutover
+            # — federation directory lives natively in persist v0.9.x
+            # and verify queries pull from there directly.
         except Exception as e:
             logger.error("Failed to register public key: %s", e)
             raise HTTPException(status_code=500, detail="Failed to register key") from e

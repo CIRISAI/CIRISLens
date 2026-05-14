@@ -22,11 +22,8 @@ from accord_api_v2 import (
     RUST_AVAILABLE,
     CorrelationMetadata,
     TraceComponent,
-    ensure_caches_fresh,
     get_db_pool,
     list_public_keys,
-    load_public_keys_into_rust_cache,
-    load_schemas_into_rust_cache,
     # Functions
     receive_accord_events,
     register_public_key,
@@ -123,9 +120,6 @@ __all__ = [
     "store_mock_trace",
     "store_connectivity_event",
     "store_batch_metadata",
-    "load_schemas_into_rust_cache",
-    "load_public_keys_into_rust_cache",
-    "ensure_caches_fresh",
     "get_db_pool",
     "RUST_AVAILABLE",
 ]
