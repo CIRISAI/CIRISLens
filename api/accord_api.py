@@ -1945,6 +1945,23 @@ async def _delegate_to_persist(body: bytes) -> dict[str, Any]:
             "PERSIST_DELEGATE_REJECT class=ValueError msg=%s body_sha256_prefix=%s body_bytes=%d",
             msg[:200], body_sha, len(body),
         )
+        # CIRISLens#13 diagnostic — when persist rejects with
+        # schema_malformed_json, dump a bounded excerpt of the body
+        # so we can identify which token persist's serde_json strict
+        # parser is choking on (NaN / Infinity / surrogate / etc.).
+        # 500-byte cap keeps this safe under AV-15 (attacker-controlled
+        # content); the bytes already passed lens-side Pydantic
+        # validation so they're at least syntactically reasonable JSON.
+        # Remove after the regression class is identified + fixed.
+        if "schema_malformed_json" in msg.lower():
+            try:
+                excerpt = body[:500].decode("utf-8", errors="replace")
+            except Exception:
+                excerpt = repr(body[:500])
+            logger.warning(
+                "PERSIST_DELEGATE_REJECT_BODY_EXCERPT sha256_prefix=%s excerpt=%r",
+                body_sha, excerpt,
+            )
         # 401 only when verify failed because the signing key isn't in
         # the directory; everything else verify-related stays 422
         # (malformed sig, sig mismatch, etc.).
