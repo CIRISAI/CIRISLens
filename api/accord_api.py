@@ -1946,21 +1946,54 @@ async def _delegate_to_persist(body: bytes) -> dict[str, Any]:
             msg[:200], body_sha, len(body),
         )
         # CIRISLens#13 diagnostic — when persist rejects with
-        # schema_malformed_json, dump a bounded excerpt of the body
-        # so we can identify which token persist's serde_json strict
-        # parser is choking on (NaN / Infinity / surrogate / etc.).
-        # 500-byte cap keeps this safe under AV-15 (attacker-controlled
-        # content); the bytes already passed lens-side Pydantic
-        # validation so they're at least syntactically reasonable JSON.
-        # Remove after the regression class is identified + fixed.
+        # schema_malformed_json, surface what we can to identify
+        # which token persist's serde_json strict parser is choking
+        # on (NaN / Infinity / surrogate / control char / etc.).
+        # First sample (ef1fcab) confirmed the body HEAD is valid
+        # JSON; the malformed token is past byte 500.
         if "schema_malformed_json" in msg.lower():
-            try:
-                excerpt = body[:500].decode("utf-8", errors="replace")
-            except Exception:
-                excerpt = repr(body[:500])
+            # (1) Persist's typed detail field (v0.4.6+ PyO3 surface
+            #     emits args as `(kind, detail)` when a detail is
+            #     present). For schema_malformed_json, detail is the
+            #     serde_json error message including "line N column M".
+            args = getattr(e, "args", ())
+            detail = args[1] if len(args) >= 2 else None
             logger.warning(
-                "PERSIST_DELEGATE_REJECT_BODY_EXCERPT sha256_prefix=%s excerpt=%r",
-                body_sha, excerpt,
+                "PERSIST_DELEGATE_REJECT_DETAIL sha256_prefix=%s detail=%r",
+                body_sha, detail,
+            )
+            # (2) Try Python's json.loads on the same bytes. If
+            #     Python accepts and serde_json rejects, the malformed
+            #     token is something Python is lenient about (lone
+            #     surrogate, NaN/Infinity, control chars). If Python
+            #     also rejects, surface its position string.
+            python_json_err: str | None = None
+            try:
+                json.loads(body)
+                python_json_err = "<accepted-by-python-json>"
+            except (ValueError, json.JSONDecodeError) as je:
+                python_json_err = repr(je)
+            logger.warning(
+                "PERSIST_DELEGATE_REJECT_PYJSON sha256_prefix=%s pyjson=%s",
+                body_sha, python_json_err,
+            )
+            # (3) Head + tail of body. Head identifies envelope shape;
+            #     tail catches the most-likely malformed-token location
+            #     (long components/conversation_history near the end).
+            #     Capped at 1KB each — bounded under AV-15.
+            try:
+                head = body[:1024].decode("utf-8", errors="replace")
+                tail = body[-1024:].decode("utf-8", errors="replace")
+            except Exception:
+                head = repr(body[:1024])
+                tail = repr(body[-1024:])
+            logger.warning(
+                "PERSIST_DELEGATE_REJECT_BODY_HEAD sha256_prefix=%s head=%r",
+                body_sha, head,
+            )
+            logger.warning(
+                "PERSIST_DELEGATE_REJECT_BODY_TAIL sha256_prefix=%s tail=%r",
+                body_sha, tail,
             )
         # 401 only when verify failed because the signing key isn't in
         # the directory; everything else verify-related stays 422
