@@ -1992,7 +1992,12 @@ async def _delegate_to_persist(body: bytes) -> dict[str, Any]:
             #     malformed-field error usually points near either end.
             #     Caps are bounded under AV-15; bytes already passed
             #     pydantic so syntactically reasonable JSON.
-            FULL_BODY_LIMIT = 8 * 1024
+            # Bumped 8KB → 64KB after 40150ad samples confirmed all
+            # current rejects are 20-30KB (no body fit under the 8KB
+            # threshold; full capture never fired). Still bounded by
+            # AV-13's 8MiB body cap upstream; 64KB is plenty for the
+            # entire trace JSON shape we're trying to inspect.
+            FULL_BODY_LIMIT = 64 * 1024
             HEAD_TAIL_LIMIT = 4 * 1024
             try:
                 if len(body) <= FULL_BODY_LIMIT:
