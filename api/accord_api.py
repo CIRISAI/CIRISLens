@@ -1977,24 +1977,46 @@ async def _delegate_to_persist(body: bytes) -> dict[str, Any]:
                 "PERSIST_DELEGATE_REJECT_PYJSON sha256_prefix=%s pyjson=%s",
                 body_sha, python_json_err,
             )
-            # (3) Head + tail of body. Head identifies envelope shape;
-            #     tail catches the most-likely malformed-token location
-            #     (long components/conversation_history near the end).
-            #     Capped at 1KB each — bounded under AV-15.
+            # (3) Body capture for offline replay against persist's
+            #     BatchEnvelope::from_json. The 337424a samples confirmed
+            #     PYJSON=<accepted-by-python-json> for every reject, so
+            #     the bytes are well-formed JSON; persist's typed
+            #     deserialize is the gate. With a complete body we can
+            #     feed it into a tiny Rust test and get the real
+            #     serde_json::Error message ("missing field X at line N
+            #     column M") instead of waiting on a persist release to
+            #     surface detail() for Error::Json(_).
+            #
+            #     Strategy: if body fits in 8KB, log the WHOLE thing.
+            #     Otherwise bump head + tail to 4KB each — the
+            #     malformed-field error usually points near either end.
+            #     Caps are bounded under AV-15; bytes already passed
+            #     pydantic so syntactically reasonable JSON.
+            FULL_BODY_LIMIT = 8 * 1024
+            HEAD_TAIL_LIMIT = 4 * 1024
             try:
-                head = body[:1024].decode("utf-8", errors="replace")
-                tail = body[-1024:].decode("utf-8", errors="replace")
-            except Exception:
-                head = repr(body[:1024])
-                tail = repr(body[-1024:])
-            logger.warning(
-                "PERSIST_DELEGATE_REJECT_BODY_HEAD sha256_prefix=%s head=%r",
-                body_sha, head,
-            )
-            logger.warning(
-                "PERSIST_DELEGATE_REJECT_BODY_TAIL sha256_prefix=%s tail=%r",
-                body_sha, tail,
-            )
+                if len(body) <= FULL_BODY_LIMIT:
+                    full = body.decode("utf-8", errors="replace")
+                    logger.warning(
+                        "PERSIST_DELEGATE_REJECT_BODY_FULL sha256_prefix=%s body_bytes=%d full=%r",
+                        body_sha, len(body), full,
+                    )
+                else:
+                    head = body[:HEAD_TAIL_LIMIT].decode("utf-8", errors="replace")
+                    tail = body[-HEAD_TAIL_LIMIT:].decode("utf-8", errors="replace")
+                    logger.warning(
+                        "PERSIST_DELEGATE_REJECT_BODY_HEAD sha256_prefix=%s head=%r",
+                        body_sha, head,
+                    )
+                    logger.warning(
+                        "PERSIST_DELEGATE_REJECT_BODY_TAIL sha256_prefix=%s tail=%r",
+                        body_sha, tail,
+                    )
+            except Exception as decode_err:
+                logger.warning(
+                    "PERSIST_DELEGATE_REJECT_BODY_DECODE_ERR sha256_prefix=%s err=%r",
+                    body_sha, decode_err,
+                )
         # 401 only when verify failed because the signing key isn't in
         # the directory; everything else verify-related stays 422
         # (malformed sig, sig mismatch, etc.).
