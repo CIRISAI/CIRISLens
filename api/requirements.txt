@@ -810,3 +810,25 @@ onnxruntime==1.25.0
 #   closes on this push. Only CIRISPersist#19 (v0.6.0 post-ingest
 #   pipeline) remains open in the v0.5.x → v0.6.x sequence.
 ciris-persist==0.5.8
+
+# CIRISLensCore — Rust science layer for the federation. v0.1.1 is the
+# first PyPI-published release; cuts over from the in-tree
+# cirislens-core/ Cargo crate (compiled by the rust-builder stage in
+# api/Dockerfile pre-cutover) to a published wheel.
+#
+# Contract: 4-function PyO3 surface
+#   process_trace_batch(engine, events, batch_timestamp, ...)
+#   scrub_trace(trace_json, level)
+#   scrub_traces_batch(traces_json, level)
+#   ner_is_configured()
+#
+# "Engine-as-parameter; never holds keys" — lens-core takes the persist
+# Engine as an arg; persist owns signing + persistence + federation
+# directory. Lens-core never holds private key material; survives the
+# PoB §3.1 fold-into-agent unchanged.
+#
+# Wheels: linux-x86_64, linux-aarch64, darwin-aarch64 (abi3-py311).
+# Federation chain at handoff: persist v0.9.1 / edge v0.1.4 /
+# lens-core v0.1.1. See FSD/LENS_CORE_ADOPTION_GIFT_PACKAGE.md for the
+# full handoff inventory.
+ciris-lens-core==0.1.1

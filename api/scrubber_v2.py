@@ -26,11 +26,13 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# Try to import the Rust core. On missing build (`maturin develop` not run)
-# or `--features ner` not enabled, this falls back to indicating v2 is
-# unavailable; the caller should use v1.
+# Try to import the Rust core. v0.1.1 cutover: package is now
+# `ciris-lens-core` on PyPI (module `ciris_lens_core`); aliased to
+# `cirislens_core` to keep call sites stable through the migration.
+# On missing install or NER backend not configured, this falls back to
+# indicating v2 is unavailable; the caller should use v1.
 try:
-    import cirislens_core  # type: ignore[import-not-found]
+    import ciris_lens_core as cirislens_core  # type: ignore[import-not-found]
 
     _RUST_AVAILABLE = hasattr(cirislens_core, "scrub_trace")
     if _RUST_AVAILABLE:

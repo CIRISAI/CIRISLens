@@ -30,9 +30,11 @@ import persist_engine
 if TYPE_CHECKING:
     import asyncpg
 
-# Import the Rust module - will fail gracefully if not built
+# Import the Rust science layer. Aliased to keep call sites stable across
+# the in-tree-crate → ciris-lens-core v0.1.1 cutover. Falls back gracefully
+# when the wheel isn't installed (RUST_AVAILABLE gate downstream).
 try:
-    import cirislens_core
+    import ciris_lens_core as cirislens_core
     RUST_AVAILABLE = True
 except ImportError:
     RUST_AVAILABLE = False

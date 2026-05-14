@@ -1,48 +1,18 @@
 # CIRISLens API Docker Image
 # Multi-stage build with Rust extension support
-
-# ============================================
-# Stage 1: Rust builder for cirislens-core
-# ============================================
-# ciris-persist used to be built here too (clone + maturin from source).
-# As of v0.1.13 it's published to PyPI with abi3 wheels for all three
-# of our targets — manylinux_2_34_x86_64, manylinux_2_34_aarch64,
-# macosx_11_0_arm64 — so the lens just `pip install`s it in stage 2.
-# That collapses cold-build wall from ~2h to ~10 min on the persist
-# side; only cirislens-core's compile remains here.
-FROM python:3.11-slim AS rust-builder
-
-WORKDIR /build
-
-# Install Rust toolchain and build dependencies. `patchelf` is needed
-# by maturin to fix up the wheel's RPATH on Linux when the wheel
-# imports a dynamic library (in our case `libonnxruntime.so` via the
-# `ort` crate's `load-dynamic` linkage).
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl \
-    build-essential \
-    pkg-config \
-    libssl-dev \
-    patchelf \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install Rust via rustup
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-ENV PATH="/root/.cargo/bin:$PATH"
-
-# Install maturin for building PyO3 extensions
-RUN pip install --no-cache-dir maturin>=1.4
-
-# ─── cirislens-core (NER scrubber + signature verifier) ──────────────
-# Copy Rust crate source
-COPY cirislens-core/ /build/cirislens-core/
-
-# Build the Rust extension wheel with the ort backend feature so the
-# fast-path INT8 NER scrubber is available at runtime. The candle path
-# also stays compiled in (the `ner-ort` feature implies `ner`), so we
-# can fall back via env var if the ort load fails.
-WORKDIR /build/cirislens-core
-RUN maturin build --release --strip --features ner-ort --out /build/wheels
+#
+# ciris-persist used to be built from source in a `rust-builder` stage;
+# pinned to PyPI as of v0.1.13 (abi3 wheels for manylinux_2_34_x86_64,
+# manylinux_2_34_aarch64, macosx_11_0_arm64). The lens just `pip install`s
+# it in the Python builder stage now.
+#
+# cirislens-core (the in-tree NER scrubber + signature verifier crate)
+# was also built from source in that stage. As of the v0.1.1 cutover
+# it's published to PyPI as `ciris-lens-core` — same three target
+# architectures, abi3-py311 wheels — so the lens `pip install`s it
+# too. The in-tree `cirislens-core/` directory survives this commit
+# only as a checked-in reference; commit 3 of the cutover sequence
+# deletes it. The `rust-builder` Cargo-compile stage is gone entirely.
 
 # ============================================
 # Stage 1b: NER model export (ONNX + INT8 quantized DistilBERT-multilingual)
@@ -85,15 +55,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Copy dependency files (context is repo root)
 COPY api/requirements.txt api/pyproject.toml* ./
 
-# Create virtual environment and install dependencies
+# Create virtual environment and install dependencies.
+# Both Rust extensions (ciris-persist + ciris-lens-core) ship as PyPI
+# wheels pinned in requirements.txt — no source compile in this image
+# as of the v0.1.1 cutover.
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 RUN pip install --no-cache-dir --upgrade pip wheel && \
     pip install --no-cache-dir -r requirements.txt
-
-# Copy and install the Rust extension wheel
-COPY --from=rust-builder /build/wheels/*.whl /tmp/
-RUN pip install --no-cache-dir /tmp/*.whl
 
 # ============================================
 # Stage 3: Production stage
