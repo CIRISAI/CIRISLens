@@ -809,7 +809,18 @@ onnxruntime==1.25.0
 #   Net for lens: pin jumps 0.5.4 → 0.5.8 in one step. CIRISPersist#23
 #   closes on this push. Only CIRISPersist#19 (v0.6.0 post-ingest
 #   pipeline) remains open in the v0.5.x → v0.6.x sequence.
-ciris-persist==0.5.8
+#
+# v0.5.8 → v0.9.1: lens-API skipped the v0.6 / v0.7 / v0.8 / v0.9
+# minor lines during the lens-core cutover work — held the pin stable
+# while the gift package shipped. ciris-lens-core==0.1.1 forces this
+# bump because its `ciris-persist>=0.9.1,<1` constraint conflicts with
+# our v0.5.8 pin. v0.6.0 / v0.6.1 partial-closed CIRISPersist#19
+# (post-ingest pipeline + scrub/extract absorption); v0.7.0 added the
+# CIRISNodeCore federation-consensus substrate (#30); v0.7.5 shipped
+# the pipeline orchestrator + PipelineEnvelope wire types (#33);
+# v0.8.x / v0.9.0 are intermediate releases; v0.9.1 is the omnibus
+# 11-feature wheel that closed #41.
+ciris-persist==0.9.1
 
 # CIRISLensCore — Rust science layer for the federation. v0.1.1 is the
 # first PyPI-published release; cuts over from the in-tree
