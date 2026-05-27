@@ -76,30 +76,45 @@ ciris_adapter_active_connections{}
 
 ### Access Production CIRISLens
 
+CIRISLens prod runs on **bridge-us** (Vultr), not on `agents.ciris.ai`.
+`agents.ciris.ai` is the CIRISManager host — different keys, different
+team, no lens components. Don't confuse the two.
+
 ```bash
-# SSH to production server (same server as CIRISManager)
-ssh -i ~/.ssh/ciris_deploy root@agents.ciris.ai
+# SSH to bridge-us
+ssh -i ~/Desktop/ciris_transfer/.ciris_bridge_keys/cirisbridge_ed25519 \
+    -o StrictHostKeyChecking=no \
+    root@108.61.242.236
 
-# CIRISLens location
-cd /opt/cirislens
+# CIRISLens compose directory
+cd /opt/ciris/lens
 
-# View running services
-docker-compose ps
+# View running services (container names are unprefixed by service —
+# the lens api container is `cirislens-api`, the DB is `cirislens-db`,
+# Grafana is `cirislens-grafana`; Caddy is `ciris-caddy` and is shared
+# with the billing/proxy stacks on the same host)
+docker ps --format '{{.Names}}\t{{.Image}}'
 
 # Check logs
-docker-compose logs -f api         # Manager collector + OTLP collector
-docker-compose logs -f grafana     # Grafana dashboard
-docker-compose logs -f postgres    # TimescaleDB
+docker logs --since 1h cirislens-api      # Manager + OTLP collectors
+docker logs --since 1h cirislens-grafana
+docker logs --since 1h cirislens-db
 
-# Restart services
-docker-compose restart
+# Restart
+docker compose restart        # from /opt/ciris/lens
 ```
 
 ### Production URLs
-- **Grafana**: https://agents.ciris.ai/lens/ (requires @ciris.ai Google login)
-- **Admin UI**: https://agents.ciris.ai/lens/admin/ (OAuth required)
-- **API Health**: https://agents.ciris.ai/lens/api/health
-- **Internal API**: localhost:8000
+- **Lens host**: `lens.ciris-services-1.ai` (fronted by Caddy on bridge-us)
+- **Grafana**: https://lens.ciris-services-1.ai/ (requires @ciris.ai Google login; Caddy catchall routes to `cirislens-grafana:3000`)
+- **Public accord API**: https://lens.ciris-services-1.ai/api/v1/accord/* (no auth — trace ingest, repository reads, scoring)
+- **Internal API path** (auth-gated, log ingest + admin): `/lens-api/*` strips the prefix and forwards to `cirislens-api:8000`
+- **Internal API**: localhost:8000 inside the container network
+
+The bridge-us Caddyfile (`/etc/caddy/Caddyfile` inside `ciris-caddy`)
+is the source of truth for routing. Paths NOT explicitly handled
+(`/api/v1/accord/*`, `/api/v1/covenant/*`, `/api/v1/scoring/*`,
+`/ingest/*`, `/lens-api/*`) fall through to the Grafana catchall.
 
 ### Production Stack
 
@@ -107,7 +122,8 @@ docker-compose restart
 |-----------|-------|---------|
 | TimescaleDB | `timescale/timescaledb:latest-pg15` | Time-series storage with compression |
 | Grafana | `grafana/grafana:latest` | Visualization (currently 12.3.0) |
-| CIRISLens API | `cirislens-api:dev` | Manager collector + OTLP collector |
+| CIRISLens API | `ghcr.io/cirisai/cirislens:<sha>` | Manager + OTLP collectors, accord API, scoring |
+| Caddy | `caddy:2-alpine` | TLS termination, host routing (shared with billing/proxy) |
 
 ### TimescaleDB Configuration
 
@@ -139,30 +155,33 @@ SELECT compress_chunk(c) FROM show_chunks('cirislens.agent_metrics') c;
 | agent_logs | 14 days | After 7 days | None |
 | agent_traces | 14 days | After 7 days | None |
 
-### Block Storage
+### Storage Layout
 
-Production data is stored on a dedicated 100GB block volume:
-```bash
-# Check disk usage
-df -h /mnt/lens_volume
+Bind mounts from `docker inspect cirislens-api`:
 
-# Data locations (bind mounts in docker-compose.yml)
-/mnt/lens_volume/data/postgres  # TimescaleDB data
-/mnt/lens_volume/data/grafana   # Grafana data
 ```
+/opt/ciris/lens/keys       → /app/keys                  (signing keys)
+/data/cirislens/keyring    → /var/lib/cirislens/keyring (Ed25519 keyring)
+/var/log/ciris/lens        → /app/logs                  (app log output)
+```
+
+Postgres data lives in a Docker named volume managed by the
+`/opt/ciris/lens/docker-compose.yml` stack; check current capacity with
+`df -h` on the host before running heavy backfills.
 
 ### Connecting Agents to Production CIRISLens
 
-Agents send telemetry to CIRISLens via environment variables:
+Agents POST signed trace batches directly over HTTPS to the public
+accord ingest endpoint:
 
-```yaml
-# In agent docker-compose.yml
-environment:
-  OTEL_EXPORTER_OTLP_ENDPOINT: "http://observability.ciris.ai:4317"
-  OTEL_EXPORTER_OTLP_PROTOCOL: "grpc"
-  OTEL_SERVICE_NAME: "${AGENT_NAME}"
-  OTEL_RESOURCE_ATTRIBUTES: "agent.id=${AGENT_ID},agent.template=${TEMPLATE}"
 ```
+POST https://lens.ciris-services-1.ai/api/v1/accord/events
+```
+
+The Caddyfile routes `/api/v1/accord/*` unauthenticated to
+`cirislens-api:8000`; identity is established by the Ed25519 signature
+on each envelope (verified by persist's engine, keys looked up by
+`signing_key_id` against the lens-side public-key directory).
 
 ## Development Workflow
 
@@ -348,8 +367,8 @@ services:
 TimescaleDB handles retention automatically, but if disk fills up:
 
 ```bash
-# Check disk usage
-df -h /mnt/lens_volume
+# Check disk usage on bridge-us
+df -h /
 
 # Check table sizes
 docker exec cirislens-db psql -U cirislens -d cirislens -c "
@@ -540,7 +559,7 @@ The "Coherence Ratchet Detection" dashboard (`dashboards/coherence_ratchet.json`
 
 ```bash
 # Via API (use accord endpoint)
-curl -X POST https://agents.ciris.ai/lens/api/v1/accord/coherence-ratchet/run
+curl -X POST https://lens.ciris-services-1.ai/api/v1/accord/coherence-ratchet/run
 
 # The scheduler runs automatically:
 # - Cross-agent divergence: daily
