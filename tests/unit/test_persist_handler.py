@@ -106,40 +106,11 @@ class TestIsConnectivityBatch:
 
 
 # ─── _has_mock_llm_traces ──────────────────────────────────────────
-
-
-class TestHasMockLlmTraces:
-    def test_mock_in_models_used_detected(self):
-        from accord_api import _has_mock_llm_traces
-
-        req = _build_request([
-            _trace_event(data={"models_used": ["llama4scout (mock)"]}),
-        ], trace_level="detailed")
-        assert _has_mock_llm_traces(req) is True
-
-    def test_real_models_not_detected(self):
-        from accord_api import _has_mock_llm_traces
-
-        req = _build_request([
-            _trace_event(data={"models_used": ["meta-llama/Llama-4-Maverick-17B"]}),
-        ], trace_level="detailed")
-        assert _has_mock_llm_traces(req) is False
-
-    def test_generic_no_models_used_returns_false(self):
-        """Generic traces don't include models_used — the sniff has
-        no signal so returns False (best-effort; documented limit)."""
-        from accord_api import _has_mock_llm_traces
-
-        req = _build_request([_trace_event(data={})])
-        assert _has_mock_llm_traces(req) is False
-
-    def test_mock_case_insensitive(self):
-        from accord_api import _has_mock_llm_traces
-
-        req = _build_request([
-            _trace_event(data={"models_used": ["FAKEMOCKMODEL"]}),
-        ], trace_level="detailed")
-        assert _has_mock_llm_traces(req) is True
+#
+# Removed alongside the function itself — mock-trace classification +
+# discard moved into lens-core 0.2.0 at the wire-format freeze, so the
+# lens no longer sniffs models_used at delegate-time. The gating is now
+# unconditional (delegate to persist for every non-connectivity batch).
 
 
 # ─── _persist_engine_active ────────────────────────────────────────

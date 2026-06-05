@@ -1267,164 +1267,27 @@ def _parse_timestamp(ts: str | None) -> datetime | None:
 
 
 def _is_mock_trace(models_used: list[str] | None, trace_level: str = "generic") -> bool:
-    """
-    Check if trace uses mock LLM models (stored in mock repo, not production).
+    """Deprecated. Kept only because ``covenant_api`` v1 shim re-exports it
+    for backward compatibility; no longer consulted on the ingest hot path.
 
-    NOTE: For 'generic' trace level, models_used is not included in the payload.
-    In this case, we cannot determine if it's a mock trace and return False.
-    To route mock traces to the mock repo, agents must send 'detailed' or 'full_traces' level.
+    Mock-trace classification + discard moved into lens-core as of the
+    wire-format freeze (lens-core 0.2.0+). The lens no longer routes mock
+    traffic into a separate table — every trace goes through the same
+    persist ingest pipeline and lens-core decides what to discard.
     """
     if not models_used:
-        # Generic traces don't include models_used - can't detect mock
-        if trace_level == "generic":
-            logger.debug("Cannot detect mock trace at 'generic' level (no models_used)")
         return False
     return any(model and "mock" in str(model).lower() for model in models_used)
 
 
-def _get_mock_models(models_used: list[str] | None) -> list[str]:
-    """Extract mock model names from models_used list."""
-    if not models_used:
-        return []
-    return [m for m in models_used if m and "mock" in str(m).lower()]
+async def _store_mock_trace(*_args, **_kwargs) -> None:
+    """Deprecated. Mock-trace routing was removed when lens-core 0.2.0
+    took ownership of mock classification (wire format frozen). This
+    stub remains only so any third-party import of the symbol via the
+    ``covenant_api`` v1 shim doesn't ImportError; it is a no-op.
+    """
+    return None
 
-
-async def _store_mock_trace(
-    conn,
-    trace,
-    metadata: dict[str, Any],
-    models_used_list: list[str] | None,
-    batch_timestamp,
-    consent_timestamp,
-    signature_verified: bool,
-) -> None:
-    """Store a mock trace in the mock repository for dev/testing."""
-    mock_models = _get_mock_models(models_used_list)
-
-    await conn.execute(
-        """
-        INSERT INTO cirislens.accord_traces_mock (
-            trace_id, thought_id, task_id,
-            agent_id_hash, agent_name,
-            trace_type, cognitive_state, thought_type, thought_depth,
-            started_at, completed_at,
-            thought_start, snapshot_and_context, dma_results,
-            aspdma_result, conscience_result, action_result,
-            csdma_plausibility_score, dsdma_domain_alignment, dsdma_domain,
-            pdma_stakeholders, pdma_conflicts,
-            idma_k_eff, idma_correlation_risk, idma_fragility_flag, idma_phase,
-            action_rationale,
-            conscience_passed, action_was_overridden,
-            entropy_level, coherence_level,
-            entropy_passed, coherence_passed,
-            optimization_veto_passed, epistemic_humility_passed,
-            selected_action, action_success, processing_ms,
-            tokens_input, tokens_output, tokens_total,
-            cost_cents, llm_calls, models_used,
-            signature, signature_key_id, signature_verified,
-            consent_timestamp, timestamp, trace_level,
-            mock_models, mock_reason,
-            has_positive_moment, has_execution_error, execution_time_ms,
-            selection_confidence, is_recursive, follow_up_thought_id, api_bases_used,
-            schema_version,
-            idma_result, tsaspdma_result,
-            tool_name, tool_parameters, tsaspdma_reasoning, tsaspdma_approved,
-            thought_start_at, snapshot_at, dma_results_at, aspdma_at,
-            idma_at, tsaspdma_at, conscience_at, action_result_at,
-            memory_count, context_tokens, conversation_turns,
-            alternatives_considered, conscience_checks_count
-        ) VALUES (
-            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-            $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
-            $21, $22, $23, $24, $25, $26, $27, $28, $29, $30,
-            $31, $32, $33, $34, $35, $36, $37, $38, $39, $40,
-            $41, $42, $43, $44, $45, $46, $47, $48, $49, $50,
-            $51, $52, $53, $54, $55, $56, $57, $58, $59, $60,
-            $61, $62, $63, $64, $65, $66, $67, $68, $69, $70,
-            $71, $72, $73, $74, $75, $76, $77, $78, $79
-        )
-        ON CONFLICT (trace_id) DO NOTHING
-        """,
-        trace.trace_id,                              # $1
-        metadata["thought_id"],                      # $2
-        metadata["task_id"],                         # $3
-        metadata["agent_id_hash"],                   # $4
-        metadata["agent_name"],                      # $5
-        metadata["trace_type"],                      # $6
-        metadata["cognitive_state"],                 # $7
-        metadata["thought_type"],                    # $8
-        metadata["thought_depth"],                   # $9
-        metadata["started_at"],                      # $10
-        metadata["completed_at"],                    # $11
-        json.dumps(metadata["thought_start"]),       # $12
-        json.dumps(metadata["snapshot_and_context"]),# $13
-        json.dumps(metadata["dma_results"]),         # $14
-        json.dumps(metadata["aspdma_result"]),       # $15
-        json.dumps(metadata["conscience_result"]),   # $16
-        json.dumps(metadata["action_result"]),       # $17
-        metadata["csdma_plausibility_score"],        # $18
-        metadata["dsdma_domain_alignment"],          # $19
-        metadata["dsdma_domain"],                    # $20
-        metadata["pdma_stakeholders"],               # $21
-        metadata["pdma_conflicts"],                  # $22
-        metadata["idma_k_eff"],                      # $23
-        metadata["idma_correlation_risk"],           # $24
-        metadata["idma_fragility_flag"],             # $25
-        metadata["idma_phase"],                      # $26
-        metadata["action_rationale"],                # $27
-        metadata["conscience_passed"],               # $28
-        metadata["action_was_overridden"],           # $29
-        metadata["entropy_level"],                   # $30
-        metadata["coherence_level"],                 # $31
-        metadata["entropy_passed"],                  # $32
-        metadata["coherence_passed"],                # $33
-        metadata["optimization_veto_passed"],        # $34
-        metadata["epistemic_humility_passed"],       # $35
-        metadata["selected_action"],                 # $36
-        metadata["action_success"],                  # $37
-        metadata["processing_ms"],                   # $38
-        metadata["tokens_input"],                    # $39
-        metadata["tokens_output"],                   # $40
-        metadata["tokens_total"],                    # $41
-        metadata["cost_cents"],                      # $42
-        metadata["llm_calls"],                       # $43
-        models_used_list,                            # $44
-        trace.signature,                             # $45
-        trace.signature_key_id,                      # $46
-        signature_verified,                          # $47 - signature verified status
-        consent_timestamp,                           # $48
-        batch_timestamp,                             # $49
-        metadata["trace_level"],                     # $50
-        mock_models,                                 # $51 - mock_models array
-        "models_used contains mock",                 # $52 - mock_reason
-        metadata["has_positive_moment"],             # $53 - S factor scoring
-        metadata["has_execution_error"],             # $54
-        metadata["execution_time_ms"],               # $55
-        metadata["selection_confidence"],            # $56
-        metadata["is_recursive"],                    # $57
-        metadata["follow_up_thought_id"],            # $58
-        metadata["api_bases_used"],                  # $59 - array
-        metadata["schema_version"],                  # $60 - for scoring eligibility
-        json.dumps(metadata["idma_result"]),         # $61 - V1.9.3 IDMA separate event
-        json.dumps(metadata["tsaspdma_result"]),     # $62 - V1.9.3 TSASPDMA result
-        metadata["tool_name"],                       # $63 - tool name from TSASPDMA
-        json.dumps(metadata["tool_parameters"]),     # $64 - tool parameters
-        metadata["tsaspdma_reasoning"],              # $65 - TSASPDMA reasoning
-        metadata["tsaspdma_approved"],               # $66 - TSASPDMA approval status
-        metadata["thought_start_at"],                # $67 - step timestamp
-        metadata["snapshot_at"],                     # $68 - step timestamp
-        metadata["dma_results_at"],                  # $69 - step timestamp
-        metadata["aspdma_at"],                       # $70 - step timestamp
-        metadata["idma_at"],                         # $71 - step timestamp
-        metadata["tsaspdma_at"],                     # $72 - step timestamp
-        metadata["conscience_at"],                   # $73 - step timestamp
-        metadata["action_result_at"],                # $74 - step timestamp
-        metadata["memory_count"],                    # $75 - observation weight
-        metadata["context_tokens"],                  # $76 - observation weight
-        metadata["conversation_turns"],              # $77 - observation weight
-        metadata["alternatives_considered"],         # $78 - observation weight
-        metadata["conscience_checks_count"],         # $79 - observation weight
-    )
 
 
 def extract_trace_metadata(trace: AccordTrace, trace_level: str = "generic") -> dict[str, Any]:
@@ -1799,21 +1662,6 @@ def _is_connectivity_batch(request: AccordEventsRequest) -> bool:
     return bool(request.events)
 
 
-def _has_mock_llm_traces(request: AccordEventsRequest) -> bool:
-    """Sniff: any component's data names a mock LLM model. Best-effort
-    only — generic-tier traces don't include models_used so this misses
-    those (rare in practice; mock testing uses detailed/full_traces)."""
-    for event in request.events:
-        for comp in event.trace.components:
-            data = comp.data if isinstance(comp.data, dict) else {}
-            models = data.get("models_used") or []
-            if isinstance(models, list) and any(
-                isinstance(m, str) and "mock" in m.lower() for m in models
-            ):
-                return True
-    return False
-
-
 def _persist_engine_active(trace_level: str) -> bool:
     """Phase 2a feature gate. Three conditions must all hold for the
     persist Engine to handle a request:
@@ -2043,19 +1891,20 @@ async def receive_accord_events(
     engine_present = persist_engine.get_engine() is not None
     scrubber_ready = persist_engine.scrubber_ready()
     is_connectivity = _is_connectivity_batch(request)
-    is_mock = _has_mock_llm_traces(request)
+    # Mock-trace gating removed — lens-core 0.2.0+ owns mock
+    # classification + discard at the wire-format boundary. The lens
+    # forwards every non-connectivity batch through persist now.
     delegate = (
         flag
         and engine_present
         and (request.trace_level == "generic" or scrubber_ready)
         and not is_connectivity
-        and not is_mock
     )
     logger.info(
         "PERSIST_ROUTE flag=%s engine=%s scrubber=%s level=%s "
-        "connectivity=%s mock=%s delegate=%s events=%d",
+        "connectivity=%s delegate=%s events=%d",
         flag, engine_present, scrubber_ready, request.trace_level,
-        is_connectivity, is_mock, delegate, len(request.events),
+        is_connectivity, delegate, len(request.events),
     )
 
     # ─── Phase 2a: try to delegate to ciris-persist Engine ───────────
@@ -2381,23 +2230,12 @@ async def receive_accord_events(
                 if models_used is not None and not isinstance(models_used, str):
                     models_used = json.dumps(models_used)
 
-                # Route mock traces to mock repository for dev/testing
-                # Mock traces reaching here have already passed signature verification
-                # NOTE: Generic traces don't include models_used, so mock detection only works
-                # for 'detailed' or 'full_traces' level traces
-                if _is_mock_trace(metadata["models_used"], trace_level=request.trace_level):
-                    logger.info(
-                        "ROUTING mock trace %s to mock repo (models: %s, level: %s)",
-                        trace.trace_id, metadata["models_used"], request.trace_level
-                    )
-                    # Pass original list for TEXT[] column, not JSON string
-                    models_used_list = metadata["models_used"] or []
-                    await _store_mock_trace(
-                        conn, trace, metadata, models_used_list,
-                        request.batch_timestamp, request.consent_timestamp,
-                        signature_verified=is_valid,
-                    )
-                    continue
+                # Mock-trace routing removed — lens-core 0.2.0+ owns
+                # mock classification + discard at the wire-format
+                # boundary. Mock traces that reach this legacy fallback
+                # path are persisted alongside real traces via the SQL
+                # below; downstream consumers filter via the existing
+                # mock-LLM signal in models_used.
 
                 # Log trace storage attempt with level-appropriate info
                 if request.trace_level == "generic":
