@@ -30,8 +30,9 @@ to a steward key. For agent rows the lens publishes:
   story).
 - `scrub_signature_classical` — Ed25519 signature over the canonical
   registration envelope, signed with the lens-steward Ed25519 key
-  via `engine.steward_sign()`. Same FFI-boundary discipline as
-  `engine.sign()`: the lens process never touches the seed.
+  via `engine.local_sign()` (renamed from `steward_sign` in persist
+  v1.4.0). Same FFI-boundary discipline as `engine.sign()`: the lens
+  process never touches the seed.
 - `scrub_signature_pqc = None` initially. Cold path picks it up via
   `attach_key_pqc_signature` once the ML-DSA-65 sign completes —
   schema permits the pending state explicitly per FEDERATION_DIRECTORY.md
@@ -161,11 +162,15 @@ def mirror_agent_registration(
 
         # Hot-path Ed25519 sign with the lens-steward identity. Returns
         # 64 raw bytes; persist expects standard base64 (88 chars).
+        # persist v1.4.0 renamed steward_sign → local_sign +
+        # steward_key_id → local_key_id (CIRISLens#16). Semantics
+        # unchanged; the local key IS the federation-steward signing
+        # identity.
         import base64  # noqa: PLC0415  — lazy; only on the mirror path
-        sig_raw = engine.steward_sign(canonical)
+        sig_raw = engine.local_sign(canonical)
         sig_b64 = base64.b64encode(sig_raw).decode("ascii")
 
-        scrub_key_id = engine.steward_key_id()  # "lens-steward" by default
+        scrub_key_id = engine.local_key_id()  # "lens-steward" by default
 
         now_iso = _utc_now_iso()
         record = {

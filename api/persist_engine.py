@@ -331,14 +331,22 @@ async def initialize() -> Engine | None:
         logger.debug("acquired migration advisory lock %#x", _MIGRATION_LOCK_ID)
 
         try:
+            # persist v3.x renamed steward_* kwargs to local_* — see
+            # CIRISLens#16 + persist 3.14.3 src/ffi/pyo3.rs:793
+            # #[pyo3(signature = ...)] directive. Semantics unchanged
+            # — the local key IS the federation-steward signing
+            # identity; "steward" → "local" reflects the cohabitation
+            # rename where the same key is the lens-local identity AND
+            # the federation-steward identity (PoB §3.2 — addressing
+            # IS identity).
             engine = cp.Engine(
                 dsn=dsn,
                 signing_key_id=key_id,
                 scrubber=scrubber_cb,
-                steward_key_id=steward_key_id_arg,
-                steward_key_path=steward_key_path_arg,
-                steward_pqc_key_id=pqc_key_id_arg,
-                steward_pqc_key_path=pqc_key_path_arg,
+                local_key_id=steward_key_id_arg,
+                local_key_path=steward_key_path_arg,
+                local_pqc_key_id=pqc_key_id_arg,
+                local_pqc_key_path=pqc_key_path_arg,
             )
             _State.steward_ready = steward_key_path_arg is not None
             _State.steward_pqc_ready = pqc_key_path_arg is not None
