@@ -820,26 +820,48 @@ onnxruntime==1.25.0
 # the pipeline orchestrator + PipelineEnvelope wire types (#33);
 # v0.8.x / v0.9.0 are intermediate releases; v0.9.1 is the omnibus
 # 11-feature wheel that closed #41.
-ciris-persist==0.9.1
-
-# CIRISLensCore — Rust science layer for the federation. v0.1.1 is the
-# first PyPI-published release; cuts over from the in-tree
-# cirislens-core/ Cargo crate (compiled by the rust-builder stage in
-# api/Dockerfile pre-cutover) to a published wheel.
 #
-# Contract: 4-function PyO3 surface
+# v0.9.1 → v3.14.3: federation-substrate roll, 40+ releases over 8
+# days. Canonical pin per CIRISConformance/matrices/current.yaml. The
+# 0.9.1 → 3.14.3 jump skipped 1.x / 2.x / 3.0 → 3.13 entirely (lens
+# held the pin while lens-core 0.2.0 was being prepared). The 3.x
+# train absorbed: substrate handle cohabitation (#85 EPIC), CEG 0.4 /
+# 0.6 / 0.7 / 0.8 schema (cohort_scope, federation_attestations,
+# at-rest encryption gates), executor_capsule + ABI-stable
+# AsyncExecutor vtable (#157 — closes #58 on postgres), sqlite
+# inline-sync rewrite via parking_lot::Mutex (#158 — closes #58 on
+# sqlite), and the PyEngine surface expansion. Engine constructor
+# kwargs (dsn / signing_key_id / scrubber / steward_key_* /
+# steward_pqc_key_*) are preserved across the bump.
+ciris-persist==3.14.3
+
+# CIRISLensCore — Rust science layer for the federation. Cuts over
+# from the in-tree cirislens-core/ Cargo crate (compiled by the
+# rust-builder stage in api/Dockerfile pre-cutover) to a published
+# wheel.
+#
+# Contract (unchanged 0.1.1 → 0.2.0): 4-function PyO3 surface
 #   process_trace_batch(engine, events, batch_timestamp, ...)
 #   scrub_trace(trace_json, level)
 #   scrub_traces_batch(traces_json, level)
 #   ner_is_configured()
+# Plus PROJECTION_VERSION module-level constant (new in 0.2.0).
 #
 # "Engine-as-parameter; never holds keys" — lens-core takes the persist
 # Engine as an arg; persist owns signing + persistence + federation
 # directory. Lens-core never holds private key material; survives the
 # PoB §3.1 fold-into-agent unchanged.
 #
-# Wheels: linux-x86_64, linux-aarch64, darwin-aarch64 (abi3-py311).
-# Federation chain at handoff: persist v0.9.1 / edge v0.1.4 /
-# lens-core v0.1.1. See FSD/LENS_CORE_ADOPTION_GIFT_PACKAGE.md for the
-# full handoff inventory.
-ciris-lens-core==0.1.1
+# Wheels: linux-x86_64, linux-aarch64, darwin-aarch64 (abi3-py310).
+#
+# v0.1.1 → v0.2.0: rebases on the persist 3.x train. requires_dist
+# now pins ciris-persist==3.14.3 (was >=0.9.1,<1). Lens-core HEAD was
+# mid-rebase 2026-05-30 to 2026-06-04 (cohabitation pins persist 3.6.4
+# → 3.6.9 → 3.14.3, edge 1.0.2 → 1.1.3 → 1.1.11, verify 4.4.2 → 4.4.3
+# → 4.8.0); 0.2.0 cut on 2026-06-05 after the executor_capsule
+# (CIRISPersist#157) + sqlite inline-sync (CIRISPersist#158) work
+# closed CIRISEdge#58 end-to-end. Pin is canonical per
+# CIRISConformance/matrices/current.yaml even though that matrix's
+# comment still references 0.1.1 — lens-core was added to the matrix
+# implicitly by adoption.
+ciris-lens-core==0.2.0
