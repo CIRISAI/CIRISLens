@@ -1266,7 +1266,10 @@ def _parse_timestamp(ts: str | None) -> datetime | None:
         return None
 
 
-def _is_mock_trace(models_used: list[str] | None, trace_level: str = "generic") -> bool:
+def _is_mock_trace(
+    models_used: list[str] | None,
+    trace_level: str = "generic",  # noqa: ARG001 — preserved for v1 shim signature
+) -> bool:
     """Deprecated. Kept only because ``covenant_api`` v1 shim re-exports it
     for backward compatibility; no longer consulted on the ingest hot path.
 
