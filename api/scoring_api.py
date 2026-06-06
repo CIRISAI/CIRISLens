@@ -27,9 +27,12 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
+import persist_engine
 from ciris_scoring import (
     PARAMS,
     calculate_ciris_score,
+    calculate_ciris_score_via_persist,
+    calculate_fleet_scores_via_persist,
     get_alerts,
     get_fleet_scores,
 )
@@ -206,6 +209,44 @@ def cache_key(*args: Any) -> str:
 # NOTE: Fleet endpoint MUST come before parameterized endpoint
 # to avoid FastAPI matching "fleet" as an agent_name
 
+
+async def _enumerate_agents_via_trace_events(
+    pool: Any,
+    window_days: int,
+) -> tuple[list[str], dict[str, str]]:
+    """List distinct ``(agent_id_hash, agent_name)`` pairs with traces in the
+    window, reading from ``cirislens.trace_events`` (persist 4.0.1's write
+    target). Replaces the legacy SELECT against ``cirislens.covenant_traces``
+    which is frozen at the 2026-05-02 cutover — CIRISLens#17.
+
+    Returns ``(agent_id_hashes, agent_id_hash → agent_name map)`` consumable
+    by ``calculate_fleet_scores_via_persist``.
+    """
+    from datetime import timedelta  # noqa: PLC0415 — lazy
+    window_end = datetime.now(UTC)
+    window_start = window_end - timedelta(days=window_days)
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT DISTINCT agent_id_hash, agent_name
+            FROM cirislens.trace_events
+            WHERE ts BETWEEN $1 AND $2
+              AND agent_id_hash IS NOT NULL
+              AND agent_name IS NOT NULL
+            """,
+            window_start, window_end,
+        )
+    agent_id_hashes: list[str] = []
+    names: dict[str, str] = {}
+    for r in rows:
+        aid = r["agent_id_hash"]
+        if aid in names:
+            continue
+        agent_id_hashes.append(aid)
+        names[aid] = r["agent_name"]
+    return agent_id_hashes, names
+
+
 @router.get("/capacity/fleet")
 async def get_fleet_score(
     request: Request,
@@ -237,10 +278,20 @@ async def get_fleet_score(
         raise HTTPException(status_code=503, detail="Database not available")
 
     try:
-        # Pass the pool so get_fleet_scores can parallelize per-agent
-        # calculations on separate connections (was sequential — 78s cold
-        # path on the 30d window with 5 agents).
-        scores = await get_fleet_scores(db_pool, window_days)
+        engine = persist_engine.get_engine()
+        if engine is not None:
+            # Post-cutover path (CIRISLens#17). Enumerate agents from the
+            # persist write target then batch-score via persist's §E primitive
+            # in a single round-trip.
+            agent_id_hashes, names = await _enumerate_agents_via_trace_events(
+                db_pool, window_days,
+            )
+            scores = await calculate_fleet_scores_via_persist(
+                engine, agent_id_hashes, names, window_days=window_days,
+            )
+        else:
+            # Legacy fallback when persist engine isn't wired (dev / tests).
+            scores = await get_fleet_scores(db_pool, window_days)
 
         result = {
             "timestamp": datetime.now(UTC).isoformat(),
@@ -303,22 +354,32 @@ async def get_agent_score(
         raise HTTPException(status_code=503, detail="Database not available")
 
     try:
-        async with db_pool.acquire() as conn:
-            score = await calculate_ciris_score(conn, agent_name, window_days)
+        engine = persist_engine.get_engine()
+        if engine is not None:
+            # Post-cutover path (CIRISLens#17). Persist §E primitive resolves
+            # agent_id_hash internally + computes the score in a single
+            # round-trip against trace_events.
+            score = await calculate_ciris_score_via_persist(
+                engine, agent_name, window_days=window_days,
+            )
+        else:
+            # Legacy fallback when persist engine isn't wired (dev / tests).
+            async with db_pool.acquire() as conn:
+                score = await calculate_ciris_score(conn, agent_name, window_days)
 
-            if score.total_traces == 0:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"No traces found for agent '{agent_name}' in the last {window_days} days",
-                )
+        if score.total_traces == 0:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No traces found for agent '{agent_name}' in the last {window_days} days",
+            )
 
-            result = score.to_dict()
-            result["cache"] = {"cached": False, "ttl_seconds": 300}
+        result = score.to_dict()
+        result["cache"] = {"cached": False, "ttl_seconds": 300}
 
-            # Cache the result
-            score_cache.set(key, result)
+        # Cache the result
+        score_cache.set(key, result)
 
-            return result
+        return result
 
     except HTTPException:
         raise
