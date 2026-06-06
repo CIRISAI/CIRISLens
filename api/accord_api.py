@@ -3949,119 +3949,59 @@ async def get_repository_statistics(
     start_time: datetime | None = None,
     end_time: datetime | None = None,
 ) -> dict[str, Any]:
-    """Get aggregate statistics for traces. Available at all access levels."""
-    db_pool = get_db_pool()
-    if db_pool is None:
-        raise HTTPException(status_code=503, detail="Database not available")
+    """Aggregate statistics for traces. Available at all access levels.
 
-    # Default to last 30 days
+    Pass-through to persist v4.0.1's `Engine.get_repository_statistics`
+    primitive (CIRISLens#159 / CIRISPersist#162 §11.3 Data Access
+    Surface). The substrate enforces the CEG 0.10 §10.1.4
+    structural-invisibility rule — at the default public scope
+    (caller_occurrence_key_id=None) `cohort_scope ∈ {self, family}`
+    rows are excluded from every aggregate by construction, mirroring
+    the existing `holds_bytes:sha256:*` suppression discipline.
+
+    Every aggregate carries `sample_count` per AV-43 — callers gate on
+    k-anonymity thresholds at their layer; the substrate emits the
+    count truthfully and lets the caller suppress small buckets.
+    """
+    engine = persist_engine.get_engine()
+    if engine is None:
+        raise HTTPException(status_code=503, detail="persist engine unavailable")
+
+    # Default to last 30 days — same windowing convention the legacy
+    # implementation used before the v4.0 cutover.
     if not end_time:
         end_time = datetime.now(UTC)
     if not start_time:
         from datetime import timedelta
         start_time = end_time - timedelta(days=30)
 
-    # Build domain filter
-    domain_filter = ""
-    params: list[Any] = [start_time, end_time]
-    if domain:
-        domain_filter = " AND dsdma_domain = $3"
-        params.append(domain)
+    repository_filter: dict[str, Any] = {
+        "window": {
+            "since": start_time.isoformat(),
+            "until": end_time.isoformat(),
+        },
+        # Multi-domain support is in the v4 RepositoryFilter shape.
+        # The lens-side endpoint exposes a single optional `domain`
+        # param for backward-compat with the pre-v4 query interface.
+        "deployment_domains": [domain] if domain else [],
+        "agent_id_hashes": [],
+        # cohort_scope_in left empty = scope-default (public scope
+        # without a caller_occurrence_key_id excludes self/family).
+        "cohort_scope_in": [],
+    }
 
-    async with db_pool.acquire() as conn:
-        # Base stats
-        stats = await conn.fetchrow(
-            f"""
-            SELECT
-                COUNT(*) as trace_count,
-                COUNT(DISTINCT agent_id_hash) as agent_count,
-                COUNT(DISTINCT dsdma_domain) as domain_count,
-                AVG(csdma_plausibility_score) as avg_plausibility,
-                AVG(dsdma_domain_alignment) as avg_alignment,
-                AVG(idma_k_eff) as avg_k_eff,
-                AVG(CASE WHEN conscience_passed THEN 1.0 ELSE 0.0 END) as conscience_pass_rate,
-                AVG(CASE WHEN action_was_overridden THEN 1.0 ELSE 0.0 END) as override_rate,
-                AVG(CASE WHEN idma_fragility_flag THEN 1.0 ELSE 0.0 END) as fragility_rate
-            FROM cirislens.accord_traces
-            WHERE timestamp >= $1 AND timestamp <= $2{domain_filter}
-            """,
-            *params,
+    try:
+        stats_json = engine.get_repository_statistics(
+            json.dumps(repository_filter),
+            None,  # caller_occurrence_key_id — public scope
         )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except RuntimeError as e:
+        logger.error("get_repository_statistics failed: %s", e)
+        raise HTTPException(status_code=503, detail=str(e)) from e
 
-        # Action distribution
-        actions = await conn.fetch(
-            f"""
-            SELECT selected_action, COUNT(*) as count
-            FROM cirislens.accord_traces
-            WHERE timestamp >= $1 AND timestamp <= $2{domain_filter}
-            AND selected_action IS NOT NULL
-            GROUP BY selected_action
-            """,
-            *params,
-        )
-
-        total_actions = sum(r["count"] for r in actions)
-        action_dist = {
-            r["selected_action"]: r["count"] / total_actions if total_actions > 0 else 0
-            for r in actions
-        }
-
-        # By domain (only if not filtering by specific domain)
-        by_domain_results = []
-        if not domain:
-            by_domain = await conn.fetch(
-                """
-                SELECT
-                    dsdma_domain as domain,
-                    COUNT(*) as traces,
-                    AVG(csdma_plausibility_score) as avg_plausibility,
-                    AVG(dsdma_domain_alignment) as avg_alignment
-                FROM cirislens.accord_traces
-                WHERE timestamp >= $1 AND timestamp <= $2
-                AND dsdma_domain IS NOT NULL
-                GROUP BY dsdma_domain
-                ORDER BY traces DESC
-                """,
-                start_time,
-                end_time,
-            )
-            by_domain_results = [
-                {
-                    "domain": r["domain"],
-                    "traces": r["traces"],
-                    "avg_plausibility": float(r["avg_plausibility"] or 0),
-                    "avg_alignment": float(r["avg_alignment"] or 0),
-                }
-                for r in by_domain
-            ]
-
-        return {
-            "period": {
-                "start": start_time.isoformat(),
-                "end": end_time.isoformat(),
-            },
-            "totals": {
-                "traces": stats["trace_count"],
-                "agents": stats["agent_count"],
-                "domains": stats["domain_count"],
-            },
-            "scores": {
-                "csdma_plausibility": {"mean": float(stats["avg_plausibility"] or 0)},
-                "dsdma_alignment": {"mean": float(stats["avg_alignment"] or 0)},
-                "idma_k_eff": {"mean": float(stats["avg_k_eff"] or 0)},
-            },
-            "conscience": {
-                "pass_rate": float(stats["conscience_pass_rate"] or 0),
-                "override_rate": float(stats["override_rate"] or 0),
-            },
-            "actions": {
-                "distribution": action_dist,
-            },
-            "fragility": {
-                "fragile_trace_rate": float(stats["fragility_rate"] or 0),
-            },
-            "by_domain": by_domain_results,
-        }
+    return json.loads(stats_json)
 
 
 @router.put("/repository/traces/{trace_id}/public-sample")

@@ -831,9 +831,26 @@ onnxruntime==1.25.0
 # AsyncExecutor vtable (#157 — closes #58 on postgres), sqlite
 # inline-sync rewrite via parking_lot::Mutex (#158 — closes #58 on
 # sqlite), and the PyEngine surface expansion. Engine constructor
-# kwargs (dsn / signing_key_id / scrubber / steward_key_* /
-# steward_pqc_key_*) are preserved across the bump.
-ciris-persist==3.14.3
+# kwargs (dsn / signing_key_id / scrubber / local_key_* /
+# local_pqc_key_*) are preserved across the bump.
+#
+# v3.14.3 → v4.0.1: Data Access Surface (CIRISPersist#162) — the
+# CEG 0.10 §10.1.4 structural-invisibility predicate moved into the
+# substrate. Closes AV-57 (read-side cohort_scope escalation) + AV-58
+# (write-side downgrade) by construction: CallerAdmission has no
+# public constructor, the §4.3 read predicate is pure target-membership,
+# §4.6 write gate runs verify-then-gate-then-persist with
+# zero-writes-on-refusal. Engine constructor signature unchanged.
+# Every read primitive (list_trace_summaries, get_trace_detail,
+# aggregate_scoring_factors{,_batch}, cross_agent_divergence,
+# temporal_drift, hash_chain_gaps, conscience_override_rates) gained
+# an OPTIONAL `caller_occurrence_key_id` kwarg (default None →
+# public scope; substrate excludes cohort_scope ∈ {self, family}
+# per CEG 0.10). Non-breaking. New primitive
+# `get_repository_statistics(filter_json, caller_occurrence_key_id)`
+# absorbed CIRISLens#159 — replaces the lens-side accord_traces
+# raw-SQL block at api/accord_api.py:4104 with a single round-trip.
+ciris-persist==4.0.1
 
 # CIRISLensCore — Rust science layer for the federation. Cuts over
 # from the in-tree cirislens-core/ Cargo crate (compiled by the
@@ -860,8 +877,15 @@ ciris-persist==3.14.3
 # → 3.6.9 → 3.14.3, edge 1.0.2 → 1.1.3 → 1.1.11, verify 4.4.2 → 4.4.3
 # → 4.8.0); 0.2.0 cut on 2026-06-05 after the executor_capsule
 # (CIRISPersist#157) + sqlite inline-sync (CIRISPersist#158) work
-# closed CIRISEdge#58 end-to-end. Pin is canonical per
-# CIRISConformance/matrices/current.yaml even though that matrix's
-# comment still references 0.1.1 — lens-core was added to the matrix
-# implicitly by adoption.
-ciris-lens-core==0.2.0
+# closed CIRISEdge#58 end-to-end.
+#
+# v0.2.0 → v0.4.0: substrate floor bump to persist v4.0.1 + edge
+# v1.2.0 (CIRISLensCore "v0.4.0 substrate floor bump"). v0.3.0 was an
+# interim RATCHET crc-v1 calibration-bundle consumption that hard-
+# pinned ciris-persist==3.14.3; v0.4.0 relaxes the exact pin to
+# ==4.0.1 + bumps edge 1.1.11 → 1.2.0. Migration on the lens-core
+# side was a pure pin bump (zero source changes) per the
+# CIRISConformance#11 adversarial fire-test sign-off. The 4-function
+# PyO3 contract is preserved + PROJECTION_VERSION is unchanged.
+# Pin is canonical per CIRISConformance/matrices/current.yaml.
+ciris-lens-core==0.4.0
