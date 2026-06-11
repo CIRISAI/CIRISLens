@@ -34,6 +34,7 @@ from manager_collector import ManagerCollector
 from migrations import startup_migrations
 from otlp_collector import OTLPCollector
 from scoring_api import router as scoring_router
+from scoring_api import start_score_warmer, stop_score_warmer
 from token_manager import TokenManager
 
 # Configure logging
@@ -529,6 +530,13 @@ async def startup():
         )
         logger.info("Status collector task created")
 
+        # Score-cache background warmer (CIRISLens follow-on to #17).
+        # Keeps /api/v1/scoring/capacity/fleet's TTL cache continuously
+        # populated so user requests never hit the ~65s cold compute.
+        # Substrate-side perf work is filed as CIRISLensCore#44/#45/#46.
+        start_score_warmer()
+        logger.info("Score warmer started")
+
     except Exception as e:
         logger.error(f"Startup error: {e}", exc_info=True)
         # Continue anyway for development
@@ -538,6 +546,8 @@ async def startup():
 async def shutdown():
     """Cleanup on shutdown"""
     global db_pool, manager_collector, otlp_collector
+
+    stop_score_warmer()
 
     if manager_collector:
         await manager_collector.stop()

@@ -16,6 +16,7 @@ Cache TTL: 5 minutes (scores change slowly)
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import time
@@ -55,10 +56,20 @@ class CacheEntry:
 
 
 class TTLCache:
-    """Thread-safe in-memory cache with TTL."""
+    """Thread-safe in-memory cache with TTL.
 
-    def __init__(self, default_ttl: int = 300):
-        """Initialize cache with default TTL in seconds."""
+    Stale-while-revalidate: `get` enforces the TTL, but `get_stale`
+    returns the entry regardless of expiry. The fleet handler uses
+    `get_stale` as a fallback so the first request after a cache miss
+    sees the previous result (~0.1s) instead of blocking on the ~65s
+    cold compute. A background warmer keeps the cache perpetually
+    fresh in steady state — see CIRISLens#17 follow-on perf work.
+    """
+
+    def __init__(self, default_ttl: int = 900):
+        """Initialize cache with default TTL in seconds. Default 900s
+        (15min); the background warmer recomputes every 240s, so the
+        cache never expires during a user request in steady state."""
         self._cache: dict[str, CacheEntry] = {}
         self._lock = Lock()
         self._default_ttl = default_ttl
@@ -70,9 +81,18 @@ class TTLCache:
             if entry is None:
                 return None
             if time.time() > entry.expires_at:
-                del self._cache[key]
+                # Don't delete — `get_stale` may want it. Expired
+                # entries are reaped by `set` overwriting them.
                 return None
             return entry.data
+
+    def get_stale(self, key: str) -> Any | None:
+        """Return the cached entry even if expired. Used by SWR
+        fallback so the user-facing path serves stale instead of
+        blocking on a cold recompute."""
+        with self._lock:
+            entry = self._cache.get(key)
+            return entry.data if entry is not None else None
 
     def set(self, key: str, value: Any, ttl: int | None = None) -> None:
         """Set value in cache with TTL."""
@@ -100,8 +120,12 @@ class TTLCache:
             }
 
 
-# Global cache instance - 5 minute TTL
-score_cache = TTLCache(default_ttl=300)
+# Global cache instance. TTL=900s (15min) pairs with the
+# WARMER_INTERVAL=240s (4min) below so a healthy warmer keeps the
+# cache continuously fresh and the user-facing path never blocks
+# on cold compute. If the warmer stalls (DB outage, etc.), users
+# fall through to stale-while-revalidate via `get_stale`.
+score_cache = TTLCache(default_ttl=900)
 
 
 # ============================================================================
@@ -247,6 +271,92 @@ async def _enumerate_agents_via_trace_events(
     return agent_id_hashes, names
 
 
+async def _compute_fleet_scores(window_days: int) -> dict[str, Any]:
+    """Compute fleet scores for a window — the work-doing inner half
+    of `get_fleet_score`, factored out so the background warmer
+    (`_warm_fleet_cache`) and the SWR refresh path share one
+    implementation.
+
+    Raises whatever the underlying persist call raises; callers
+    decide whether to swallow (warmer) or surface as HTTPException
+    (handler). Writes the result to the shared `score_cache`."""
+    db_pool = get_db_pool()
+    if db_pool is None:
+        raise RuntimeError("Database not available")
+
+    engine = persist_engine.get_engine()
+    if engine is not None:
+        # Post-cutover path (CIRISLens#17). Enumerate agents from the
+        # persist write target then batch-score via persist's §E primitive
+        # in a single round-trip.
+        agent_id_hashes, names = await _enumerate_agents_via_trace_events(
+            db_pool, window_days,
+        )
+        scores = await calculate_fleet_scores_via_persist(
+            engine, agent_id_hashes, names, window_days=window_days,
+        )
+    else:
+        # Legacy fallback when persist engine isn't wired (dev / tests).
+        scores = await get_fleet_scores(db_pool, window_days)
+
+    result = {
+        "timestamp": datetime.now(UTC).isoformat(),
+        "window_days": window_days,
+        "agent_count": len(scores),
+        "agents": [s.to_dict() for s in scores],
+        "summary": {
+            "high_capacity": sum(1 for s in scores if s.category == "high_capacity"),
+            "healthy": sum(1 for s in scores if s.category == "healthy"),
+            "moderate": sum(1 for s in scores if s.category == "moderate"),
+            "high_fragility": sum(1 for s in scores if s.category == "high_fragility"),
+        },
+        "cache": {
+            "cached": False,
+            "ttl_seconds": 900,
+        },
+    }
+    score_cache.set(cache_key("fleet", window_days), result)
+    return result
+
+
+# Per-window asyncio locks so a stale-while-revalidate refresh and a
+# concurrent background-warmer pass don't both kick off the same
+# 65s CTE. The lock is held only for the SQL window; cache reads stay
+# lock-free.
+_fleet_refresh_locks: dict[int, asyncio.Lock] = {}
+
+# Set of in-flight SWR background tasks. RUF006: keep a strong
+# reference so the task isn't garbage-collected mid-run; auto-discard
+# on completion.
+_swr_refresh_tasks: set[asyncio.Task[None]] = set()
+
+
+def _fleet_refresh_lock(window_days: int) -> asyncio.Lock:
+    if window_days not in _fleet_refresh_locks:
+        _fleet_refresh_locks[window_days] = asyncio.Lock()
+    return _fleet_refresh_locks[window_days]
+
+
+async def _refresh_fleet_in_background(window_days: int) -> None:
+    """Recompute fleet scores; never raises (warmer-style)."""
+    lock = _fleet_refresh_lock(window_days)
+    if lock.locked():
+        # Another refresh already in flight for this window — skip.
+        logger.debug("Fleet refresh already in flight (window=%d); skipping", window_days)
+        return
+    async with lock:
+        try:
+            t0 = time.time()
+            result = await _compute_fleet_scores(window_days)
+            logger.info(
+                "Fleet refresh (window=%d) took %.1fs — %d agents cached for %ds",
+                window_days, time.time() - t0,
+                result.get("agent_count", 0), result["cache"]["ttl_seconds"],
+            )
+        except Exception:
+            logger.exception("Fleet refresh failed (window=%d) — stale entry remains", window_days)
+
+
 @router.get("/capacity/fleet")
 async def get_fleet_score(
     request: Request,
@@ -255,17 +365,26 @@ async def get_fleet_score(
     """
     Get CIRIS Capacity Scores for all agents.
 
-    Public endpoint with rate limiting (60/min) and caching (5 min TTL).
+    Public endpoint with rate limiting (60/min). Caching strategy:
 
-    Args:
-        window_days: Scoring window in days (1-90, default: 7)
+    - In steady state the background warmer (`_warm_fleet_cache`)
+      recomputes every WARMER_INTERVAL seconds and writes to the
+      cache with TTL=900s, so user requests always see a warm cache.
+    - On cache hit (TTL not yet expired): return immediately.
+    - On stale entry (TTL expired but value still in dict): return
+      the stale value and kick off a background refresh. The user
+      sees ~0.1s, not the 65s of a cold compute. This is the
+      stale-while-revalidate fallback for when the warmer is behind.
+    - Only on a truly cold cache (worker just started, never
+      populated) does the request block on the full compute.
 
-    Returns:
-        List of scores sorted by composite score (descending)
+    The 65s cold path is filed against substrate as
+    CIRISLensCore#44/#45/#46 (streaming, continuous aggregate,
+    internal cache). This lens-side wrapper keeps the user-facing
+    latency at ≤ 0.1s until those land.
     """
     check_rate_limit(request)
 
-    # Check cache
     key = cache_key("fleet", window_days)
     cached = score_cache.get(key)
     if cached is not None:
@@ -273,52 +392,85 @@ async def get_fleet_score(
         cached["cache"]["cached"] = True
         return cached
 
-    db_pool = get_db_pool()
-    if db_pool is None:
-        raise HTTPException(status_code=503, detail="Database not available")
+    # TTL expired — stale-while-revalidate.
+    stale = score_cache.get_stale(key)
+    if stale is not None:
+        logger.info("Fleet cache stale (window=%d); serving stale + triggering refresh", window_days)
+        task = asyncio.create_task(_refresh_fleet_in_background(window_days))
+        _swr_refresh_tasks.add(task)
+        task.add_done_callback(_swr_refresh_tasks.discard)
+        # Mark stale in the response envelope so callers can tell.
+        out = dict(stale)
+        out["cache"] = {"cached": True, "stale": True, "ttl_seconds": stale["cache"]["ttl_seconds"]}
+        return out
 
-    try:
-        engine = persist_engine.get_engine()
-        if engine is not None:
-            # Post-cutover path (CIRISLens#17). Enumerate agents from the
-            # persist write target then batch-score via persist's §E primitive
-            # in a single round-trip.
-            agent_id_hashes, names = await _enumerate_agents_via_trace_events(
-                db_pool, window_days,
-            )
-            scores = await calculate_fleet_scores_via_persist(
-                engine, agent_id_hashes, names, window_days=window_days,
-            )
-        else:
-            # Legacy fallback when persist engine isn't wired (dev / tests).
-            scores = await get_fleet_scores(db_pool, window_days)
+    # Truly cold — no entry ever computed. Block on the full compute.
+    # Use the same per-window lock so a concurrent warmer doesn't
+    # double-spend the 65s.
+    lock = _fleet_refresh_lock(window_days)
+    async with lock:
+        # Re-check the cache: the warmer may have populated it while
+        # we were waiting on the lock.
+        cached = score_cache.get(key)
+        if cached is not None:
+            cached["cache"]["cached"] = True
+            return cached
+        try:
+            return await _compute_fleet_scores(window_days)
+        except RuntimeError as e:
+            raise HTTPException(status_code=503, detail=str(e)) from e
+        except Exception as e:
+            logger.exception("Error calculating fleet scores")
+            raise HTTPException(status_code=500, detail=str(e)) from e
 
-        result = {
-            "timestamp": datetime.now(UTC).isoformat(),
-            "window_days": window_days,
-            "agent_count": len(scores),
-            "agents": [s.to_dict() for s in scores],
-            "summary": {
-                "high_capacity": sum(1 for s in scores if s.category == "high_capacity"),
-                "healthy": sum(1 for s in scores if s.category == "healthy"),
-                "moderate": sum(1 for s in scores if s.category == "moderate"),
-                "high_fragility": sum(1 for s in scores if s.category == "high_fragility"),
-            },
-            "cache": {
-                "cached": False,
-                "ttl_seconds": 300,
-            },
-        }
 
-        # Cache the result
-        score_cache.set(key, result)
-        logger.info("Cached fleet scores for window=%d (%d agents)", window_days, len(scores))
+# ============================================================================
+# Background warmer
+# ============================================================================
+#
+# Periodic asyncio task that pre-fills the fleet-score cache so the
+# user-facing handler always hits a warm entry. WARMER_INTERVAL <
+# TTL guarantees the cache never expires during a user request in
+# steady state. WARMER_WINDOWS picks the windows operators see on
+# the public dashboards (`window_days=7` is the default; `=30` is
+# what ciris.ai/ciris-scoring loads first).
 
-        return result
+WARMER_INTERVAL_SECONDS = 240   # recompute every 4min; pair with TTL=900s above
+WARMER_WINDOWS = (7, 30)
+_warmer_task: asyncio.Task[None] | None = None
 
-    except Exception as e:
-        logger.exception("Error calculating fleet scores")
-        raise HTTPException(status_code=500, detail=str(e)) from e
+
+async def _warm_fleet_cache() -> None:
+    """Background warmer — runs forever until cancelled."""
+    # Initial delay so the first compute happens *after* app startup
+    # has settled (engine init, DB pool warmup). The 5s gives the
+    # FastAPI app a beat before we hit it with a 65s SQL aggregate.
+    await asyncio.sleep(5)
+    logger.info(
+        "Score warmer starting: windows=%s interval=%ds",
+        WARMER_WINDOWS, WARMER_INTERVAL_SECONDS,
+    )
+    while True:
+        for window_days in WARMER_WINDOWS:
+            await _refresh_fleet_in_background(window_days)
+        await asyncio.sleep(WARMER_INTERVAL_SECONDS)
+
+
+def start_score_warmer() -> None:
+    """Start the background warmer task. Idempotent — callable from
+    FastAPI's startup hook (main.py) without checking task state."""
+    global _warmer_task  # noqa: PLW0603 — module-level singleton, lifecycle owned by start/stop
+    if _warmer_task is not None and not _warmer_task.done():
+        return
+    _warmer_task = asyncio.create_task(_warm_fleet_cache())
+
+
+def stop_score_warmer() -> None:
+    """Stop the background warmer. Idempotent."""
+    global _warmer_task  # noqa: PLW0603 — module-level singleton, lifecycle owned by start/stop
+    if _warmer_task is not None and not _warmer_task.done():
+        _warmer_task.cancel()
+        _warmer_task = None
 
 
 @router.get("/capacity/{agent_name}")
