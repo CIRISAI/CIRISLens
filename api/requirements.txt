@@ -850,7 +850,26 @@ onnxruntime==1.25.0
 # `get_repository_statistics(filter_json, caller_occurrence_key_id)`
 # absorbed CIRISLens#159 — replaces the lens-side accord_traces
 # raw-SQL block at api/accord_api.py:4104 with a single round-trip.
-ciris-persist==4.0.1
+#
+# v4.0.1 → v5.2.0: floor for the lens-core 1.0.0 cohabitation
+# contract (CIRISLens#18). Pin is canonical per the refreshed
+# CIRISConformance matrix: persist 5.2.0 + verify 5.1.0 (transitive)
+# + edge 2.0.2 (transitive) + lens-core 1.0.0. v5.2.0 closes
+# CIRISPersist#194 (bidirectional partner_record replication) +
+# V072 migration both backends (steward_signatures + threshold
+# columns + new list_signed_partner_records_since primitive). v5.0+
+# was the §10.1.6 operational admit + V1 audit-canonical carve-out
+# cut; v5.1.x added the verify operational_admit module entry.
+# Engine constructor signature unchanged; every Engine.* method
+# the lens calls (receive_and_persist / register_public_key /
+# list_trace_summaries / get_trace_detail / get_repository_statistics
+# / aggregate_scoring_factors{,_batch} / cross_agent_divergence /
+# temporal_drift / hash_chain_gaps / conscience_override_rates /
+# delete_traces_for_agent / put_public_key / canonicalize_envelope /
+# local_sign / local_key_id / local_public_key_b64 / public_key_b64)
+# is preserved across the bump (verified by direct grep against
+# persist 5.2.0's src/ffi/pyo3.rs). Non-breaking.
+ciris-persist==5.2.0
 
 # CIRISLensCore — Rust science layer for the federation. Cuts over
 # from the in-tree cirislens-core/ Cargo crate (compiled by the
@@ -887,5 +906,35 @@ ciris-persist==4.0.1
 # side was a pure pin bump (zero source changes) per the
 # CIRISConformance#11 adversarial fire-test sign-off. The 4-function
 # PyO3 contract is preserved + PROJECTION_VERSION is unchanged.
-# Pin is canonical per CIRISConformance/matrices/current.yaml.
-ciris-lens-core==0.4.0
+#
+# v0.4.0 → v1.0.0: wire-contract freeze release (CIRISLens#18 /
+# CIRISLensCore#11 client-emit + #17 sovereign rlib parity + #18
+# freeze, all closed together). docs/PUBLIC_SCHEMA_CONTRACT.md
+# promotes the wire+emit+cohabitation ABIs to stable-frozen. v1.0.0
+# pins ciris-persist==5.2.0 — matches the lens floor above.
+#
+# Surface additions in 1.x:
+#   - `install_relay(edge)` — cohabitation bootstrap that registers
+#     lens-core as an Edge handler on a shared Arc<Edge>; the host's
+#     persist Engine becomes the signing identity for detection
+#     events via the Edge PyCapsule accessor. Used by the
+#     post-fold-in cohabitation agent path; deployed lens can adopt
+#     it in a follow-up commit to retire the in-API verify/scrub
+#     glue (out of scope for this pin bump).
+#   - `LensClient` — partial-trace capture + complete + signed emit
+#     PyO3 surface for client-side trace authoring.
+#
+# Surface preservation:
+#   - `process_trace_batch(engine, events, batch_timestamp, ...)`,
+#     `scrub_trace(trace_json, level)`, `scrub_traces_batch(traces_json,
+#     level)`, `ner_is_configured()`, `PROJECTION_VERSION` — all
+#     preserved as the "v0.1.x four-function drop-in surface ... as a
+#     delegating shim for the deployed-CIRISLens cutover" per the
+#     module docstring. The deployed lens's existing imports
+#     (api/accord_api_v2.py + api/scrubber_v2.py) keep working.
+#
+# Also as part of this bump: the in-tree `cirislens-core/` Rust crate
+# was deleted — it had been kept as checked-in reference since the
+# v0.1.1 PyPI cutover. The substrate now owns the wire+scrub+sign
+# contract one place; no more local fork.
+ciris-lens-core==1.0.0
