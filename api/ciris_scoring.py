@@ -218,6 +218,45 @@ def get_category(score: float) -> str:
         return "high_capacity"
 
 
+def _coverage_maturity(trace_count: int) -> float:
+    """Multiplicative discount on composite for thin corpora.
+
+    Returns 1.0 when ``trace_count >= PARAMS["min_traces"]``; linearly
+    scales below that. An 18-trace cold-start agent gets ~0.6 — cannot
+    legitimately score above that composite regardless of how clean
+    each factor reads, because there isn't enough evidence yet.
+
+    CIRISLens#19 — cold-start scoring previously inflated to
+    ``composite=1.0`` for an 18-trace agent because every factor
+    component defaulted to 1.0 in the absence of evidence (drift_z
+    None → R=1.0, placeholder I_replay / Q_deferral both =1.0,
+    chain integrity =1.0 on a thin chain with no gaps). The symmetric
+    fix on the agent side landed as CIRISAgent e09e3eec0 — absence
+    of evidence is not evidence of perfection.
+    """
+    min_traces = PARAMS["min_traces"]
+    return min(1.0, trace_count / max(min_traces, 1))
+
+
+def _category_with_consistency(composite: float, confidence: str) -> str:
+    """Apply emit-time self-consistency: ``insufficient`` confidence
+    cannot emit a ``high_capacity`` verdict — there isn't enough
+    evidence to support that classification.
+
+    Cold-start traces routinely hit ``confidence="insufficient"``
+    (trace_count < 10). Pairing that with ``high_capacity`` is the
+    impossible-state the original CIRISLens#19 report flagged
+    ("fragility 0.999 + high_capacity should be impossible to emit
+    together"). With the coverage_maturity discount the composite
+    typically drops below 0.85 organically; this guard catches the
+    residual cases where it doesn't.
+    """
+    raw = get_category(composite)
+    if confidence == "insufficient" and raw == "high_capacity":
+        return "healthy"
+    return raw
+
+
 # ============================================================================
 # Factor Calculations
 # ============================================================================
@@ -996,10 +1035,18 @@ def _agg_factor_R(agg: dict[str, Any]) -> FactorScore:
 
     notes: list[str] = []
     if drift_z is None:
-        drift_penalty = 0.0
+        # CIRISLens#19 — absence of drift evidence is not perfect
+        # resilience. Pre-fix this defaulted drift_penalty=0.0
+        # (R=1.0), which combined with placeholder-1.0 sub-terms
+        # elsewhere inflated cold-start agents to composite=1.0 /
+        # high_capacity. Set drift_penalty=0.5 so R=0.5 — median
+        # resilience, "we don't know" — and tag confidence
+        # insufficient so the emit-time consistency check can cap
+        # the category appropriately.
+        drift_penalty = 0.5
         notes.append(
             "drift_z_score=None (no baseline window supplied or insufficient "
-            "samples in either window)",
+            "samples in either window); R capped at 0.5 — median, not perfect",
         )
         confidence = "insufficient"
     else:
@@ -1292,22 +1339,28 @@ async def calculate_ciris_score_via_persist(
 
     # Composite — same multiplicative composition the legacy path uses,
     # same 0.1 floors on I_int + S to avoid single-zero-factor collapse.
-    composite = (
+    raw_composite = (
         factor_c.score
         * max(factor_i_int.score, 0.1)
         * factor_r.score
         * factor_i_inc.score
         * max(factor_s.score, 0.1)
     )
+    # CIRISLens#19 — discount thin corpora so absence of evidence
+    # cannot read as perfect score.
+    coverage = _coverage_maturity(trace_count)
+    composite = raw_composite * coverage
     fragility = 1.0 / (0.001 + composite)
 
     logger.info(
-        "CIRIS score (§E path) for %s: composite=%.4f C=%.4f I_int=%.4f R=%.4f I_inc=%.4f S=%.4f",
-        agent_name,
-        composite,
+        "CIRIS score (§E path) for %s: composite=%.4f (raw=%.4f * coverage=%.2f) "
+        "C=%.4f I_int=%.4f R=%.4f I_inc=%.4f S=%.4f trace_count=%d",
+        agent_name, composite, raw_composite, coverage,
         factor_c.score, factor_i_int.score, factor_r.score, factor_i_inc.score, factor_s.score,
+        trace_count,
     )
 
+    confidence = get_confidence_level(trace_count)
     return CIRISScore(
         agent_name=agent_name,
         composite_score=composite,
@@ -1321,7 +1374,7 @@ async def calculate_ciris_score_via_persist(
         window_end=window_end,
         total_traces=trace_count,
         non_exempt_traces=trace_count,  # §E doesn't split exempt yet; safe approximation
-        category=get_category(composite),
+        category=_category_with_consistency(composite, confidence),
     )
 
 
@@ -1382,14 +1435,21 @@ async def calculate_fleet_scores_via_persist(
         factor_i_inc = _agg_factor_I_inc(agg)
         factor_s = _agg_factor_S(agg)
 
-        composite = (
+        raw_composite = (
             factor_c.score
             * max(factor_i_int.score, 0.1)
             * factor_r.score
             * factor_i_inc.score
             * max(factor_s.score, 0.1)
         )
+        # CIRISLens#19 — discount thin corpora so absence of evidence
+        # cannot read as perfect score; emit-time consistency check
+        # caps high_capacity when confidence is insufficient.
+        trace_count_per_agent = int(agg.get("trace_count") or 0)
+        coverage = _coverage_maturity(trace_count_per_agent)
+        composite = raw_composite * coverage
         fragility = 1.0 / (0.001 + composite)
+        confidence = get_confidence_level(trace_count_per_agent)
 
         scores.append(
             CIRISScore(
@@ -1399,9 +1459,9 @@ async def calculate_fleet_scores_via_persist(
                 C=factor_c, I_int=factor_i_int, R=factor_r, I_inc=factor_i_inc, S=factor_s,
                 window_start=window_start,
                 window_end=window_end,
-                total_traces=int(agg.get("trace_count") or 0),
-                non_exempt_traces=int(agg.get("trace_count") or 0),
-                category=get_category(composite),
+                total_traces=trace_count_per_agent,
+                non_exempt_traces=trace_count_per_agent,
+                category=_category_with_consistency(composite, confidence),
             ),
         )
 
