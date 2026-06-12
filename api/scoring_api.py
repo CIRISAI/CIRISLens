@@ -441,18 +441,31 @@ _warmer_task: asyncio.Task[None] | None = None
 
 
 async def _warm_fleet_cache() -> None:
-    """Background warmer — runs forever until cancelled."""
-    # Initial delay so the first compute happens *after* app startup
-    # has settled (engine init, DB pool warmup). The 5s gives the
-    # FastAPI app a beat before we hit it with a 65s SQL aggregate.
-    await asyncio.sleep(5)
+    """Background warmer — runs forever until cancelled.
+
+    The first iteration fires immediately on task creation (no
+    settle delay) so the cache is populated as fast as the
+    underlying SQL allows. start_score_warmer() is called from
+    main.py's startup hook AFTER engine + db_pool are ready, so
+    there's no race with infrastructure not yet wired.
+
+    Within each cycle the two configured windows are computed in
+    PARALLEL via asyncio.gather — they're independent queries
+    against persist and don't share state, so running them
+    concurrently halves the cold-cache-window from ~130s to ~65s.
+    Per-window locks in _refresh_fleet_in_background prevent any
+    user request hitting the same window from spawning a duplicate
+    compute; they serialize on the lock and benefit from the
+    warmer's result.
+    """
     logger.info(
-        "Score warmer starting: windows=%s interval=%ds",
+        "Score warmer starting: windows=%s interval=%ds (first pass kicks now)",
         WARMER_WINDOWS, WARMER_INTERVAL_SECONDS,
     )
     while True:
-        for window_days in WARMER_WINDOWS:
-            await _refresh_fleet_in_background(window_days)
+        await asyncio.gather(
+            *(_refresh_fleet_in_background(w) for w in WARMER_WINDOWS),
+        )
         await asyncio.sleep(WARMER_INTERVAL_SECONDS)
 
 
