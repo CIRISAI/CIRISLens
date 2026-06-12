@@ -34,6 +34,7 @@ from log_ingest import LogIngestService
 from manager_collector import ManagerCollector
 from migrations import startup_migrations
 from otlp_collector import OTLPCollector
+from retention import start_retention_sweeper, stop_retention_sweeper
 from scoring_api import router as scoring_router
 from scoring_api import start_score_warmer, stop_score_warmer
 from token_manager import TokenManager
@@ -542,6 +543,20 @@ async def startup():
         start_score_warmer()
         logger.info("Score warmer started")
 
+        # Retention sweeper for lens-owned non-hypertable telemetry
+        # tables (CIRISLens#21). Backend-agnostic DELETE-by-cutoff so
+        # the same code works on postgres / postgres+TS / sqlite.
+        # Substrate-tier retention (trace_events / trace_llm_calls)
+        # is tracked upstream as CIRISPersist#... (Engine.set_retention
+        # primitive) — this lens-side sweeper covers manager_telemetry
+        # / collection_errors / connectivity_events.
+        if db_pool is not None:
+            # Lambda defers db_pool.acquire() so each sweeper batch
+            # gets a fresh connection from the pool rather than
+            # capturing one at startup time.
+            start_retention_sweeper(lambda: db_pool.acquire())  # noqa: PLW0108
+            logger.info("Retention sweeper started")
+
     except Exception as e:
         logger.error(f"Startup error: {e}", exc_info=True)
         # Continue anyway for development
@@ -553,6 +568,7 @@ async def shutdown():
     global db_pool, manager_collector, otlp_collector
 
     stop_score_warmer()
+    stop_retention_sweeper()
 
     if manager_collector:
         await manager_collector.stop()

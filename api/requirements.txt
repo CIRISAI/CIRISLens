@@ -889,7 +889,12 @@ onnxruntime==1.25.0
 # the bump; full per-method surface drift sweep clean against
 # 5.5.3's src/ffi/pyo3.rs. 5.5.3 is the latest patch on PyPI
 # (matrix anchors on 5.5.2; 5.5.3 absorbed mid-week).
-ciris-persist==5.5.3
+#
+# v5.5.3 → v5.5.5: floor for lens-core 1.2.0 (which hard-pins
+# ciris-persist>=5.5.5,<6). v5.5.4/5 are patch-level RUSTSEC fixes
+# (2026-0178/0179/0180) — Win7-capable hosting floor per the
+# CIRISConformance matrix. Engine PyO3 surface unchanged.
+ciris-persist==5.5.5
 
 # CIRISLensCore — Rust science layer for the federation. Cuts over
 # from the in-tree cirislens-core/ Cargo crate (compiled by the
@@ -960,9 +965,29 @@ ciris-persist==5.5.3
 #
 # v1.0.0 → v1.0.1: relaxes the hard pin ciris-persist==5.2.0 →
 # ciris-persist>=5.2.0,<6, unblocking the persist 5.5.x substrate
-# floor (LocalIdentityAggregate). Surface unchanged from v1.0.0;
-# CIRISLensCore#43.1 capsule-handshake fix is NOT in 1.0.1 yet
-# (still pending; install_relay continues to require the cohabiting-
-# agent path, not the deployed lens-API path). Pin canonical per
-# the refreshed CIRISConformance matrix.
-ciris-lens-core==1.0.1
+# floor (LocalIdentityAggregate). CIRISLensCore#43.1 capsule-
+# handshake fix landed (LensClient(engine=...) constructs cleanly
+# in pip cohabitation; verified by the agent team's release/2.9.6
+# branch); deployed lens-API install_relay still gated on Edge's
+# Python PyO3 surface (Edge / init_edge_runtime / PyEdge.
+# transport_identity_pubkeys not yet re-exported through ciris-edge
+# 2.2.1's __init__.py — only SUPPORTED_SCHEMA_VERSIONS + __version__
+# are exposed).
+#
+# v1.0.1 → v1.2.0: full lens-core family bump (CIRISLensCore#48
+# Win7 + v2.2.1 substrate floor chain). 1.1.0 was the first real
+# win_amd64 wheel on PyPI; 1.2.0 lands the Win7 SP1+ target via
+# Tier-3 x86_64-win7-windows-msvc + nightly -Zbuild-std + vcpkg
+# static OpenSSL. Tightens the pin floor `ciris-persist>=5.5.5,<6`
+# (was >=5.2.0,<6 in 1.0.1 — see floor bump above).
+#
+# 1.2.0 also folds the previously-unreleased science layer
+# (CIRISLensCore#3 manifold mahalanobis + #12 audit + #14 egress
+# filter), the node-mode read API (#15, 7 frozen GET /lens/api/v1/*
+# endpoints), and the #34 RET-native scaffold (transport-reticulum +
+# ret_relay + ciris-canonical enrollment + CEG egress; cutover gated
+# on CIRISEdge#95 / CIRISRegistry#73). The deployed-lens cutover-
+# window surface (v0.1.x 4-function shim: process_trace_batch /
+# scrub_trace / scrub_traces_batch / ner_is_configured /
+# PROJECTION_VERSION) is preserved unchanged.
+ciris-lens-core==1.2.0
