@@ -869,7 +869,27 @@ onnxruntime==1.25.0
 # local_sign / local_key_id / local_public_key_b64 / public_key_b64)
 # is preserved across the bump (verified by direct grep against
 # persist 5.2.0's src/ffi/pyo3.rs). Non-breaking.
-ciris-persist==5.2.0
+#
+# v5.2.0 → v5.5.3: agent-2.9.6 substrate floor (per the refreshed
+# CIRISConformance matrix: persist 5.5.2 + verify 5.1.0 + edge 2.1.1
+# + lens-core 1.0.1). v5.3 added the scoring-factors cache
+# (CIRISPersist#195 — same shape persist already runs on
+# get_repository_statistics, now extended to aggregate_scoring_factors
+# {,_batch}; CIRISLensCore#46 closure). v5.4 / v5.5 land the
+# LocalIdentityAggregate v1 surface (CIRISPersist#198): a new
+# `Engine.local_identity_aggregate(transport_x25519_b64=None,
+# transport_ed25519_b64=None)` accessor returning JSON-encoded
+# `LocalIdentityAggregate` (signing role: Ed25519 + ML-DSA-65;
+# RET-transport role: X25519 + Ed25519 — caller-supplied via Edge;
+# content-KEM role: X25519 + ML-KEM-768 — freshly minted +
+# persist-sealed, stable across reboots, NOT derived from the
+# signing key per §5.6.8.8.2). identity_hash is a collision-safe
+# SHA-256 over the present role pubkeys, role-labeled +
+# length-prefixed. Engine constructor signature unchanged across
+# the bump; full per-method surface drift sweep clean against
+# 5.5.3's src/ffi/pyo3.rs. 5.5.3 is the latest patch on PyPI
+# (matrix anchors on 5.5.2; 5.5.3 absorbed mid-week).
+ciris-persist==5.5.3
 
 # CIRISLensCore — Rust science layer for the federation. Cuts over
 # from the in-tree cirislens-core/ Cargo crate (compiled by the
@@ -937,4 +957,12 @@ ciris-persist==5.2.0
 # was deleted — it had been kept as checked-in reference since the
 # v0.1.1 PyPI cutover. The substrate now owns the wire+scrub+sign
 # contract one place; no more local fork.
-ciris-lens-core==1.0.0
+#
+# v1.0.0 → v1.0.1: relaxes the hard pin ciris-persist==5.2.0 →
+# ciris-persist>=5.2.0,<6, unblocking the persist 5.5.x substrate
+# floor (LocalIdentityAggregate). Surface unchanged from v1.0.0;
+# CIRISLensCore#43.1 capsule-handshake fix is NOT in 1.0.1 yet
+# (still pending; install_relay continues to require the cohabiting-
+# agent path, not the deployed lens-API path). Pin canonical per
+# the refreshed CIRISConformance matrix.
+ciris-lens-core==1.0.1

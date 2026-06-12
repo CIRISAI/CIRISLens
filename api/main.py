@@ -29,6 +29,7 @@ from accord_api_v2 import router as accord_v2_router  # Rust-powered version
 # Import deprecated Covenant API routers for backward compatibility
 from covenant_api import router as covenant_v1_router  # Non-Rust version (deprecated)
 from covenant_api_v2 import router as covenant_v2_router  # Rust-powered version (deprecated)
+from identity_api import router as identity_router
 from log_ingest import LogIngestService
 from manager_collector import ManagerCollector
 from migrations import startup_migrations
@@ -167,6 +168,10 @@ app.include_router(covenant_v2_router)
 
 # Include Scoring API router for CIRIS Capacity Scores
 app.include_router(scoring_router)
+
+# Include Identity API router — publishes the lens's federation
+# hybrid identity (CIRISLens#20 / CIRISPersist#198).
+app.include_router(identity_router)
 
 
 # Configuration from environment
