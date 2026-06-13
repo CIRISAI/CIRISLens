@@ -81,7 +81,25 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PATH="/opt/venv/bin:$PATH" \
     # Default settings (can be overridden)
     PORT=8000 \
-    WORKERS=4 \
+    # WORKERS=1 is the deliberate default. The lens-API serves
+    # mostly I/O-bound endpoints (async postgres + Rust runtimes
+    # that release the GIL during persist/lens-core/edge calls),
+    # so async concurrency within a single process is sufficient
+    # for typical throughput.
+    #
+    # Multi-worker would also break the Edge runtime: ciris-edge's
+    # Reticulum transport binds a UDP socket without SO_REUSEPORT,
+    # so additional workers race on EADDRINUSE and the
+    # `/api/v1/identity` endpoint serves a probabilistic mix of
+    # 4-of-6 / 6-of-6 responses depending which worker handles the
+    # request (CIRISLens#22). Until ciris-edge supports
+    # SO_REUSEPORT or a process-shared singleton, the lens runs
+    # one process, one Edge.
+    #
+    # Operators can override at deploy time if they're not using
+    # the Edge identity path (CIRISLENS_EDGE_IDENTITY_PATH unset);
+    # in that case the Edge race doesn't apply.
+    WORKERS=1 \
     # Scrubber v2 NER fast path: ort + INT8 + DistilBERT-multilingual.
     # Bundle baked into the image at /app/models/distilbert_int8.
     # Operators can override CIRISLENS_NER_BACKBONE=candle to fall back

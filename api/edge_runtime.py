@@ -76,7 +76,27 @@ def initialize_sync() -> Any:
     re-init. The error path (logged WARN, returns None) is non-fatal:
     the lens functions normally without Edge, just emits a 4-of-6
     identity bundle.
+
+    Multi-worker note: ciris-edge's Reticulum transport binds a UDP
+    socket without SO_REUSEPORT — running more than one uvicorn
+    worker against the same Edge identity_path produces an
+    EADDRINUSE race (5 of 7 workers fail; 2 succeed; the endpoint
+    serves a probabilistic mix of 6-of-6 / 4-of-6 responses).
+    CIRISLens#22 / upstream issue filed. The Dockerfile defaults
+    WORKERS=1; this function warns LOUD if it detects WORKERS>1
+    paired with an Edge identity_path so operators can either
+    revert WORKERS or unset the identity path.
     """
+    workers = os.environ.get("WORKERS")
+    if workers and workers.isdigit() and int(workers) > 1 and os.environ.get("CIRISLENS_EDGE_IDENTITY_PATH"):
+        logger.warning(
+            "Edge runtime + WORKERS=%s is unsupported — ciris-edge's Reticulum "
+            "transport doesn't yet support SO_REUSEPORT / multi-worker share. "
+            "Set WORKERS=1 or unset CIRISLENS_EDGE_IDENTITY_PATH. Tracked: "
+            "CIRISLens#22, upstream ciris-edge multi-worker support pending.",
+            workers,
+        )
+
     if _State.edge is not None:
         return _State.edge
 
