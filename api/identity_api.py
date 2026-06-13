@@ -18,9 +18,11 @@ Three role bundles in the response:
   present; ML-DSA-65 present whenever `CIRISLENS_STEWARD_PQC_KEY_PATH`
   was configured at Engine init.
 - **RET-transport** (X25519 + Ed25519) — Reticulum federation transport
-  identity. Caller-supplied via `edge.transport_identity_pubkeys()`
-  (ciris-edge >= 2.1.0). `None` until CIRISLens#18 §2 wires
-  `install_relay(edge)` into the lens-API startup path.
+  identity. Read from `edge.transport_identity_pubkeys()` (ciris-edge
+  >= 2.2.2) when the Edge runtime was initialized at startup (env
+  `CIRISLENS_EDGE_IDENTITY_PATH` set). `None` when Edge is not
+  configured. Edge auto-generates the Reticulum identity file on
+  first run; stable thereafter.
 - **Content-KEM** (X25519 + ML-KEM-768) — freshly minted, persist-
   sealed content-encryption keypair, stable across calls + reboots.
   Available on every persist >= 5.4 deployment (no Edge needed). This
@@ -41,6 +43,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
+import edge_runtime
 import persist_engine
 
 logger = logging.getLogger(__name__)
@@ -57,25 +60,39 @@ async def get_lens_identity() -> dict[str, Any]:
     bootstrap configuration. Returns JSON shape per persist's
     `LocalIdentityAggregate` (CIRISPersist#198) v1.
 
-    Until CIRISLens#18 §2 wires `install_relay(edge)`, the lens has
-    no Edge runtime to supply Reticulum transport pubkeys to persist,
-    so the `reticulum_*_pubkey_b64` fields stay `None`. The signing +
-    content-KEM roles populate unconditionally — including the
-    HnDl-resistance ML-KEM-768 half — so peer addressing for content
-    encryption is already covered against a quantum adversary.
+    When the Edge runtime was initialized at startup
+    (`CIRISLENS_EDGE_IDENTITY_PATH` set), the response carries the
+    full 6-key bundle including the Reticulum transport pubkeys
+    (X25519 + Ed25519). When Edge is not configured, the response
+    is the 4-of-6 bundle — signing (Ed25519 + ML-DSA-65) + content-KEM
+    (X25519 + ML-KEM-768) — peer addressing for signing + content
+    encryption (including HnDl-resistance ML-KEM-768) is still
+    covered; only Reticulum direct-transport addressing is absent.
     """
     engine = persist_engine.get_engine()
     if engine is None:
         raise HTTPException(status_code=503, detail="persist engine unavailable")
 
+    # If the Edge runtime is configured (CIRISLENS_EDGE_IDENTITY_PATH
+    # set on startup), fold its transport pubkeys into the aggregate
+    # so the response carries the full 6-key bundle. Otherwise pass
+    # None args and persist emits 4-of-6 (Reticulum fields null).
+    transport_x25519: str | None = None
+    transport_ed25519: str | None = None
+    edge = edge_runtime.get_edge()
+    if edge is not None:
+        try:
+            pubkeys = edge.transport_identity_pubkeys()
+            transport_x25519 = pubkeys["x25519_pub_base64"]
+            transport_ed25519 = pubkeys["ed25519_pub_base64"]
+        except Exception as e:
+            logger.warning(
+                "Edge transport_identity_pubkeys() failed: %s; emitting 4-of-6 bundle",
+                e,
+            )
+
     try:
-        # No transport-key args until Edge is wired (CIRISLens#18 §2).
-        # When Edge is available, the lens will fetch its
-        # `edge.transport_identity_pubkeys()` tuple and pass them as
-        # (transport_x25519_b64, transport_ed25519_b64) — persist
-        # validates them as != the content-KEM x25519 and folds them
-        # into the identity_hash.
-        agg_json = engine.local_identity_aggregate()
+        agg_json = engine.local_identity_aggregate(transport_x25519, transport_ed25519)
     except ValueError as e:
         # No signer configured (Ed25519 path) — operational deploy bug.
         raise HTTPException(status_code=503, detail=f"local signer unavailable: {e}") from e

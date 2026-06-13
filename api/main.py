@@ -20,6 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, EmailStr
 
+import edge_runtime
 import persist_engine
 
 # Import Accord API routers (primary)
@@ -501,6 +502,16 @@ async def startup():
             await persist_engine.initialize()
         except Exception as e:
             logger.error("ciris-persist Engine init failed: %s", e, exc_info=True)
+
+        # Initialize Edge runtime if CIRISLENS_EDGE_IDENTITY_PATH is
+        # set. Optional — when absent, /api/v1/identity emits the
+        # 4-of-6-key bundle (no Reticulum transport pubkeys); when
+        # present, Edge mints + exposes its Reticulum identity and
+        # the endpoint emits the full 6-key bundle.
+        try:
+            edge_runtime.initialize_sync()
+        except Exception as e:
+            logger.warning("edge_runtime init raised: %s", e, exc_info=True)
 
         # Initialize log ingest service
         log_ingest_service = LogIngestService(db_pool)

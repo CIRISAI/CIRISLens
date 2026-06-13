@@ -116,11 +116,16 @@ is the source of truth for routing. Paths NOT explicitly handled
 (`/api/v1/accord/*`, `/api/v1/covenant/*`, `/api/v1/scoring/*`,
 `/api/v1/identity`, `/ingest/*`, `/lens-api/*`) fall through to the
 Grafana catchall. The `/api/v1/identity` endpoint publishes the
-lens's federation hybrid identity (Ed25519 + ML-DSA-65 signing +
-content-KEM X25519 + ML-KEM-768 always present; Reticulum transport
-X25519 + Ed25519 populated once `install_relay(edge)` is wired per
-CIRISLens#18 §2) — needs a Caddy `handle /api/v1/identity { ... }`
-block added before the catchall.
+lens's federation hybrid identity from persist's
+`LocalIdentityAggregate` v1 surface (CIRISPersist#198 / #199): always
+Ed25519 + ML-DSA-65 signing + content-KEM X25519 + ML-KEM-768 (the
+HnDl-resistance PQ half — persist-minted + sealed, NOT derived from
+the signing key per §5.6.8.8.2); plus Reticulum transport X25519 +
+Ed25519 when the Edge runtime is initialized via
+`CIRISLENS_EDGE_IDENTITY_PATH` (default unset → 4-of-6 bundle; set
+to a persistent path like `/var/lib/cirislens/keyring/lens-edge.identity`
+→ Edge auto-generates the Reticulum identity on first run and the
+endpoint emits the full 6-key bundle).
 
 ### Production Stack
 
